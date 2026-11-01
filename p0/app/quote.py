@@ -1,0 +1,352 @@
+"""P0 quote assistant: DVP/test-plan Excel -> CRM draft + sales quote form.
+
+Design rules (P0 ADR-03):
+  * unit price, quantity and unit come from the uploaded DVP/price export;
+  * the assistant only maps item names/departments and calculates totals;
+  * no model-generated price, no CRM write-back, no approval workflow.
+
+The parser deliberately accepts the two layouts that appear in the customer's
+real materials:
+  * a DVP sheet with a ``试验项目`` header and ``单价/数量/单位`` columns
+    (front-seat DVP layout);
+  * a hierarchical test-plan sheet with a ``测试项目``/``测试子过程`` header
+    (non-standard test plan).
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from openpyxl import Workbook, load_workbook
+
+from .xlsx_writer import write_xlsx
+
+CRM_HEADERS = [
+    "样品名称",
+    "项目名称",
+    "检验项目",
+    "标准",
+    "检验科室",
+    "单位",
+    "数量",
+    "含税单价",
+    "是否有折扣",
+    "折扣",
+    "备注",
+]
+
+_UNIT_MAP = {
+    "席位": "席位/次",
+    "席位/次": "席位/次",
+    "袋子": "次",
+    "袋": "次",
+    "套": "套",
+    "件": "件",
+    "批": "批",
+    "次": "次",
+    "小时": "小时",
+    "h": "小时",
+    "回路": "回路",
+    "种": "种",
+    "材料": "材料",
+}
+
+
+@dataclass
+class QuoteLine:
+    sample_name: str
+    item_name: str
+    standard: str
+    department: str
+    unit: str
+    quantity: float
+    unit_price: float
+    discount: float = 60.0
+    note: str = ""
+    source_row: int = 0
+
+    def to_crm_row(self) -> list[Any]:
+        return [
+            self.sample_name,
+            self.item_name,
+            self.item_name,
+            self.standard,
+            self.department,
+            self.unit,
+            self.quantity,
+            self.unit_price,
+            "是",
+            self.discount,
+            self.note,
+        ]
+
+
+@dataclass
+class QuoteResult:
+    source_file: str
+    sample_name: str
+    lines: list[QuoteLine] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    discount: float = 60.0
+
+    @property
+    def subtotal(self) -> float:
+        return round(sum(line.quantity * line.unit_price for line in self.lines), 2)
+
+    @property
+    def sales_amount(self) -> float:
+        return round(self.subtotal * self.discount / 100.0, 2)
+
+    @property
+    def service_tax(self) -> float:
+        return round(self.sales_amount * 0.06, 2)
+
+    @property
+    def total_with_tax(self) -> float:
+        return round(self.sales_amount + self.service_tax, 2)
+
+    def summary(self) -> dict:
+        return {
+            "source_file": self.source_file,
+            "sample_name": self.sample_name,
+            "lines": len(self.lines),
+            "subtotal": self.subtotal,
+            "discount_percent": self.discount,
+            "sales_amount": self.sales_amount,
+            "service_tax_rate": 0.06,
+            "service_tax": self.service_tax,
+            "total_with_tax": self.total_with_tax,
+            "warnings": self.warnings,
+        }
+
+    def to_dict(self) -> dict:
+        return {**self.summary(), "items": [asdict(line) for line in self.lines]}
+
+
+def _text(value: Any) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _clean_item(value: Any) -> str:
+    text = _text(value).replace("\n", " ")
+    text = re.sub(r"^[\/／、]+", "", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _number(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = re.sub(r"[¥￥,\s元]", "", str(value))
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _unit(value: Any) -> str:
+    text = _text(value)
+    return _UNIT_MAP.get(text, text or "次")
+
+
+def _department(item: str, standard: str = "") -> str:
+    if any(word in item for word in ("散发", "气味", "VOC", "voc", "雾化", "禁用物质", "禁限物质")):
+        return "理化分析试验研究部"
+    if "电磁" in item or "电气" in standard:
+        return "智能电器试验研究部"
+    return "车身附件试验研究部"
+
+
+def _find_layout(ws) -> tuple[int, int, int, int, int] | None:
+    """Return (item_row, item_col, price_row, price_col, qty_col, unit_col)."""
+    item_row = item_col = None
+    for row in range(1, min(ws.max_row, 30) + 1):
+        for col in range(1, min(ws.max_column, 30) + 1):
+            if "试验项目" in _text(ws.cell(row, col).value):
+                item_row, item_col = row, col
+                break
+        if item_row:
+            break
+    if item_row is None or item_col is None:
+        return None
+
+    price_row = price_col = qty_col = unit_col = None
+    for row in range(item_row, min(item_row + 6, ws.max_row) + 1):
+        for col in range(1, min(ws.max_column, 30) + 1):
+            value = _text(ws.cell(row, col).value)
+            if value == "单价":
+                price_row, price_col = row, col
+        if price_col:
+            break
+    if price_col is None:
+        return None
+    # Quantity/unit headers may appear once in the sample block (left of the
+    # price columns) and again in the price block; only accept columns to the
+    # right of 单价.
+    for row in range(price_row or item_row, min((price_row or item_row) + 2, ws.max_row) + 1):
+        for col in range(price_col + 1, min(ws.max_column, 40) + 1):
+            value = _text(ws.cell(row, col).value)
+            if value == "数量" and qty_col is None:
+                qty_col = col
+            if value == "单位" and unit_col is None:
+                unit_col = col
+        if qty_col and unit_col:
+            break
+    qty_col = qty_col or price_col + 1
+    unit_col = unit_col or price_col + 2
+    return item_row, item_col, price_row or item_row, price_col, qty_col, unit_col
+
+
+def parse_dvp(path: str | Path, discount: float = 60.0, source_name: str | None = None) -> QuoteResult:
+    path = Path(path)
+    display_name = source_name or path.name
+    workbook = load_workbook(path, data_only=True)
+    # Prefer a DVP sheet; fall back to the first non-empty sheet.
+    ws = next((sheet for sheet in workbook.worksheets if "座椅" in sheet.title or "DVP" in sheet.title), workbook.worksheets[0])
+
+    layout = _find_layout(ws)
+    if layout is None:
+        raise ValueError("未找到「试验项目 + 单价/数量/单位」表头，无法解析 DVP")
+    item_row, item_col, price_row, price_col, qty_col, unit_col = layout
+
+    sample_name = ""
+    for row in range(1, max(item_row - 1, 1) + 1):
+        for col in range(1, min(ws.max_column, 20) + 1):
+            value = _text(ws.cell(row, col).value)
+            if "零件/总成" in value:
+                sample_name = value.split("：", 1)[-1].split(":", 1)[-1].strip()
+                break
+        if sample_name:
+            break
+    if not sample_name:
+        sample_name = re.sub(r"^\d+[、.．]\s*", "", ws.title) or path.stem
+    prefix = re.match(r"([A-Za-z]{2,}\d+)", Path(display_name).stem)
+    if prefix and not re.match(r"[A-Za-z]", sample_name):
+        sample_name = prefix.group(1) + sample_name
+
+    result = QuoteResult(source_file=display_name, sample_name=sample_name, discount=discount)
+    last_item = ""
+    for row in range(item_row + 2, min(item_row + 200, ws.max_row + 1)):
+        item = _clean_item(ws.cell(row, item_col).value)
+        if not item:
+            continue
+        if item == "总计":
+            break
+        if "备注" in item or item.startswith("注"):
+            continue
+        price = _number(ws.cell(row, price_col).value)
+        qty = _number(ws.cell(row, qty_col).value)
+        unit = _unit(ws.cell(row, unit_col).value)
+        if price is None or qty is None:
+            result.warnings.append(f"第 {row} 行「{item}」缺少单价或数量，已跳过")
+            continue
+        standard_col = item_col - 1
+        standard = _text(ws.cell(row, standard_col).value).replace("\n", " ").strip()
+        if not standard:
+            standard = f"{sample_name}DVP"
+        # Keep the DVP name in the CRM standard column (matches the customer's
+        # real CRM export); the underlying standard number is still in DVP.
+        result.lines.append(
+            QuoteLine(
+                sample_name=sample_name,
+                item_name=item,
+                standard=f"{sample_name}DVP",
+                department=_department(item, standard),
+                unit=unit,
+                quantity=qty,
+                unit_price=price,
+                discount=discount,
+                note="",
+                source_row=row,
+            )
+        )
+        last_item = item
+
+    if not result.lines:
+        raise ValueError("DVP 中没有可报价的试验项目")
+    if last_item and len(result.lines) < 2:
+        result.warnings.append("只解析到 1 行，请检查表头/合并单元格")
+    return result
+
+
+def write_crm_xlsx(path: str | Path, result: QuoteResult) -> Path:
+    rows: list[list[Any]] = [CRM_HEADERS] + [line.to_crm_row() for line in result.lines]
+    summary = [
+        ["报价汇总", ""],
+        ["样品名称", result.sample_name],
+        ["明细行数", len(result.lines)],
+        ["DVP 合计（未折扣）", result.subtotal],
+        ["折扣（%）", result.discount],
+        ["销售报价（不含税）", result.sales_amount],
+        ["服务税率", "6%"],
+        ["税额", result.service_tax],
+        ["税价合计", result.total_with_tax],
+    ]
+    return write_xlsx(
+        path,
+        [
+            ("CRM报价草稿", rows, [18, 34, 34, 24, 22, 10, 8, 12, 10, 8, 26]),
+            ("报价汇总", summary, [28, 24]),
+        ],
+    )
+
+
+def fill_sales_quote(template: str | Path, result: QuoteResult, out: str | Path, meta: dict | None = None) -> Path:
+    """Fill the customer-provided 销售报价表 while preserving its formulas."""
+    meta = meta or {}
+    workbook = load_workbook(template)
+    ws = workbook.active
+    ws["A2"] = meta.get("date") or "2026年11月02日"
+    ws["B3"] = meta.get("applicant", "业务经理")
+    ws["D3"] = meta.get("region", "华北")
+    ws["B4"] = meta.get("project_name", f"{result.sample_name} DVP 试验报价")
+    ws["B5"] = meta.get("customer", "保定市兴中汽车配件制造有限公司")
+    ws["B6"] = meta.get("contract", f"{result.sample_name} DVP（闭口合同）")
+    ws["C7"] = result.sales_amount
+    ws["C8"] = result.sales_amount
+    ws["C9"] = 0  # pure test service; product amount is zero in this case
+    ws["C14"] = 0
+    # C10/C11/C12/C13/C15 keep the template formulas.
+
+    detail = workbook.create_sheet("报价明细")
+    headers = ["序号", "试验项目", "检验科室", "单位", "数量", "含税单价", "折扣(%)", "折后金额"]
+    detail.append(headers)
+    for index, line in enumerate(result.lines, start=1):
+        detail.append(
+            [
+                index,
+                line.item_name,
+                line.department,
+                line.unit,
+                line.quantity,
+                line.unit_price,
+                line.discount,
+                round(line.quantity * line.unit_price * line.discount / 100.0, 2),
+            ]
+        )
+    detail.append(["", "合计", "", "", "", "", "", result.sales_amount])
+    for column, width in zip("ABCDEFGH", [6, 42, 22, 10, 8, 12, 10, 14]):
+        detail.column_dimensions[column].width = width
+
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(out)
+    return out
+
+
+def sales_quote_preview(result: QuoteResult) -> dict:
+    """Return the computed cells so a report/UI can show them without Excel."""
+    return {
+        "销售报价（不含税）": result.sales_amount,
+        "产品金额（不含税）": 0,
+        "服务金额（不含税）": result.sales_amount,
+        "产品税率": "16%",
+        "服务税率": "6%",
+        "税价合计": result.total_with_tax,
+        "产生费用": 0,
+        "最终价格": result.total_with_tax,
+    }

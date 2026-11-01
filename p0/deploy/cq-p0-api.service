@@ -1,0 +1,14 @@
+[Unit]
+Description=CQ P0 Report Review API
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/cq-ai-p0
+Environment=MAX_UPLOAD_MB=20
+ExecStart=/opt/cq-ai-p0/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8090
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
