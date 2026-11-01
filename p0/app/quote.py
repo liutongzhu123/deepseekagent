@@ -334,6 +334,10 @@ def fill_sales_quote(template: str | Path, result: QuoteResult, out: str | Path,
 
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        workbook.calculation.fullCalcOnLoad = True
+    except AttributeError:  # pragma: no cover - openpyxl version guard
+        pass
     workbook.save(out)
     return out
 
