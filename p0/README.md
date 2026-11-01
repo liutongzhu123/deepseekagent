@@ -50,7 +50,7 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 示例：
 
 ```bash
-curl -F "file=@Q-JLY J7111074B-2021-EPB制动钳总成技术条件.pdf" \
+curl -F "file=@standard.pdf" \
   http://127.0.0.1:8090/api/v1/standards/parse
 curl -X PATCH -H 'Content-Type: application/json' \
   -d '{"reviewer":"标准工程师","items":[{"clause":"5.3.6","name":"活塞启动力压力"}]}' \
