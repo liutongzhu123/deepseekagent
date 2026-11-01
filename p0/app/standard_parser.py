@@ -181,7 +181,7 @@ def _paragraphs(lines: list[_Line], heading: _Heading, next_line_idx: int) -> li
     paras: list[str] = []
     current = ""
     for raw in _body_lines(lines, heading, next_line_idx):
-        text = re.sub(r"^\d+(?:\.\d+){1,4}\s*", "", raw).strip()
+        text = re.sub(r"^\d+(?:\.\d+){1,4}\s+(?=[\u4e00-\u9fff])", "", raw).strip()
         if not text:
             continue
         if current:

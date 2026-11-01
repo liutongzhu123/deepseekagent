@@ -233,12 +233,12 @@ async function loadStandard(id) {
   current = await jsonFetch('/api/v1/standards/' + encodeURIComponent(id));
   selectedIndex = -1;
   const m = current.meta, s = current.summary;
-  $('metaLine').innerHTML = `<b>${m.standard_no || ''}</b> ${m.name || ''} · ${m.pages} 页 · 解析 ${s.parse_ms} ms · 修订 v${current.revision}${current.published ? '<span class="badge pass">已发布</span>' : '<span class="badge warn">未发布</span>'}`;
+  $('metaLine').innerHTML = `<b>${escapeHtml(m.standard_no || '')}</b> ${escapeHtml(m.name || '')} · ${m.pages} 页 · 解析 ${s.parse_ms} ms · 修订 v${current.revision}${current.published ? '<span class="badge pass">已发布</span>' : '<span class="badge warn">未发布</span>'}`;
   $('stats').innerHTML = [
     ['items','实检项目'], ['clauses_traced','条款可溯源'], ['items_with_requirement','有技术要求'], ['items_with_method','有试验方法'], ['reviewed_items','已复核']
   ].map(([k,label]) => `<div class="stat"><b>${fmt(s[k])}</b><span>${label}</span></div>`).join('');
   const warnings = current.warnings || [];
-  $('warnings').innerHTML = warnings.length ? `<ul class="warnings">${warnings.map(w => `<li>${w}</li>`).join('')}</ul>` : '';
+  $('warnings').innerHTML = warnings.length ? `<ul class="warnings">${warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : '';
   renderTable();
   $('exportBtn').disabled = !current.items.length;
   $('publishBtn').disabled = !current.items.length || current.published;

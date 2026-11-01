@@ -66,8 +66,22 @@ def _std_key(value: str) -> str:
     return re.sub(r"\s+", "", value or "").upper()
 
 
+def _clause_candidates(question: str) -> set[str]:
+    """Clause-like numbers only, so measurements such as 1.0 MPa stay text."""
+    found: set[str] = set()
+    for candidate in _CLAUSE.findall(question):
+        parts = candidate.split(".")
+        if len(parts) >= 3:
+            found.add(candidate)
+        elif len(parts) == 2 and parts[0] in {"5", "6", "7", "8", "9"}:
+            found.add(candidate)
+    return found
+
+
 def _focus(question: str) -> str:
-    text = _CLAUSE.sub(" ", question)
+    text = question
+    for clause in sorted(_clause_candidates(question), key=len, reverse=True):
+        text = text.replace(clause, " ")
     text = _STOP_PHRASES.sub(" ", text)
     text = re.sub(r"[？?，,。；;：:\s]", "", text)
     return text.lower()
@@ -115,13 +129,14 @@ def answer(question: str, kbs: list[dict]) -> dict:
     terms = _terms(question)
     all_chunks = [chunk for kb in kbs for chunk in kb.get("chunks", [])]
     chunk_clauses = {chunk.get("clause", "") for chunk in all_chunks}
+    clauses = _clause_candidates(question)
     clause_hit = any(
         clause == asked or clause.startswith(asked + ".")
-        for asked in terms[0]
+        for asked in clauses
         for clause in chunk_clauses
     )
-    if terms[0] and not clause_hit:
-        asked = sorted(terms[0])[0]
+    if clauses and not clause_hit:
+        asked = sorted(clauses)[0]
         return {
             "found": False,
             "answer": f"未找到相关标准内容：已发布标准中没有条款 {asked}。",
