@@ -92,17 +92,20 @@ page / method_page / confidence / reviewed / references`
 
 ```bash
 # 标准解析：2 个真实样例 + 准确率自评
-python3 scripts/run_standard_demo.py --data-dir <标准目录> --out-dir <输出目录>
+python3 scripts/run_standard_demo.py --data-dir <标准目录> --out-dir <输出目录> \
+  --epb-file <EPB.pdf> --pp-file <PP.pdf> --epb-gold <已复核EPB.xlsx>
 
-# 报告审核：12 份草稿批量 + 单份 Markdown 审核报告
-python3 scripts/run_report_demo.py --reports-dir <报告目录> --out-dir <输出目录>
+# 报告审核：草稿批量 + 单份 Markdown 审核报告
+python3 scripts/run_report_demo.py --reports-dir <报告目录> --out-dir <输出目录> [--sample <文件名>]
 
 # 报价助手：DVP → CRM 草稿 + 销售报价表
 python3 scripts/run_quote_demo.py --dvp <DVP.xlsx> --crm-gold <真实CRM.xlsx> \
   --sales-template <销售报价表.xlsx> --out-dir <输出目录>
 
 # 知识问答：重建索引 + 5 个问答样例
-python3 scripts/run_kb_demo.py --standards-dir <标准目录> --store-dir data/standards --out-dir <输出目录> --reset
+python3 scripts/run_kb_demo.py --standards-dir <标准目录> --store-dir data/standards \
+  --out-dir <输出目录> --epb-file <EPB.pdf> --pp-file <PP.pdf> \
+  --questions <问题+评估口径.json> --reset
 ```
 
 ## 数据
