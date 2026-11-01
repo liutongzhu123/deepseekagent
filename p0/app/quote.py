@@ -161,7 +161,7 @@ def _department(item: str, standard: str = "") -> str:
     return "车身附件试验研究部"
 
 
-def _find_layout(ws) -> tuple[int, int, int, int, int] | None:
+def _find_layout(ws) -> tuple[int, int, int, int, int, int] | None:
     """Return (item_row, item_col, price_row, price_col, qty_col, unit_col)."""
     item_row = item_col = None
     for row in range(1, min(ws.max_row, 30) + 1):
