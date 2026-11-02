@@ -1,4 +1,4 @@
-"""P0 API: report review (increment 1) + standard parsing (increment 2).
+"""P0 API: report review, standard parsing, quote assistant and KB Q&A.
 
 Endpoints are intentionally small and versioned under /api/v1 so the future
 review workbenches can call them without coupling to parser internals.
@@ -6,15 +6,20 @@ review workbenches can call them without coupling to parser internals.
 from __future__ import annotations
 
 import os
+import re
+import secrets
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import standard_qa, standard_store
+from . import quote as quote_service
+from . import ocr as ocr_service
+from . import report_writer, standard_qa, standard_store
 from .docx_parser import parse_docx
 from .pdf_text import extract_pages
 from .rules import RULES, RecordInput, audit_report, validate_records
@@ -23,13 +28,14 @@ from .xlsx_writer import write_xlsx
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
+QUOTE_DIR = Path(os.getenv("P0_QUOTE_DIR", ROOT / "data" / "quotes"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "20")) * 1024 * 1024
 MAX_STANDARD_BYTES = int(os.getenv("MAX_STANDARD_MB", "40")) * 1024 * 1024
 
 app = FastAPI(
     title="中汽零部件 P0 API",
-    version="0.2.0",
-    description="Deterministic report review and standard parsing for the P0 slice.",
+    version="0.4.0",
+    description="Deterministic report review, standard parsing, quote draft and cited Q&A.",
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -65,6 +71,9 @@ class ReviewRequest(BaseModel):
 class AskRequest(BaseModel):
     question: str
     standard_id: str | None = None
+    mode: str = "auto"
+    min_score: float | None = None
+    top_k: int | None = None
 
 
 @app.get("/health")
@@ -113,6 +122,34 @@ async def audit_report_file(file: UploadFile = File(...)) -> dict:
             Path(tmp_path).unlink(missing_ok=True)
 
 
+@app.post("/api/v1/reports/audit.md")
+async def audit_report_markdown(file: UploadFile = File(...)) -> PlainTextResponse:
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="only .docx reports are supported in this slice")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"file exceeds {MAX_UPLOAD_BYTES // 1024 // 1024} MB")
+    tmp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        parsed = parse_docx(tmp_path)
+        parsed.file_name = file.filename
+        result = audit_report(parsed)
+        return PlainTextResponse(
+            report_writer.audit_markdown(result, {"file_name": file.filename}),
+            media_type="text/markdown; charset=utf-8",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - API boundary
+        raise HTTPException(status_code=422, detail=f"failed to parse report: {exc}") from exc
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
 @app.post("/api/v1/records/validate")
 def validate_record_batch(payload: RecordsRequest) -> dict:
     records = [
@@ -141,7 +178,9 @@ def list_standards() -> dict:
 
 
 @app.post("/api/v1/standards/parse")
-async def parse_standard_file(file: UploadFile = File(...)) -> dict:
+async def parse_standard_file(
+    file: UploadFile = File(...), enable_ocr: bool = True
+) -> dict:
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="only .pdf standards are supported in this slice")
     data = await file.read()
@@ -152,7 +191,29 @@ async def parse_standard_file(file: UploadFile = File(...)) -> dict:
         )
     try:
         pages = extract_pages(data)
-        parsed = parse_standard(pages, file.filename)
+        page_confidence: list[float] | None = None
+        ocr_meta: dict | None = None
+        ocr_warning: str | None = None
+        ocr_enabled = enable_ocr and os.getenv("P0_OCR_ENABLED", "1") not in {"0", "false", "off"}
+        if sum(len(page) for page in pages) < 500 and ocr_enabled:
+            try:
+                dpi = int(os.getenv("P0_OCR_DPI", "220"))
+                max_pages = int(os.getenv("P0_OCR_MAX_PAGES", "0")) or None
+                ocr_result = ocr_service.ocr_pdf(data, dpi=dpi, max_pages=max_pages)
+                pages = ocr_result.page_texts()
+                page_confidence = ocr_result.page_confidences()
+                ocr_meta = ocr_result.meta()
+            except ocr_service.OcrUnavailable as exc:
+                ocr_warning = f"扫描件 OCR 未启用：{exc}"
+        parsed = parse_standard(
+            pages,
+            file.filename,
+            pdf_bytes=data,
+            page_confidence=page_confidence,
+            ocr=ocr_meta,
+        )
+        if ocr_warning:
+            parsed.setdefault("warnings", []).append(ocr_warning)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - API boundary
@@ -248,4 +309,146 @@ def ask_standard(payload: AskRequest) -> dict:
     kbs = standard_store.published_kbs(payload.standard_id)
     if payload.standard_id and not kbs:
         raise HTTPException(status_code=409, detail="该标准尚未发布到知识库")
-    return standard_qa.answer(payload.question, kbs)
+    try:
+        return standard_qa.answer(
+            payload.question,
+            kbs,
+            mode=payload.mode,
+            min_score=payload.min_score,
+            top_k=payload.top_k,
+        )
+    except standard_qa.VectorUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Increment 3: quote assistant (DVP -> CRM draft + 销售报价表)
+# ---------------------------------------------------------------------------
+@app.post("/api/v1/quotes/parse")
+async def parse_quote_file(file: UploadFile = File(...)) -> dict:
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="only .xlsx DVP/test-plan files are supported")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"file exceeds {MAX_UPLOAD_BYTES // 1024 // 1024} MB")
+    tmp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        return quote_service.parse_dvp(tmp_path, source_name=file.filename).to_dict()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - API boundary
+        raise HTTPException(status_code=422, detail=f"failed to parse DVP: {exc}") from exc
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+@app.post("/api/v1/quotes/generate")
+async def generate_quote(
+    file: UploadFile = File(...),
+    template: UploadFile | None = File(None),
+) -> dict:
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="only .xlsx DVP/test-plan files are supported")
+    data = await file.read()
+    tmp_path: str | None = None
+    template_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        result = quote_service.parse_dvp(tmp_path, source_name=file.filename)
+
+        quote_id = "q_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
+        directory = QUOTE_DIR / quote_id
+        directory.mkdir(parents=True, exist_ok=True)
+        crm_path = quote_service.write_crm_xlsx(directory / "CRM报价草稿.xlsx", result)
+        files = {"crm": f"/api/v1/quotes/{quote_id}/crm.xlsx"}
+
+        template_bytes = await template.read() if template is not None else b""
+        if template_bytes:
+            template_name = template.filename or "sales-template.xlsx"
+            template_path = str(directory / template_name)
+            Path(template_path).write_bytes(template_bytes)
+        configured = os.getenv("P0_SALES_QUOTE_TEMPLATE", "")
+        sales_verification = None
+        if template_path or configured:
+            sales_out = quote_service.fill_sales_quote(
+                template_path or configured,
+                result,
+                directory / "销售报价表-生成.xlsx",
+                {
+                    "project_name": f"{result.sample_name} DVP 试验报价",
+                    "contract": f"{result.sample_name} DVP（闭口合同）",
+                },
+            )
+            sales_verification = quote_service.verify_sales_quote(sales_out, result)
+            files["sales_quote"] = f"/api/v1/quotes/{quote_id}/sales.xlsx"
+        return {
+            "quote_id": quote_id,
+            "summary": result.summary(),
+            "preview": quote_service.sales_quote_preview(result),
+            "files": files,
+            "crm_file": str(crm_path),
+            "sales_quote_verification": sales_verification,
+        }
+    except quote_service.QuoteSelfCheckError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - API boundary
+        raise HTTPException(status_code=422, detail=f"failed to generate quote: {exc}") from exc
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+_QUOTE_ID = re.compile(r"^q_[0-9]{14}_[0-9a-f]{6}$")
+
+
+def _quote_file(quote_id: str, name: str) -> Path:
+    if not _QUOTE_ID.fullmatch(quote_id):
+        raise HTTPException(status_code=404, detail="quote not found")
+    path = QUOTE_DIR / quote_id / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="quote file not found")
+    return path
+
+
+@app.get("/api/v1/quotes/{quote_id}/crm.xlsx")
+def download_crm(quote_id: str) -> FileResponse:
+    return FileResponse(
+        _quote_file(quote_id, "CRM报价草稿.xlsx"),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="CRM报价草稿.xlsx",
+    )
+
+
+@app.get("/api/v1/quotes/{quote_id}/sales.xlsx")
+def download_sales_quote(quote_id: str) -> FileResponse:
+    return FileResponse(
+        _quote_file(quote_id, "销售报价表-生成.xlsx"),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="销售报价表-生成.xlsx",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Increment 4: knowledge base rebuild + cited Q&A
+# ---------------------------------------------------------------------------
+@app.post("/api/v1/kb/rebuild")
+def rebuild_kb() -> dict:
+    index = standard_store.rebuild_index()
+    return {key: index[key] for key in ("built_at", "standard_count", "chunk_count")} | {
+        "standards": index.get("standards", [])
+    }
+
+
+@app.get("/api/v1/kb/stats")
+def kb_stats() -> dict:
+    return standard_store.index_stats()

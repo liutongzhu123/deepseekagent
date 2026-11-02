@@ -18,12 +18,13 @@ import re
 import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from io import BytesIO
 from typing import Iterable
 
 SCHEMA_VERSION = "standard-v0.1"
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-HEAD_RE = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+(\S.*)$")
+HEAD_RE = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s*([\u4e00-\u9fffA-Za-z].*)$")
 PAGE_NO_RE = re.compile(r"^(?:[IVXLC]{1,6}|\d{1,3})$")
 WATERMARK_RE = re.compile(r"^(?:TO|OF|BY|AT)\s*:")
 DATE_RE = re.compile(r"(20\d{2})\s*[-年/.]\s*(\d{1,2})\s*[-月/.]\s*(\d{1,2})")
@@ -101,7 +102,9 @@ def _normalise_text(text: str) -> str:
     return text.strip()
 
 
-def _clean_lines(pages: list[str], standard_no: str) -> list[_Line]:
+def _clean_lines(
+    pages: list[str], standard_no: str, keep_method_label: bool = False
+) -> list[_Line]:
     no_pattern = re.escape(standard_no).replace(r"\ ", r"\s*")
     out: list[_Line] = []
     idx = 0
@@ -117,7 +120,10 @@ def _clean_lines(pages: list[str], standard_no: str) -> list[_Line]:
             if PAGE_NO_RE.fullmatch(text):
                 continue
             if text in _NOISE_LINES:
-                continue
+                # OCR often puts a subheading label on its own line
+                # (``5.5.9.2`` / ``试验方法``); the label must survive.
+                if not (keep_method_label and text == "试验方法"):
+                    continue
             out.append(_Line(text=text, page=page_no, idx=idx))
             idx += 1
     return out
@@ -181,7 +187,7 @@ def _paragraphs(lines: list[_Line], heading: _Heading, next_line_idx: int) -> li
     paras: list[str] = []
     current = ""
     for raw in _body_lines(lines, heading, next_line_idx):
-        text = re.sub(r"^\d+(?:\.\d+){1,4}\s+(?=[\u4e00-\u9fff])", "", raw).strip()
+        text = re.sub(r"^\d+(?:\.\d+){1,4}\s*", "", raw).strip()
         if not text:
             continue
         if current:
@@ -324,6 +330,10 @@ def _extract_meta(pages: list[str], file_name: str) -> dict:
         "Issue",
         "Implementation",
         "Standard",
+        "内部资料",
+        "注意保存",
+        "出版",
+        "印发",
     )
     name = ""
     for raw in head.splitlines():
@@ -354,20 +364,607 @@ def _extract_meta(pages: list[str], file_name: str) -> dict:
     }
 
 
-def parse_standard(pages: list[str], file_name: str = "") -> dict:
-    """Parse one digital standard PDF (already split into page texts)."""
+def _clean_table_text(value: str) -> str:
+    """Remove PDF watermark fragments from a table cell, keep values."""
+    text = (value or "").replace("\n", "/")
+    text = re.sub(r"(?<![A-Za-z])[A-Za-z](?![A-Za-z])", "", text)
+    text = re.sub(r"/+", "；", text)
+    text = re.sub(r"；+", "；", text)
+    text = re.sub(r"\s+", "", text)
+    return text.strip("； ")
+
+
+def _readable_requirement(values: list[str]) -> str:
+    """Keep table values that are meaningful for review/Q&A."""
+    kept: list[str] = []
+    for raw in values:
+        for value in str(raw).split("；"):
+            token = value.strip("；; ")
+            token = re.sub(r"([≥≤＜＞<>])\s*\.\s*", r"\1", token)
+            token = token.strip("；;，,。：: ")
+            if len(token) < 2:
+                continue
+            has_cjk = bool(re.search(r"[\u4e00-\u9fff]", token))
+            has_value = bool(re.search(r"[≥≤＜＞<>]?\s*\d", token))
+            if not has_cjk and re.search(r"[A-Za-z]{2,}", token) and not has_value:
+                continue
+            if not has_cjk and not has_value:
+                continue
+            if len(re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", token)) < 2:
+                continue
+            kept.append(token)
+    return "；".join(dict.fromkeys(kept))
+
+
+def _table_item_name(raw: str, method_no: str) -> str:
+    text = (raw or "").replace("\n", "/")
+    text = re.sub(r"(?<![A-Za-z])[A-Za-z](?![A-Za-z])", "", text)
+    text = text.replace("/", "")
+    text = re.split(r"[,，]", text)[0]
+    text = re.split(r"[A-Za-z]{2,}", text)[0]
+    text = re.sub(r"[（(][^）)]*(?:针对|For|for|仅适用)[^）)]*[）)]", "", text)
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"^[0-9]+[:：]?", "", text)
+    text = re.sub(r"^(?:驰|瑞|达|丰|津|天|股|份|公|司|有|限|@|：|:)+", "", text)
+    text = re.sub(r"(?:驰|瑞|达|丰|津|天|股|份|公|司|有|限|@|：|:)+$", "", text)
+    text = text.strip("：:；;（）() ")
+    text = re.sub(r"[（(](\d{2})℃$", r"（\1℃）", text)
+    text = re.sub(r"(?:℃|%)$", "", text)
+    if text.endswith("要求") and len(text) > 3:
+        text = text[: -len("要求")]
+    if text.startswith("后收缩率"):
+        return "收缩率"
+    if text in ("透光率", "雾度"):
+        return "透光率和雾度"
+    if text.startswith("悬臂梁无缺口冲击强度"):
+        return "悬臂梁冲击强度（23℃）"
+    if text.startswith("悬臂梁缺口冲击强度"):
+        if "-30" in raw or "－30" in raw:
+            return "悬臂梁缺口冲击强度（-30℃）"
+        return "悬臂梁缺口冲击强度（23℃）"
+    if text in ("拉伸强度", "屈服伸长率"):
+        return "拉伸强度/屈服伸长率"
+    if text in ("弯曲强度", "弯曲模量"):
+        return "弯曲强度/弯曲模量"
+    if text == "燃烧性能":
+        return "燃烧特性"
+    return text or ""
+
+
+def _method_clause_from_row(row: list[str]) -> str:
+    for cell in reversed(row):
+        match = re.fullmatch(r"\s*(6\.\d+(?:\.\d+)?)\s*", (cell or "").replace("\n", ""))
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _parse_table_items(
+    pdf_bytes: bytes,
+    lines: list[_Line],
+    headings: list[_Heading],
+    method_sec: str,
+) -> list[dict]:
+    """Extract items from a standard's performance-requirement tables.
+
+    Some PP/PE material standards keep the item list inside
+    multi-page merged-cell tables instead of a clause/heading mapping.  This
+    fallback uses pdfplumber's table geometry, cleans PDF watermark fragments,
+    and maps each row to a method clause (or to the closest method heading
+    when the merged cell leaves the method blank).
+    """
+    try:  # optional dependency: keep the text-only parser usable without it
+        import pdfplumber
+    except ImportError:  # pragma: no cover - exercised only without the extra
+        return []
+
+    method_section = [h for h in headings if h.num.split(".")[0] == method_sec]
+    method_leaves = [h for h in method_section if _is_leaf(h, method_section)]
+    by_num = {h.num: h for h in method_leaves}
+    heading_lines = sorted(h.line_idx for h in headings)
+
+    def method_text(heading: _Heading) -> str:
+        next_idx = next(
+            (idx for idx in heading_lines if idx > heading.line_idx), len(lines)
+        )
+        return _text_for(lines, heading, next_idx)
+
+    def closest_method(name: str) -> _Heading | None:
+        best: tuple[float, _Heading] | None = None
+        for heading in method_leaves:
+            ratio = SequenceMatcher(None, name, _chinese_name(heading.text)).ratio()
+            if ratio >= 0.45 and (best is None or ratio > best[0]):
+                best = (ratio, heading)
+        return best[1] if best else None
+
+    rows: list[tuple[str, str, str, int]] = []
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        for page_no, page in enumerate(pdf.pages, start=1):
+            try:
+                tables = page.extract_tables()
+            except Exception:  # noqa: BLE001 - a broken table must not kill the batch
+                continue
+            for table in tables:
+                if not table:
+                    continue
+                header = " ".join(
+                    (cell or "").replace("\n", "")
+                    for row in table[:2]
+                    for cell in row
+                )
+                if "试验项目" not in header or "试验方法" not in header:
+                    continue
+                for row in table[2:] if len(table) > 2 else table[1:]:
+                    if not row:
+                        continue
+                    raw_name = row[0] or ""
+                    if not _has_cjk(raw_name):
+                        continue
+                    method_no = _method_clause_from_row(row)
+                    name = _table_item_name(raw_name, method_no)
+                    if not name or len(name) > 40 or name in {"备注"}:
+                        continue
+                    values: list[str] = []
+                    for cell in row[1:]:
+                        cleaned = _clean_table_text(cell or "")
+                        if not cleaned or re.fullmatch(r"6\.\d+(?:\.\d+)?", cleaned):
+                            continue
+                        if cleaned not in values:
+                            values.append(cleaned)
+                    requirement = _readable_requirement(values)
+                    rows.append((name, requirement, method_no, page_no))
+
+    merged: dict[str, dict] = {}
+    for order, (name, requirement, method_no, page_no) in enumerate(rows):
+        method = by_num.get(method_no) if method_no else None
+        if method is None:
+            method = closest_method(name)
+        if method is None:
+            continue
+        key = name
+        candidate = {
+            "name": name,
+            "requirement": requirement,
+            "clause": method.num,  # table rows are requirements, not clauses
+            "method_clause": method.num,
+            "page": page_no,
+            "method_page": method.page,
+            "order": order,
+        }
+        previous = merged.get(key)
+        if previous is None:
+            merged[key] = candidate
+        elif key in ("拉伸强度/屈服伸长率", "弯曲强度/弯曲模量"):
+            # The customer's item list groups these two properties; keep the
+            # first table's method/page but expose both requirement fragments.
+            parts = [
+                part
+                for part in (previous["requirement"] + "；" + requirement).split("；")
+                if part
+            ]
+            previous["requirement"] = "；".join(dict.fromkeys(parts))
+    ordered = sorted(
+        merged.values(),
+        key=lambda item: (
+            tuple(int(part) for part in item["method_clause"].split(".")),
+            item["order"],
+        ),
+    )
+    items: list[dict] = []
+    for seq, item in enumerate(ordered, start=1):
+        method = by_num[item["method_clause"]]
+        text = method_text(method)
+        items.append(
+            {
+                "seq": seq,
+                "name": item["name"],
+                "name_auto": item["name"],
+                "group": "材料性能",
+                "clause": item["clause"],
+                "requirement": item["requirement"],
+                "method_clause": item["method_clause"],
+                "method": text,
+                "page": item["page"],
+                "method_page": item["method_page"],
+                "confidence": 0.7,
+                "reviewed": False,
+                "references": _find_references(item["requirement"], text),
+            }
+        )
+    return items
+
+
+_SCAN_CLAUSE_RE = re.compile(r"^(5(?:\.\d+){1,4})\s*(.*)$")
+_SCAN_TOC_RE = re.compile(r"^(5(?:\.\d+){2})(?:\s*(.*))?$")
+_FIELD_LABELS = (
+    "试验目的",
+    "试验方法",
+    "试验步骤",
+    "试验条件",
+    "试验要求",
+    "试验设备",
+    "试验程序",
+    "判定要求",
+)
+_METHOD_LABELS = ("试验方法", "试验步骤", "试验程序")
+_REQUIREMENT_LABELS = ("试验要求", "判定要求")
+
+
+def _field_label(text: str) -> str:
+    compact = re.sub(r"\s+", "", text or "")
+    for label in _FIELD_LABELS:
+        if compact == label or compact.startswith(label):
+            return label
+    return ""
+
+
+def _merge_split_ocr_headings(lines: list[_Line]) -> list[_Line]:
+    """Join an OCR'd bare clause number with its heading on the next line."""
+    merged: list[_Line] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        text = line.text.strip()
+        if re.fullmatch(r"5(?:\.\d+){1,3}", text) and index + 1 < len(lines):
+            following = lines[index + 1]
+            candidate = following.text.strip()
+            looks_like_name = (
+                2 <= len(candidate) <= 40
+                and _has_cjk(candidate)
+                and not re.match(r"^\d", candidate)
+                and not re.search(r"[。；;：:，,]", candidate)
+            )
+            if looks_like_name:
+                merged.append(_Line(text=f"{text} {candidate}", page=line.page, idx=len(merged)))
+                index += 2
+                continue
+        merged.append(_Line(text=text, page=line.page, idx=len(merged)))
+        index += 1
+    return merged
+
+
+def _clean_ocr_section_lines(values: list[str]) -> tuple[list[str], bool]:
+    """Keep prose from OCR sections; report whether table captions were seen."""
+    kept: list[str] = []
+    has_table = False
+    for raw in values:
+        text = raw.strip()
+        if not text:
+            continue
+        compact = re.sub(r"\s+", "", text)
+        if not compact:
+            continue
+        if re.fullmatch(r"[\d\s.,，．±%≤≥<>=/()（）+\-~—:：°℃ΩmQkKgsA VmA]+", compact):
+            continue
+        if re.match(r"^[图表]\s*\d+", compact):
+            has_table = True
+            continue
+        if re.fullmatch(r"Q/\s*SQR\s*SS8-46-2021", compact, flags=re.I):
+            continue
+        if len(compact) <= 3:
+            continue
+        if compact.startswith(("图例", "横坐标", "纵坐标", "单位：", "单位:")):
+            continue
+        if len(compact) <= 2 and not _has_cjk(compact):
+            continue
+        kept.append(_normalise_text(text))
+    return list(dict.fromkeys(kept)), has_table
+
+
+def _join_ocr_lines(values: list[str], limit: int = 1200) -> tuple[str, bool]:
+    kept, _ = _clean_ocr_section_lines(values)
+    text = "；".join(part.strip("；;。 ") for part in kept if part.strip("；;。 "))
+    truncated = len(text) > limit
+    if truncated:
+        text = text[:limit].rstrip("；;，, ") + "…"
+    return text, truncated
+
+
+def _parse_toc_names(lines: list[_Line]) -> dict[str, str]:
+    """Read item numbers from the table of contents (OCR pages 1-5)."""
+    toc: dict[str, str] = {}
+    for index, line in enumerate(lines):
+        if line.page > 5:
+            continue
+        match = _SCAN_TOC_RE.match(line.text.strip())
+        if not match:
+            continue
+        number, rest = match.group(1), (match.group(2) or "").strip()
+        name = rest
+        if not name:
+            for candidate in lines[index + 1 : index + 3]:
+                text = candidate.text.strip()
+                compact = re.sub(r"\s+", "", text)
+                if (
+                    2 <= len(text) <= 40
+                    and _has_cjk(text)
+                    and not re.match(r"^\d", text)
+                    and not _field_label(text)
+                    and not re.search(r"[。；;：:，,]", text)
+                ):
+                    name = compact
+                    break
+        toc.setdefault(number, name.strip(" .．:："))
+    return toc
+
+
+def _ocr_confidence(page_confidence: list[float] | None, page: int) -> float:
+    if page_confidence and 1 <= page <= len(page_confidence):
+        return float(page_confidence[page - 1])
+    return 0.9
+
+
+def _parse_combined_items(
+    lines: list[_Line],
+    page_confidence: list[float] | None,
+    ocr_meta: dict | None,
+) -> list[dict]:
+    """Parse a scanned standard whose chapter 5 is a combined
+    "试验方法和性能要求" section (combined-section layout).
+
+    Item headings are depth-3 clauses (5.x.y); depth-4 clauses are the
+    试验目的/试验方法/试验要求 subsections.  OCR sometimes splits a bare
+    number and its name onto separate lines; ``_merge_split_ocr_headings``
+    has already joined those.
+    """
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^5\s*试验方法和性能要求", line.text.strip())
+        or "试验方法和性能要求" in line.text
+    ]
+    if not starts:
+        return []
+    # The table of contents mentions the section first; the body heading is
+    # the last occurrence before the item clauses.
+    start_index = starts[-1]
+
+    toc = _parse_toc_names(lines)
+    items: list[dict] = []
+    current: dict | None = None
+    parent = ""
+    label = "body"
+    for line in lines[start_index + 1 :]:
+        text = line.text.strip()
+        if not text:
+            continue
+        if re.match(r"^附\s*录", text):
+            break
+        match = _SCAN_CLAUSE_RE.match(text)
+        if match:
+            number, rest = match.group(1), match.group(2).strip()
+            depth = len(number.split("."))
+            field = _field_label(rest)
+            if depth <= 2:
+                parent = rest
+                label = "body"
+                current = None
+                continue
+            if field:
+                label = field
+                if current is not None:
+                    if depth >= 4 and field in _METHOD_LABELS and not current["method_clause"]:
+                        current["method_clause"] = number
+                        current["method_page"] = line.page
+                continue
+            if depth == 3:
+                if number not in toc:
+                    # A depth-3 clause outside the TOC is usually a table row
+                    # or a mis-numbered subheading; keep it as body text.
+                    if current is not None:
+                        current["sections"].setdefault(label, []).append(text)
+                    continue
+                name = rest or toc.get(number, "")
+                name_source = "heading" if rest else "toc"
+                if not name:
+                    name = number
+                    name_source = "fallback"
+                current = {
+                    "num": number,
+                    "name": name,
+                    "name_source": name_source,
+                    "page": line.page,
+                    "parent": parent,
+                    "sections": {},
+                    "method_clause": "",
+                    "method_page": None,
+                }
+                items.append(current)
+                label = "body"
+                continue
+            if depth >= 4:
+                label = "body"
+                if current is not None:
+                    current["sections"].setdefault("body", []).append(rest)
+                continue
+        if current is None:
+            continue
+        if not _has_cjk(text) and not re.search(r"[≥≤＜＞<>]", text):
+            continue
+        current["sections"].setdefault(label or "body", []).append(text)
+
+    parsed: list[dict] = []
+    for seq, item in enumerate(items, start=1):
+        sections = item["sections"]
+        method_values = [
+            value
+            for key in _METHOD_LABELS
+            for value in sections.get(key, [])
+        ]
+        method_from_condition = False
+        if not method_values and sections.get("试验条件"):
+            method_values = sections["试验条件"]
+            method_from_condition = True
+        method_from_body = False
+        if not method_values and sections.get("body"):
+            method_values = sections["body"]
+            method_from_body = True
+        requirement_values = [
+            value
+            for key in _REQUIREMENT_LABELS
+            for value in sections.get(key, [])
+        ]
+        requirement_from_body = False
+        if not requirement_values and sections.get("body"):
+            joined = "".join(sections["body"])
+            if any(word in joined for word in ("应", "要求", "不得", "符合", "≤", "≥", "<", ">")):
+                requirement_values = sections["body"]
+                requirement_from_body = True
+
+        method, method_truncated = _join_ocr_lines(method_values)
+        requirement, requirement_truncated = _join_ocr_lines(requirement_values)
+        _, has_table = _clean_ocr_section_lines(
+            [value for values in sections.values() for value in values]
+        )
+        page_conf = _ocr_confidence(page_confidence, item["page"])
+        method_page = item["method_page"] or item["page"]
+        method_page_conf = _ocr_confidence(page_confidence, method_page)
+        field_confidence = {
+            "clause": round(page_conf, 3),
+            "name": round(min(page_conf, 0.98 if item["name_source"] == "heading" else 0.9), 3),
+            "requirement": round(page_conf if requirement else 0.0, 3),
+            "method": round(method_page_conf if method else 0.0, 3),
+            "method_clause": round(method_page_conf if item["method_clause"] else 0.0, 3),
+        }
+        review_fields: list[dict] = []
+        field_values = {
+            "clause": item["num"],
+            "name": item["name"],
+            "requirement": requirement,
+            "method": method,
+            "method_clause": item["method_clause"],
+        }
+        for field, confidence in field_confidence.items():
+            if not field_values.get(field):
+                review_fields.append(
+                    {
+                        "field": field,
+                        "confidence": confidence,
+                        "reason": "OCR/结构解析未提取到该字段",
+                    }
+                )
+            elif confidence < 0.9:
+                review_fields.append(
+                    {
+                        "field": field,
+                        "confidence": confidence,
+                        "reason": "OCR 置信度低于 0.90",
+                    }
+                )
+            elif field in ("requirement", "method") and re.search(r"\d", field_values[field]):
+                if page_conf < 0.95:
+                    review_fields.append(
+                        {
+                            "field": field,
+                            "confidence": confidence,
+                            "reason": "字段含数值且所在页 OCR 置信度低于 0.95",
+                        }
+                    )
+        if item["name_source"] != "heading":
+            review_fields.append(
+                {
+                    "field": "name",
+                    "confidence": field_confidence["name"],
+                    "reason": "正文项目标题未完整识别，名称取自目录或编号",
+                }
+            )
+        if method_from_condition:
+            review_fields.append(
+                {
+                    "field": "method",
+                    "confidence": field_confidence["method"],
+                    "reason": "未找到试验方法小节，已回退到试验条件",
+                }
+            )
+        if method_from_body:
+            review_fields.append(
+                {
+                    "field": "method",
+                    "confidence": field_confidence["method"],
+                    "reason": "未找到试验方法小节，已回退到正文",
+                }
+            )
+        if requirement_from_body:
+            review_fields.append(
+                {
+                    "field": "requirement",
+                    "confidence": field_confidence["requirement"],
+                    "reason": "未找到试验要求小节，已回退到正文",
+                }
+            )
+        if has_table or method_truncated or requirement_truncated:
+            review_fields.append(
+                {
+                    "field": "requirement" if requirement_truncated else "method",
+                    "confidence": field_confidence["requirement" if requirement_truncated else "method"],
+                    "reason": "章节含表格或文本被截断，需对照原 PDF 复核",
+                }
+            )
+        confidence = round(min(field_confidence.values()), 3)
+        parsed.append(
+            {
+                "seq": seq,
+                "name": item["name"],
+                "name_auto": item["name"],
+                "group": item["parent"],
+                "clause": item["num"],
+                "requirement": requirement,
+                "method_clause": item["method_clause"],
+                "method": method,
+                "page": item["page"],
+                "method_page": method_page,
+                "confidence": confidence,
+                "confidence_detail": field_confidence,
+                "review_required": bool(review_fields),
+                "review_fields": review_fields,
+                "reviewed": False,
+                "references": _find_references(requirement, method),
+            }
+        )
+    return parsed
+
+
+def parse_standard(
+    pages: list[str], file_name: str = "", pdf_bytes: bytes | None = None,
+    page_confidence: list[float] | None = None, ocr: dict | None = None,
+) -> dict:
+    """Parse one standard PDF (already split into page texts).
+
+    ``pdf_bytes`` is optional and only used for the table-structure fallback;
+    ``page_confidence``/``ocr`` are supplied by the OCR pipeline for scanned
+    PDFs and drive the per-field review flags.
+    """
     started = time.perf_counter()
     meta = _extract_meta(pages, file_name)
     warnings: list[str] = []
 
     total_chars = sum(len(page) for page in pages)
-    if total_chars < 500:
+    if total_chars < 500 and not ocr:
         warnings.append(
-            f"PDF 文本层仅 {total_chars} 字符，可能是扫描件；本增量不启用 OCR，无法抽取项目"
+            f"PDF 文本层仅 {total_chars} 字符，可能是扫描件；请启用 OCR 后再解析"
+        )
+    if ocr:
+        warnings.append(
+            "扫描件已通过 OCR 抽取，平均置信度 "
+            f"{ocr.get('avg_confidence', 0):.3f}，所有字段需按置信度人工复核"
         )
 
-    lines = _clean_lines(pages, meta["standard_no"])
+    lines = _clean_lines(pages, meta["standard_no"], keep_method_label=bool(ocr))
+    if ocr:
+        lines = _merge_split_ocr_headings(lines)
     headings = _detect_headings(lines)
+    items: list[dict] = []
+    source = ""
+
+    combined_items = _parse_combined_items(lines, page_confidence, ocr)
+    if combined_items:
+        items = combined_items
+        source = "combined-sections"
+        warnings.append(
+            "扫描件使用「试验方法和性能要求」合并章节抽取：项目=5.x.y，"
+            "试验方法/试验要求=5.x.y.z，置信度低或缺失的字段已标出"
+        )
+
     tech_sec = _section_number(headings, "技术要求")
     method_sec = _section_number(headings, "试验方法")
     if tech_sec is None:
@@ -375,83 +972,108 @@ def parse_standard(pages: list[str], file_name: str = "") -> dict:
     if method_sec is None:
         method_sec = "6" if any(h.num == "6" for h in headings) else None
 
-    items: list[dict] = []
-    if tech_sec is not None and method_sec is not None:
-        tech_section = [
-            h for h in headings if h.num.split(".")[0] == tech_sec
-        ]
-        method_section = [
-            h for h in headings if h.num.split(".")[0] == method_sec
-        ]
-        tech_by_num = {h.num: h for h in tech_section}
-        method_leaves = [h for h in method_section if _is_leaf(h, method_section)]
-
-        pairs = _extract_pairs(lines, tech_sec, method_sec)
-        pairs = [
-            (tech_no, method_no)
-            for tech_no, method_no in pairs
-            if tech_no in tech_by_num and method_no in {h.num for h in method_leaves}
-        ]
-        if len(pairs) >= 2:
-            mapping: list[tuple[_Heading, _Heading, float]] = [
-                (tech_by_num[tech_no], {h.num: h for h in method_leaves}[method_no], 1.0)
-                for tech_no, method_no in pairs
+    if not items:
+        if tech_sec is not None and method_sec is not None:
+            tech_section = [
+                h for h in headings if h.num.split(".")[0] == tech_sec
             ]
-            source = "item-table"
+            method_section = [
+                h for h in headings if h.num.split(".")[0] == method_sec
+            ]
+            tech_by_num = {h.num: h for h in tech_section}
+            method_leaves = [h for h in method_section if _is_leaf(h, method_section)]
+
+            pairs = _extract_pairs(lines, tech_sec, method_sec)
+            pairs = [
+                (tech_no, method_no)
+                for tech_no, method_no in pairs
+                if tech_no in tech_by_num and method_no in {h.num for h in method_leaves}
+            ]
+            if len(pairs) >= 2:
+                mapping: list[tuple[_Heading, _Heading, float]] = [
+                    (tech_by_num[tech_no], {h.num: h for h in method_leaves}[method_no], 1.0)
+                    for tech_no, method_no in pairs
+                ]
+                source = "item-table"
+            else:
+                if pairs:
+                    warnings.append("检验项目表不完整，改用标题名称匹配")
+                by_method = _match_by_name(tech_section, method_leaves)
+                mapping = []
+                for method in method_leaves:
+                    tech = by_method.get(method.num)
+                    if tech is not None:
+                        mapping.append((tech, method, 0.75))
+                source = "heading-match"
+
+            ordered = sorted(mapping, key=lambda pair: pair[1].line_idx)
+            # next heading line (any section) for body slicing
+            heading_lines = sorted(h.line_idx for h in headings)
+            for seq, (tech, method, confidence) in enumerate(ordered, start=1):
+                next_idx = next(
+                    (idx for idx in heading_lines if idx > tech.line_idx), len(lines)
+                )
+                method_next_idx = next(
+                    (idx for idx in heading_lines if idx > method.line_idx), len(lines)
+                )
+                name, group = _item_name(tech, method, tech_by_num, tech_sec)
+                requirement = _text_for(lines, tech, next_idx)
+                method_text = _text_for(lines, method, method_next_idx)
+                if not requirement:
+                    warnings.append(f"{tech.num} 未提取到技术要求正文")
+                if not method_text:
+                    warnings.append(f"{method.num} 未提取到试验方法正文")
+                items.append(
+                    {
+                        "seq": seq,
+                        "name": name,
+                        "name_auto": name,
+                        "group": group,
+                        "clause": tech.num,
+                        "requirement": requirement,
+                        "method_clause": method.num,
+                        "method": method_text,
+                        "page": tech.page,
+                        "method_page": method.page,
+                        "confidence": confidence,
+                        "review_required": False,
+                        "review_fields": [],
+                        "reviewed": False,
+                        "references": _find_references(requirement, method_text),
+                    }
+                )
+            if source == "heading-match":
+                warnings.append("未找到完整检验项目表，项目与试验方法按标题名称匹配，需人工复核")
         else:
-            if pairs:
-                warnings.append("检验项目表不完整，改用标题名称匹配")
-            by_method = _match_by_name(tech_section, method_leaves)
-            mapping = []
-            for method in method_leaves:
-                tech = by_method.get(method.num)
-                if tech is not None:
-                    mapping.append((tech, method, 0.75))
-            source = "heading-match"
+            warnings.append("未识别到「技术要求/试验方法」章节，无法抽取项目")
 
-        ordered = sorted(mapping, key=lambda pair: pair[1].line_idx)
-        # next heading line (any section) for body slicing
-        heading_lines = sorted(h.line_idx for h in headings)
-        for seq, (tech, method, confidence) in enumerate(ordered, start=1):
-            next_idx = next(
-                (idx for idx in heading_lines if idx > tech.line_idx), len(lines)
+    # PP/PE material standards keep the item list in merged-cell
+    # performance tables rather than in headings.  Prefer the table result
+    # whenever it recovers more items than the heading heuristic.
+    if pdf_bytes and method_sec is not None and source not in {"item-table", "combined-sections"}:
+        table_items = _parse_table_items(pdf_bytes, lines, headings, method_sec)
+        if len(table_items) > len(items):
+            items = table_items
+            source = "table-parse"
+            warnings = [
+                warning
+                for warning in warnings
+                if "未找到完整检验项目表" not in warning
+                and "未识别到「技术要求/试验方法」章节" not in warning
+            ]
+            warnings.append(
+                "材料性能以多页合并表格给出，已按表格结构抽取项目和试验方法，需人工复核"
             )
-            method_next_idx = next(
-                (idx for idx in heading_lines if idx > method.line_idx), len(lines)
-            )
-            name, group = _item_name(tech, method, tech_by_num, tech_sec)
-            requirement = _text_for(lines, tech, next_idx)
-            method_text = _text_for(lines, method, method_next_idx)
-            if not requirement:
-                warnings.append(f"{tech.num} 未提取到技术要求正文")
-            if not method_text:
-                warnings.append(f"{method.num} 未提取到试验方法正文")
-            items.append(
-                {
-                    "seq": seq,
-                    "name": name,
-                    "name_auto": name,
-                    "group": group,
-                    "clause": tech.num,
-                    "requirement": requirement,
-                    "method_clause": method.num,
-                    "method": method_text,
-                    "page": tech.page,
-                    "method_page": method.page,
-                    "confidence": confidence,
-                    "reviewed": False,
-                    "references": _find_references(requirement, method_text),
-                }
-            )
-        if source == "heading-match":
-            warnings.append("未找到完整检验项目表，项目与试验方法按标题名称匹配，需人工复核")
-    else:
-        warnings.append("未识别到「技术要求/试验方法」章节，无法抽取项目")
 
-    if len(items) < 2 and total_chars >= 500:
+    if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
 
+    if ocr:
+        meta["is_scanned"] = True
+        meta["ocr"] = ocr
+
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    review_required = sum(1 for item in items if item.get("review_required"))
     summary = {
         "items": len(items),
         "items_with_requirement": sum(1 for item in items if item["requirement"]),
@@ -464,13 +1086,18 @@ def parse_standard(pages: list[str], file_name: str = "") -> dict:
         "pages": len(pages),
         "chars": total_chars,
         "reviewed_items": 0,
+        "review_required_items": review_required,
+        "review_fields": sum(len(item.get("review_fields", [])) for item in items),
         "parse_ms": elapsed_ms,
     }
+    if ocr:
+        summary["ocr_pages"] = ocr.get("pages", len(pages))
+        summary["ocr_avg_confidence"] = ocr.get("avg_confidence", 0.0)
     return {
         "schema_version": SCHEMA_VERSION,
         "meta": meta,
         "items": items,
         "summary": summary,
         "warnings": warnings,
-        "mapping_source": "item-table" if len(items) and items[0]["confidence"] == 1.0 else "heading-match",
+        "mapping_source": source or "heading-match",
     }

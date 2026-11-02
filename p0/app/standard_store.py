@@ -225,6 +225,80 @@ def export_path(standard_id: str) -> Path:
     return _dir(standard_id) / "export.xlsx"
 
 
+INDEX_PATH = DATA_DIR / "kb_index.json"
+
+
+def rebuild_index() -> dict:
+    """Rebuild every standard's chunks and write one combined KB index.
+
+    This is the P0 "重建索引" operation: it is deterministic and file-backed,
+    so the demo can be repeated without WeKnora or an external vector store.
+    """
+    with _LOCK:
+        if not DATA_DIR.exists():
+            return {"standards": 0, "chunks": 0, "built_at": _now()}
+        standards: list[dict] = []
+        chunks: list[dict] = []
+        for directory in sorted(DATA_DIR.iterdir()):
+            result_path = directory / "result.json"
+            if not result_path.exists():
+                continue
+            try:
+                record = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            standard_chunks = build_chunks(record)
+            if not standard_chunks:
+                continue
+            kb = {
+                "standard_id": record["id"],
+                "standard_no": record["meta"].get("standard_no", ""),
+                "standard_name": record["meta"].get("name", ""),
+                "source": record.get("source", {}),
+                "chunks": standard_chunks,
+                "published_at": _now(),
+            }
+            _write_json(directory / "kb.json", kb)
+            record["published"] = True
+            record["published_at"] = kb["published_at"]
+            record["updated_at"] = kb["published_at"]
+            _write_json(result_path, record)
+            standards.append(
+                {
+                    "id": record["id"],
+                    "standard_no": record["meta"].get("standard_no", ""),
+                    "standard_name": record["meta"].get("name", ""),
+                    "items": len(record.get("items", [])),
+                    "chunks": len(standard_chunks),
+                }
+            )
+            chunks.extend(standard_chunks)
+        index = {
+            "built_at": _now(),
+            "standard_count": len(standards),
+            "chunk_count": len(chunks),
+            "standards": standards,
+            "chunks": chunks,
+        }
+        _write_json(INDEX_PATH, index)
+        return index
+
+
+def index_stats() -> dict:
+    if INDEX_PATH.exists():
+        try:
+            index = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+            return {
+                "built_at": index.get("built_at", ""),
+                "standard_count": index.get("standard_count", 0),
+                "chunk_count": index.get("chunk_count", 0),
+                "standards": index.get("standards", []),
+            }
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {"built_at": "", "standard_count": 0, "chunk_count": 0, "standards": []}
+
+
 def safe_filename(value: str) -> str:
     value = re.sub(r'[\\/:*?"<>|\r\n\t]', "-", value).strip()
     return value or "standard"

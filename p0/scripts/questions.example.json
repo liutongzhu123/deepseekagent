@@ -1,0 +1,16 @@
+[
+  {
+    "id": "Q1",
+    "question": "Q/DEMO 001-2026 中 5.1.1 的外观要求是什么？",
+    "expect_found": true,
+    "must_contain": ["5.1.1"],
+    "kind": "示例：库内条款直问"
+  },
+  {
+    "id": "Q2",
+    "question": "Q/UNKNOWN 999-2026 中 5.1.1 的外观要求是什么？",
+    "expect_found": false,
+    "must_contain": ["未找到"],
+    "kind": "示例：库外标准"
+  }
+]
