@@ -13,6 +13,9 @@ const ROLE_DESCRIPTIONS = {
 };
 const FIELD_NAMES = { name: '实检项目', requirement: '技术要求', method: '试验方法' };
 const TEMPLATE_NAMES = { 'BYD-odor': '比亚迪气味报告模板', generic: '通用报告模板' };
+const SEVERITY_NAMES = { high: '高', medium: '中', low: '低', info: '提示' };
+const SEVERITY_TONES = { high: 'danger', medium: 'warn', low: 'neutral', info: 'neutral' };
+const QUOTE_HEADER_NAMES = { item: '试验项目', price: '单价', quantity: '数量', unit: '单位', sample: '样品名称' };
 const PERMISSIONS = {
   'report:audit': ['admin', 'reviewer'],
   'standard:parse': ['admin', 'reviewer'],
@@ -88,6 +91,8 @@ const state = {
   kbHealth: null,
   audit: { events: [], total: 0, limit: 50, offset: 0, all: [] },
   config: null,
+  moduleConfig: null,
+  moduleConfigError: '',
 };
 
 const SAMPLE_RECORDS = `{
@@ -334,29 +339,155 @@ function switchTab(name) {
     loadKbHealth();
     loadKbStandards();
   }
+  if (name === 'report' || name === 'standards' || name === 'quote') loadModuleConfig();
   if (name === 'admin') loadAdmin().catch(showError);
   const nextParams = new URLSearchParams(location.search);
   nextParams.set('tab', name);
   history.replaceState(null, '', `${location.pathname}?${nextParams.toString()}`);
 }
 
-/* ---------------------------------------------------------------- report */
-async function loadRules() {
-  try {
-    const data = await jsonFetch('api/v1/rules');
-    const rules = data.rules || [];
-    const enabled = data.enabled === undefined ? rules.length : data.enabled;
-    $('ruleCount').textContent = enabled;
-    $('ruleHeadPill').innerHTML = `${ic('shield')}${enabled} / ${rules.length} 条规则启用`;
-    $('reportRules').innerHTML = rules.map((rule) => `
-      <div class="rule-item ${rule.enabled === false ? 'rule-disabled' : ''}">
-        <span class="finding-rule">${escapeHtml(rule.id)}</span>
-        <div><b>${escapeHtml(rule.title)}</b><span class="desc">${escapeHtml(rule.description)}</span></div>
+/* ---------------------------------------------------------------- module rule config */
+function configMetaText(config) {
+  const revision = config.revision ?? 0;
+  const updated = config.updated_at ? formatTime(config.updated_at, true) : '尚未保存，当前为默认规则';
+  const by = config.updated_by ? ` · ${config.updated_by}` : '';
+  return `管理端配置 v${revision} · ${updated}${by}`;
+}
+function configFact(label, value) {
+  return `<span class="config-fact"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></span>`;
+}
+function configAccessText() {
+  return can('config:manage') ? '' : ' · 由管理员维护';
+}
+function applyConfigAccessory() {
+  $$('.js-open-admin-config').forEach((button) => button.classList.toggle('hidden', !can('config:manage')));
+}
+function aliasRow(label, values) {
+  const chips = (values || []).map((value) => `<span class="chip">${escapeHtml(value)}</span>`).join('');
+  return `<div class="alias-row"><span class="alias-label">${escapeHtml(label)}</span><div class="alias-values">${chips || '<span class="muted">—</span>'}</div></div>`;
+}
+function configErrorState(message) {
+  $('reportRuleMeta').textContent = message;
+  $('reportRuleFacts').innerHTML = '';
+  $('reportRules').innerHTML = `<div class="muted">${escapeHtml(message)}</div>`;
+  ['std', 'quote'].forEach((prefix) => {
+    $(`${prefix}ConfigInline`).textContent = message;
+    $(`${prefix}ConfigMeta`).textContent = message;
+    $(`${prefix}ConfigFacts`).innerHTML = '';
+    $(`${prefix}ConfigRev`).textContent = '—';
+  });
+  $('stdConfigAliases').innerHTML = '';
+  $('stdConfigFields').innerHTML = `<tr><td colspan="3" class="muted">${escapeHtml(message)}</td></tr>`;
+  $('quoteConfigHeaders').innerHTML = `<tr><td colspan="2" class="muted">${escapeHtml(message)}</td></tr>`;
+  $('quoteConfigUnits').innerHTML = '';
+  $('quoteConfigColumns').innerHTML = `<tr><td colspan="3" class="muted">${escapeHtml(message)}</td></tr>`;
+}
+function renderReportModuleConfig(config) {
+  const report = config.report || { rules: [] };
+  const rules = report.rules || [];
+  const enabled = rules.filter((rule) => rule.enabled !== false).length;
+  $('ruleCount').textContent = enabled;
+  $('ruleHeadPill').innerHTML = `${ic('shield')}${enabled} / ${rules.length} 条规则启用`;
+  $('reportRuleMeta').textContent = `${configMetaText(config)}${configAccessText()}`;
+  $('reportRuleFacts').innerHTML = [
+    configFact('均值容差', `${report.mean_tolerance ?? 0.05} 分`),
+    configFact('注意事项', report.expected_notices ? `${report.expected_notices} 条` : '不校验'),
+    configFact('已停用', `${rules.length - enabled} 条`),
+  ].join('');
+  $('reportRules').innerHTML = rules.map((rule) => {
+    const severity = SEVERITY_NAMES[rule.severity] || rule.severity || '—';
+    const tone = SEVERITY_TONES[rule.severity] || 'neutral';
+    return `<div class="rule-item ${rule.enabled === false ? 'rule-disabled' : ''}">
+      <span class="finding-rule">${escapeHtml(rule.id)}</span>
+      <div class="rule-main"><b>${escapeHtml(rule.title)}</b><span class="desc">${escapeHtml(rule.description)}</span></div>
+      <div class="rule-tags">
+        <span class="pill ${tone}">${escapeHtml(severity)}</span>
         ${rule.enabled === false ? '<span class="pill neutral">已停用</span>' : ''}
-      </div>`).join('') || '<div class="muted">暂无规则</div>';
-  } catch (error) {
-    $('reportRules').innerHTML = `<div class="muted">规则加载失败：${escapeHtml(error.message)}</div>`;
+      </div>
+    </div>`;
+  }).join('') || '<div class="muted">暂无规则</div>';
+}
+function renderStandardModuleConfig(config) {
+  const standard = config.standard || { section_aliases: {}, fields: [] };
+  const aliases = standard.section_aliases || {};
+  const tech = aliases['技术要求'] || [];
+  const method = aliases['试验方法'] || [];
+  const fields = standard.fields || [];
+  const required = fields.filter((field) => field.required).length;
+  const exported = fields.filter((field) => field.export).length;
+  $('stdConfigRev').textContent = `v${config.revision ?? 0}`;
+  $('stdConfigInline').textContent = `技术要求：${tech.join(' / ') || '—'} · 试验方法：${method.join(' / ') || '—'}`;
+  $('stdConfigMeta').textContent = `${configMetaText(config)}${configAccessText()}`;
+  $('stdConfigFacts').innerHTML = [
+    configFact('技术要求别名', `${tech.length} 个`),
+    configFact('试验方法别名', `${method.length} 个`),
+    configFact('解析字段', `${fields.length} 个`),
+    configFact('必填 / 导出', `${required} / ${exported}`),
+  ].join('');
+  $('stdConfigAliases').innerHTML = [
+    aliasRow('技术要求', tech),
+    aliasRow('试验方法', method),
+  ].join('');
+  $('stdConfigFields').innerHTML = fields.map((field) => `
+    <tr>
+      <td><span class="cell-main">${escapeHtml(field.label)}</span><span class="cell-sub">${escapeHtml(field.key)}</span></td>
+      <td>${field.required ? '<span class="pill warn">缺失进复核</span>' : '<span class="muted">可选</span>'}</td>
+      <td>${field.export ? '<span class="pill success">导出</span>' : '<span class="muted">不导出</span>'}</td>
+    </tr>`).join('') || '<tr><td colspan="3" class="muted">暂无字段</td></tr>';
+}
+function renderQuoteModuleConfig(config) {
+  const quote = config.quote || { headers: {}, unit_map: {}, crm_columns: [] };
+  const headers = quote.headers || {};
+  const units = Object.entries(quote.unit_map || {});
+  const columns = quote.crm_columns || [];
+  const discount = Number(quote.default_discount ?? 60);
+  const productTax = Number(quote.product_tax_rate ?? 0.16) * 100;
+  const serviceTax = Number(quote.service_tax_rate ?? 0.06) * 100;
+  const number = (value) => String(Math.round(value * 100) / 100);
+  $('quoteConfigRev').textContent = `v${config.revision ?? 0}`;
+  $('quoteConfigInline').textContent = `折扣 ${number(discount)}% · 产品税 ${number(productTax)}% · 服务税 ${number(serviceTax)}% · 单位映射 ${units.length} 条 · CRM ${columns.length} 列`;
+  $('quoteConfigMeta').textContent = `${configMetaText(config)}${configAccessText()}`;
+  $('quoteConfigFacts').innerHTML = [
+    configFact('默认折扣', `${number(discount)}%`),
+    configFact('产品税率', `${number(productTax)}%`),
+    configFact('服务税率', `${number(serviceTax)}%`),
+    configFact('表头列', `${Object.keys(QUOTE_HEADER_NAMES).length} 类`),
+  ].join('');
+  $('quoteConfigHeaders').innerHTML = Object.entries(QUOTE_HEADER_NAMES).map(([key, label]) => {
+    const values = headers[key] || [];
+    const chips = values.map((value) => `<span class="chip">${escapeHtml(value)}</span>`).join('');
+    return `<tr><td>${escapeHtml(label)}</td><td>${chips || '<span class="muted">—</span>'}</td></tr>`;
+  }).join('');
+  $('quoteConfigUnits').innerHTML = `<div class="alias-values">${units.map(([source, target]) => `<span class="chip">${escapeHtml(source)} → ${escapeHtml(target)}</span>`).join('') || '<span class="muted">—</span>'}</div>`;
+  $('quoteConfigColumns').innerHTML = columns.map((column) => `
+    <tr>
+      <td><span class="cell-main">${escapeHtml(CONFIG_SOURCE_NAMES[column.source] || column.source)}</span><span class="cell-sub">${escapeHtml(column.source)}</span></td>
+      <td>${escapeHtml(column.label)}</td>
+      <td>${column.enabled ? '<span class="pill success">启用</span>' : '<span class="pill neutral">停用</span>'}</td>
+    </tr>`).join('') || '<tr><td colspan="3" class="muted">暂无 CRM 列</td></tr>';
+  $('quotePolicyLine').textContent = `折扣与税率由管理端规则配置维护；当前默认折扣 ${number(discount)}%、产品税 ${number(productTax)}%、服务税 ${number(serviceTax)}%，不做自动推断。`;
+}
+function renderModuleConfig() {
+  const wrapper = state.moduleConfig;
+  if (!wrapper || !wrapper.config) {
+    configErrorState(state.moduleConfigError ? `规则配置加载失败：${state.moduleConfigError}` : '正在加载管理端配置…');
+    applyConfigAccessory();
+    return;
   }
+  renderReportModuleConfig(wrapper.config);
+  renderStandardModuleConfig(wrapper.config);
+  renderQuoteModuleConfig(wrapper.config);
+  applyConfigAccessory();
+}
+async function loadModuleConfig() {
+  try {
+    state.moduleConfig = await jsonFetch('api/v1/config/effective');
+    state.moduleConfigError = '';
+  } catch (error) {
+    state.moduleConfig = null;
+    state.moduleConfigError = error.message;
+  }
+  renderModuleConfig();
 }
 function findingStatus(status) {
   if (status === 'fail') return { tone: 'danger', text: '失败' };
@@ -968,7 +1099,6 @@ const CONFIG_SOURCE_NAMES = {
   discount: '折扣',
   note: '备注',
 };
-const SEVERITY_NAMES = { high: '高', medium: '中', low: '低', info: '提示' };
 function splitList(value) {
   return String(value || '').split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean);
 }
@@ -1111,7 +1241,7 @@ async function saveConfigSection(section, button, collector) {
       body: JSON.stringify(body),
     });
     renderAdminConfig();
-    await loadRules();
+    await loadModuleConfig();
     toast('规则配置已保存，对新的请求立即生效');
   } catch (error) {
     showError(error);
@@ -1130,7 +1260,7 @@ async function resetConfigSection(section, label) {
   try {
     state.config = await jsonFetch(`api/v1/admin/config/${section}/reset`, { method: 'POST' });
     renderAdminConfig();
-    await loadRules();
+    await loadModuleConfig();
     toast(`已恢复默认${label}`);
   } catch (error) {
     showError(error);
@@ -1145,10 +1275,18 @@ function switchAdminView(view) {
   if (view === 'audit') loadAudit(true);
   if (view === 'config') loadAdminConfig().catch(showError);
 }
+function openAdminConfig() {
+  state.adminView = 'config';
+  switchTab('admin');
+  switchAdminView('config');
+}
 
 /* ---------------------------------------------------------------- bind */
 function bindEvents() {
   $$('.nav-item').forEach((item) => item.addEventListener('click', () => switchTab(item.dataset.tab)));
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('.js-open-admin-config')) openAdminConfig();
+  });
   $('navToggle').addEventListener('click', () => {
     $('sidebar').classList.add('open');
     $('navBackdrop').classList.add('show');
@@ -1530,7 +1668,6 @@ function boot() {
   loadMe().then((signedIn) => {
     if (!signedIn) return;
     switchTab(initialTab);
-    loadRules();
     loadStandards().catch((error) => {
       $('stdList').innerHTML = `<div class="muted pad-8">标准加载失败：${escapeHtml(error.message)}</div>`;
     });

@@ -62,7 +62,7 @@
       </div>
     </nav>
     <div class="side-foot">
-      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.7.0</span></div>
+      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.7.1</span></div>
       <div class="user-card" id="userBox">
         <span class="avatar">··</span>
         <div class="user-meta"><b>正在确认登录状态…</b><span>请稍候</span></div>
@@ -78,7 +78,7 @@
       </div>
       <div class="topbar-right">
         <span class="env-pill"><span class="dot"></span>内部受控环境</span>
-        <span class="version-pill">P1 · v0.7.0</span>
+        <span class="version-pill">P1 · v0.7.1</span>
       </div>
     </header>
     <main class="content">
@@ -149,9 +149,14 @@
           <aside class="stack">
             <section class="card card-pad">
               <div class="card-head">
-                <div><h2>审核规则</h2><p>全部规则均为确定性检查，结论可回溯。</p></div>
+                <div><h2>审核规则</h2><p>由管理员在规则配置中维护启用状态、严重级别与阈值；停用规则仍展示以便追溯。</p></div>
                 <span class="pill info" id="ruleCount">11</span>
               </div>
+              <div class="config-source-line">
+                <span id="reportRuleMeta">正在加载管理端配置…</span>
+                <button type="button" class="link-btn js-open-admin-config hidden">管理端配置 →</button>
+              </div>
+              <div class="config-facts" id="reportRuleFacts"></div>
               <div id="reportRules" class="rule-list"><div class="muted">正在加载规则…</div></div>
             </section>
             <section class="card card-pad tip-card">
@@ -173,6 +178,36 @@
           </div>
           <div class="page-actions"><span class="pill info" id="stdHeadPill">0 份标准</span></div>
         </div>
+        <details class="card advanced module-config" id="stdConfigCard">
+          <summary>
+            <span class="mc-icon"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg></span>
+            <span class="mc-title"><b>解析规则字段</b><small id="stdConfigInline">正在加载管理端配置…</small></span>
+            <span class="pill neutral" id="stdConfigRev">—</span>
+            <span class="chev"><svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg></span>
+          </summary>
+          <div class="advanced-body">
+            <div class="config-source-line">
+              <span id="stdConfigMeta">—</span>
+              <button type="button" class="link-btn js-open-admin-config hidden">管理端配置 →</button>
+            </div>
+            <div class="config-facts" id="stdConfigFacts"></div>
+            <div class="module-config-grid">
+              <section>
+                <h4 class="mc-subhead">章节识别别名</h4>
+                <div id="stdConfigAliases" class="alias-list"></div>
+              </section>
+              <section>
+                <h4 class="mc-subhead">解析字段与导出</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>字段</th><th>必填</th><th>Excel 导出</th></tr></thead>
+                    <tbody id="stdConfigFields"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
+                  </table>
+                </div>
+              </section>
+            </div>
+          </div>
+        </details>
         <div class="std-layout">
           <aside class="card std-side">
             <div class="card-head">
@@ -273,6 +308,43 @@
           </div>
           <div class="page-actions"><span class="pill info"><svg class="icon" aria-hidden="true"><use href="#i-calc"/></svg>金额闭环</span></div>
         </div>
+        <details class="card advanced module-config" id="quoteConfigCard">
+          <summary>
+            <span class="mc-icon"><svg class="icon" aria-hidden="true"><use href="#i-calc"/></svg></span>
+            <span class="mc-title"><b>报价规则字段</b><small id="quoteConfigInline">正在加载管理端配置…</small></span>
+            <span class="pill neutral" id="quoteConfigRev">—</span>
+            <span class="chev"><svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg></span>
+          </summary>
+          <div class="advanced-body">
+            <div class="config-source-line">
+              <span id="quoteConfigMeta">—</span>
+              <button type="button" class="link-btn js-open-admin-config hidden">管理端配置 →</button>
+            </div>
+            <div class="config-facts" id="quoteConfigFacts"></div>
+            <div class="module-config-grid">
+              <div>
+                <h4 class="mc-subhead">表头识别别名</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>列</th><th>可用表头</th></tr></thead>
+                    <tbody id="quoteConfigHeaders"><tr><td colspan="2" class="muted">加载中…</td></tr></tbody>
+                  </table>
+                </div>
+                <h4 class="mc-subhead mt-16">单位映射</h4>
+                <div id="quoteConfigUnits" class="alias-list"></div>
+              </div>
+              <div>
+                <h4 class="mc-subhead">CRM 报价草稿列</h4>
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>数据来源</th><th>列名</th><th>启用</th></tr></thead>
+                    <tbody id="quoteConfigColumns"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
         <div id="quoteRoleNotice" class="banner warn hidden"></div>
         <div class="quote-layout">
           <section class="card card-pad" id="quoteUploadCard">
@@ -313,7 +385,7 @@
               <li>支持 Excel、PDF、图片；图片和扫描件走服务器本地 OCR，不外发。</li>
               <li>单价、数量、单位只从报价文件读取，不由模型生成价格。</li>
               <li>没有单价的询价表会标「待补单价」，只生成 CRM 草稿，不生成含金额的销售报价表。</li>
-              <li>折扣由销售政策参数控制，默认 60%，不做自动推断。</li>
+              <li id="quotePolicyLine">折扣与税率由管理端规则配置维护；当前默认折扣 60%、产品税 16%、服务税 6%，不做自动推断。</li>
               <li>生成后重新打开 Excel，逐项断言金额与算术关系。</li>
             </ul>
             <div class="notice-box mt-16">自检不通过会直接报错，不会产出金额不一致的报价表。</div>
