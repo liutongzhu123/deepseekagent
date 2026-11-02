@@ -1,0 +1,1328 @@
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+const params = new URLSearchParams(location.search);
+
+const ROLE_NAMES = { admin: '管理员', reviewer: '复核人', sales: '销售', viewer: '只读' };
+const ROLE_DESCRIPTIONS = {
+  admin: '全部权限 · 用户与审计',
+  reviewer: '报告审核 · 标准复核 / 发布',
+  sales: '报价 · 知识问答',
+  viewer: '只读查询 · 知识问答',
+};
+const FIELD_NAMES = { name: '实检项目', requirement: '技术要求', method: '试验方法' };
+const TEMPLATE_NAMES = { 'BYD-odor': '比亚迪气味报告模板', generic: '通用报告模板' };
+const PERMISSIONS = {
+  'report:audit': ['admin', 'reviewer'],
+  'standard:parse': ['admin', 'reviewer'],
+  'standard:review': ['admin', 'reviewer'],
+  'standard:publish': ['admin', 'reviewer'],
+  'quote:generate': ['admin', 'sales'],
+  'user:manage': ['admin'],
+  'audit:read': ['admin'],
+};
+
+const EVENT_LABELS = {
+  login_success: '登录成功',
+  login_failed: '登录失败',
+  login_locked: '账号锁定',
+  login_throttled: '登录限流',
+  logout: '退出登录',
+  user_created: '创建用户',
+  user_updated: '更新用户',
+  user_password_reset: '重置密码',
+  password_changed: '修改密码',
+  report_audited: '报告审核',
+  report_audited_markdown: '导出审核报告',
+  records_validated: '记录校验',
+  standard_parsed: '解析标准',
+  standard_reviewed: '复核标准',
+  standard_published: '发布标准',
+  standard_exported: '导出标准',
+  standard_project_assigned: '标准项目授权',
+  standard_asked: '知识问答',
+  quote_generated: '生成报价',
+  quote_downloaded: '下载报价',
+  audit_exported: '导出审计',
+  kb_rebuilt: '重建索引',
+};
+
+const EVENT_OPTIONS = [
+  ['login_success', '登录成功'],
+  ['login_failed', '登录失败'],
+  ['login_locked', '账号锁定'],
+  ['login_throttled', '登录限流'],
+  ['logout', '退出登录'],
+  ['user_created', '创建用户'],
+  ['user_updated', '更新用户'],
+  ['user_password_reset', '重置密码'],
+  ['password_changed', '修改密码'],
+  ['report_audited', '报告审核'],
+  ['records_validated', '记录校验'],
+  ['standard_reviewed', '复核标准'],
+  ['standard_published', '发布标准'],
+  ['standard_exported', '导出标准'],
+  ['standard_asked', '知识问答'],
+  ['quote_generated', '生成报价'],
+  ['quote_downloaded', '下载报价'],
+  ['audit_exported', '导出审计'],
+];
+
+const state = {
+  me: null,
+  users: [],
+  standards: [],
+  current: null,
+  selectedIndex: -1,
+  adminView: 'users',
+  userRoleFilter: null,
+  projectUser: null,
+  resetUser: null,
+  kbHealth: null,
+  audit: { events: [], total: 0, limit: 50, offset: 0, all: [] },
+};
+
+const SAMPLE_RECORDS = `{
+  "records": [
+    {"task_no":"YF25HNE8","report_no":"QA25NY1WHNE81","sample_no":"TS25HNE8B-03","limit":3.5,"scores":[3.5,4.0,4.0],"reported_mean":3.8,"test_date":"2026-01-08","eval_date":"2026-01-08","judgment":"不符合"},
+    {"task_no":"YF25HNE8","report_no":"QA25NY2WHNE81","sample_no":"TS25HNE8B-04","limit":3.5,"scores":[3.5,3.5,4.0],"reported_mean":3.7,"test_date":"2026-01-08","eval_date":"2026-01-08","judgment":"不符合"}
+  ]
+}`;
+
+/* ---------------------------------------------------------------- utilities */
+const HTML_ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function escapeHtml(value) {
+  return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, (ch) => HTML_ESCAPES[ch]);
+}
+function ic(name, cls = '') {
+  return `<svg class="icon ${cls}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+}
+function money(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function fileSize(size) {
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  if (size >= 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${Math.max(1, Math.round(size))} B`;
+}
+function initials(name) {
+  const text = String(name || '').trim();
+  if (!text) return '··';
+  return text.length <= 2 ? text : text.slice(0, 2);
+}
+function formatTime(value, withSeconds = false) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const pad = (n) => String(n).padStart(2, '0');
+  const base = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return withSeconds ? `${base}:${pad(date.getSeconds())}` : base;
+}
+function kpi(value, label, tone = 'neutral', icon = 'activity', sub = '') {
+  return `<div class="kpi tone-${tone}"><div class="kpi-icon">${ic(icon)}</div><div><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span>${sub ? `<div class="kpi-sub">${escapeHtml(sub)}</div>` : ''}</div></div>`;
+}
+function busy(button, on, label = '处理中…') {
+  if (!button) return;
+  if (on) {
+    if (!button.dataset.originalHtml) button.dataset.originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = `<span class="spinner"></span>${escapeHtml(label)}`;
+  } else {
+    button.disabled = false;
+    if (button.dataset.originalHtml) {
+      button.innerHTML = button.dataset.originalHtml;
+      delete button.dataset.originalHtml;
+    }
+  }
+}
+function toast(message, type = 'success') {
+  const stack = $('toastStack');
+  const element = document.createElement('div');
+  element.className = `toast ${type}`;
+  const icon = type === 'error' ? 'alert' : type === 'info' ? 'activity' : 'check';
+  element.innerHTML = `${ic(icon)}<span>${escapeHtml(message)}</span>`;
+  stack.appendChild(element);
+  setTimeout(() => {
+    element.style.transition = 'opacity .2s ease, transform .2s ease';
+    element.style.opacity = '0';
+    element.style.transform = 'translateY(6px)';
+    setTimeout(() => element.remove(), 220);
+  }, 4200);
+}
+function showError(error) {
+  if (String(error && error.message).includes('登录状态已失效')) return;
+  toast((error && error.message) || String(error), 'error');
+}
+async function jsonFetch(url, options) {
+  const response = await fetch(url, options);
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = { detail: String(error) };
+  }
+  if (response.status === 401) {
+    window.location.replace('login');
+    throw new Error('登录状态已失效');
+  }
+  if (!response.ok) {
+    let detail = data && data.detail;
+    if (Array.isArray(detail)) detail = detail.map((item) => item.msg || JSON.stringify(item)).join('；');
+    throw new Error(detail || `请求失败（${response.status}）`);
+  }
+  return data;
+}
+function can(action) {
+  return Boolean(state.me && (PERMISSIONS[action] || []).includes(state.me.role));
+}
+function applyRoleUi() {
+  const canAudit = can('report:audit');
+  const canParse = can('standard:parse');
+  const canReview = can('standard:review');
+  const canPublish = can('standard:publish');
+  const canQuote = can('quote:generate');
+  $('reportUploadCard').classList.toggle('hidden', !canAudit);
+  $('reportResultCard').classList.toggle('hidden', !canAudit);
+  $('recordsCard').classList.toggle('hidden', !canAudit);
+  $('reportRoleNotice').classList.toggle('hidden', canAudit);
+  if (!canAudit) {
+    $('reportRoleNotice').innerHTML = `${ic('lock')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，只能查看规则说明；报告审核需要复核人或管理员权限。</span>`;
+  }
+  $('stdUploadBlock').classList.toggle('hidden', !canParse);
+  $('stdRoleNotice').classList.toggle('hidden', canParse);
+  if (!canParse) {
+    $('stdRoleNotice').innerHTML = `${ic('eye')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，可查看与导出标准；解析、复核和发布需要复核人或管理员权限。</span>`;
+  }
+  $('publishBtn').classList.toggle('hidden', !canPublish);
+  $('saveBtn').classList.toggle('hidden', !canReview);
+  ['editName', 'editReq', 'editMethod'].forEach((id) => { $(id).disabled = !canReview; });
+  $('quoteUploadCard').classList.toggle('hidden', !canQuote);
+  $('quoteResultCard').classList.toggle('hidden', !canQuote);
+  $('quoteRoleNotice').classList.toggle('hidden', canQuote);
+  if (!canQuote) {
+    $('quoteRoleNotice').innerHTML = `${ic('lock')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，没有报价权限；报价需要销售或管理员权限。</span>`;
+  }
+}
+
+/* ---------------------------------------------------------------- modal */
+function openModal(id) {
+  const dialog = $(id);
+  if (dialog && !dialog.open) dialog.showModal();
+}
+function closeModal(id) {
+  const dialog = $(id);
+  if (dialog && dialog.open) dialog.close();
+}
+let confirmResolver = null;
+function settleConfirm(value) {
+  const resolver = confirmResolver;
+  if (!resolver) return;
+  confirmResolver = null;
+  const dialog = $('modalConfirm');
+  if (dialog.open) dialog.close();
+  resolver(value);
+}
+function confirmDialog({ title, message, confirmText = '确认', tone = 'primary' }) {
+  return new Promise((resolve) => {
+    confirmResolver = resolve;
+    $('confirmTitle').textContent = title;
+    $('confirmMessage').textContent = message;
+    const ok = $('confirmOk');
+    ok.textContent = confirmText;
+    ok.className = `btn ${tone === 'danger' ? 'btn-danger' : 'btn-primary'}`;
+    openModal('modalConfirm');
+  });
+}
+
+/* ---------------------------------------------------------------- dropzone */
+function setupDropzone(dzId, inputId, meta) {
+  const dz = $(dzId);
+  const input = $(inputId);
+  if (!dz || !input) return;
+  const title = dz.querySelector('.dz-title');
+  const sub = dz.querySelector('.dz-sub');
+  const update = () => {
+    const file = input.files && input.files[0];
+    dz.classList.toggle('has-file', Boolean(file));
+    if (file) {
+      title.textContent = file.name;
+      sub.textContent = `${fileSize(file.size)} · 已选择，点击可重新选择`;
+    } else {
+      title.textContent = meta.title;
+      sub.textContent = meta.sub;
+    }
+  };
+  dz.addEventListener('click', (event) => {
+    if (event.target === input) return;
+    input.click();
+  });
+  input.addEventListener('change', update);
+  ['dragenter', 'dragover'].forEach((type) => dz.addEventListener(type, (event) => {
+    event.preventDefault();
+    dz.classList.add('dragover');
+  }));
+  ['dragleave', 'dragend'].forEach((type) => dz.addEventListener(type, () => dz.classList.remove('dragover')));
+  dz.addEventListener('drop', (event) => {
+    event.preventDefault();
+    dz.classList.remove('dragover');
+    const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+    if (!file) return;
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change'));
+  });
+}
+
+/* ---------------------------------------------------------------- shell */
+const TAB_META = {
+  report: { title: '报告审核' },
+  standards: { title: '标准解析' },
+  quote: { title: '报价助手' },
+  knowledge: { title: '知识问答' },
+  admin: { title: '权限与审计' },
+};
+function closeSidebar() {
+  $('sidebar').classList.remove('open');
+  $('navBackdrop').classList.remove('show');
+}
+function setSignedInUser(user) {
+  const name = user.display_name || user.username;
+  const role = ROLE_NAMES[user.role] || user.role;
+  const department = user.department ? ` · ${escapeHtml(user.department)}` : '';
+  $('userBox').innerHTML = `
+    <span class="avatar">${escapeHtml(initials(name))}</span>
+    <div class="user-meta"><b>${escapeHtml(name)}</b><span>${escapeHtml(role)}${department}</span></div>
+    <button class="logout-btn" id="logoutBtn" title="退出登录" aria-label="退出登录">${ic('logout')}</button>`;
+  $('logoutBtn').addEventListener('click', async () => {
+    try { await jsonFetch('api/v1/auth/logout', { method: 'POST' }); } catch (error) { /* already signed out */ }
+    window.location.replace('login');
+  });
+}
+async function loadMe() {
+  try {
+    const data = await jsonFetch('api/v1/auth/me');
+    state.me = data.user;
+    setSignedInUser(state.me);
+    applyRoleUi();
+    $('adminNavSection').classList.toggle('hidden', state.me.role !== 'admin');
+    return true;
+  } catch (error) {
+    $('userBox').innerHTML = `<span class="avatar">!</span><div class="user-meta"><b>未登录</b><span>请重新登录</span></div>`;
+    return false;
+  }
+}
+function switchTab(name) {
+  if (!TAB_META[name]) name = 'report';
+  if (name === 'admin' && (!state.me || state.me.role !== 'admin')) name = 'report';
+  $$('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.tab === name));
+  $$('.panel').forEach((panel) => panel.classList.toggle('hidden', panel.id !== `panel-${name}`));
+  $('crumbCurrent').textContent = TAB_META[name].title;
+  closeSidebar();
+  if (name === 'knowledge') {
+    loadKbHealth();
+    loadKbStandards();
+  }
+  if (name === 'admin') loadAdmin().catch(showError);
+  const nextParams = new URLSearchParams(location.search);
+  nextParams.set('tab', name);
+  history.replaceState(null, '', `${location.pathname}?${nextParams.toString()}`);
+}
+
+/* ---------------------------------------------------------------- report */
+async function loadRules() {
+  try {
+    const data = await jsonFetch('api/v1/rules');
+    const rules = data.rules || [];
+    $('ruleCount').textContent = rules.length;
+    $('ruleHeadPill').innerHTML = `${ic('shield')}${rules.length} 条确定性规则`;
+    $('reportRules').innerHTML = rules.map((rule) => `
+      <div class="rule-item">
+        <span class="finding-rule">${escapeHtml(rule.id)}</span>
+        <div><b>${escapeHtml(rule.title)}</b><span class="desc">${escapeHtml(rule.description)}</span></div>
+      </div>`).join('') || '<div class="muted">暂无规则</div>';
+  } catch (error) {
+    $('reportRules').innerHTML = `<div class="muted">规则加载失败：${escapeHtml(error.message)}</div>`;
+  }
+}
+function findingStatus(status) {
+  if (status === 'fail') return { tone: 'danger', text: '失败' };
+  if (status === 'warn') return { tone: 'warn', text: '提示' };
+  if (status === 'pass') return { tone: 'success', text: '通过' };
+  return { tone: 'neutral', text: '未检查' };
+}
+function renderFinding(finding) {
+  const status = findingStatus(finding.status);
+  return `<div class="finding ${escapeHtml(finding.status || 'skip')}">
+    <span class="finding-rule">${escapeHtml(finding.rule_id || '—')}</span>
+    <div class="finding-body">
+      <div class="finding-title"><b>${escapeHtml(finding.title || '')}</b><span class="pill ${status.tone}">${status.text}</span></div>
+      <p class="finding-msg">${escapeHtml(finding.message || '')}</p>
+      ${finding.evidence ? `<div class="finding-evidence"><b>证据：</b>${escapeHtml(finding.evidence)}</div>` : ''}
+      ${finding.suggestion ? `<div class="finding-suggestion"><b>建议：</b>${escapeHtml(finding.suggestion)}</div>` : ''}
+    </div>
+  </div>`;
+}
+function renderReport(data) {
+  const summary = data.summary || {};
+  const findings = data.findings || [];
+  const groups = [
+    { key: 'fail', label: '需要处理' },
+    { key: 'warn', label: '建议确认' },
+    { key: 'pass', label: '已通过' },
+    { key: 'skip', label: '未检查' },
+  ];
+  const pills = groups
+    .filter((group) => summary[group.key])
+    .map((group) => `<span class="pill ${findingStatus(group.key).tone}">${findingStatus(group.key).text} ${summary[group.key]}</span>`)
+    .join('');
+  const findingGroups = groups.map((group) => {
+    const items = findings.filter((finding) => finding.status === group.key);
+    if (!items.length) return '';
+    return `<div class="finding-group">
+      <div class="group-head"><span>${group.label}</span><span class="count">${items.length}</span></div>
+      <div class="finding-list">${items.map(renderFinding).join('')}</div>
+    </div>`;
+  }).join('');
+  $('reportResult').innerHTML = `
+    <div class="summary-band">
+      <span class="file-badge">${ic('file')}</span>
+      <div><span class="file-name">${escapeHtml(data.file || '已上传报告')}</span><span class="file-sub">${escapeHtml(TEMPLATE_NAMES[data.template] || data.template || '报告模板')} · 共 ${escapeHtml(summary.total ?? findings.length)} 条规则</span></div>
+      <div class="summary-pills">${pills}</div>
+    </div>
+    <div class="kpi-grid">
+      ${kpi(summary.pass ?? 0, '通过', 'success', 'check')}
+      ${kpi(summary.warn ?? 0, '提示', 'warn', 'alert')}
+      ${kpi(summary.fail ?? 0, '失败', 'danger', 'x')}
+      ${kpi(summary.skip ?? 0, '未检查', 'neutral', 'clock')}
+    </div>
+    ${findingGroups}
+    <details class="raw-details"><summary>查看原始 JSON</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
+  $('reportEmpty').classList.add('hidden');
+  $('reportResult').classList.remove('hidden');
+}
+function renderRecords(data) {
+  const findings = data.findings || [];
+  const summary = data.summary || {};
+  if (!findings.length) {
+    $('recordsResult').innerHTML = `<div class="banner info">${ic('check')}<span>${escapeHtml(summary.total ?? 0)} 条记录全部通过均值、日期、判定与编号唯一性检查。</span></div>`;
+    return;
+  }
+  $('recordsResult').innerHTML = `
+    <div class="records-summary"><span class="pill danger">${escapeHtml(summary.fail ?? findings.length)} 项问题</span><span class="pill neutral">${escapeHtml(summary.total ?? 0)} 条记录</span></div>
+    <div class="finding-list">${findings.map(renderFinding).join('')}</div>`;
+}
+
+/* ---------------------------------------------------------------- standards */
+function renderStdList() {
+  const query = ($('stdSearch').value || '').trim().toLowerCase();
+  const items = state.standards.filter((standard) => {
+    const haystack = `${standard.standard_no || ''} ${standard.name || ''} ${standard.project || ''}`.toLowerCase();
+    return !query || haystack.includes(query);
+  });
+  if (!items.length) {
+    $('stdList').innerHTML = `<div class="muted pad-8">${state.standards.length ? '没有匹配的标准' : '还没有已解析标准'}</div>`;
+    return;
+  }
+  $('stdList').innerHTML = items.map((standard) => {
+    const active = state.current && state.current.id === standard.id ? 'active' : '';
+    const published = standard.published ? '<span class="pill success">已发布</span>' : '<span class="pill neutral">未发布</span>';
+    return `<button type="button" class="std-item ${active}" data-std-id="${escapeHtml(standard.id)}">
+      <div class="std-item-top"><span class="std-no">${escapeHtml(standard.standard_no || '未识别标准号')}</span>${published}</div>
+      <span class="std-name" title="${escapeHtml(standard.name || '')}">${escapeHtml(standard.name || '未命名标准')}</span>
+      <div class="std-meta"><span>${escapeHtml(standard.items ?? 0)} 项</span><span>${escapeHtml(standard.pages ?? 0)} 页</span>${standard.project ? `<span>项目 ${escapeHtml(standard.project)}</span>` : ''}</div>
+    </button>`;
+  }).join('');
+}
+async function loadStandards(preferredId) {
+  const data = await jsonFetch('api/v1/standards');
+  state.standards = data.standards || [];
+  $('stdCount').textContent = state.standards.length;
+  $('stdHeadPill').textContent = `${state.standards.length} 份标准`;
+  renderStdList();
+  if (!state.standards.length) {
+    state.current = null;
+    $('stdEmpty').classList.remove('hidden');
+    $('stdDetail').classList.add('hidden');
+    return;
+  }
+  const wanted = preferredId || (state.current && state.current.id) || params.get('std');
+  const exists = state.standards.some((standard) => standard.id === wanted);
+  await loadStandard(exists ? wanted : state.standards[0].id);
+}
+async function loadStandard(id, keepClause) {
+  if (!id) return;
+  const data = await jsonFetch(`api/v1/standards/${encodeURIComponent(id)}`);
+  state.current = data;
+  state.selectedIndex = keepClause ? (data.items || []).findIndex((item) => item.clause === keepClause) : -1;
+  renderStdDetail();
+  renderStdList();
+}
+function renderReviewHistory(clause) {
+  const entries = (state.current.review_history || []).filter((entry) => entry.clause === clause).slice(-3).reverse();
+  if (!entries.length) {
+    $('reviewHistory').innerHTML = '';
+    return;
+  }
+  $('reviewHistory').innerHTML = `<h4>最近复核</h4>${entries.map((entry) => `
+    <div class="history-item"><b>${escapeHtml(FIELD_NAMES[entry.field] || entry.field || '字段')}</b> · ${escapeHtml(entry.reviewer || '')} · ${escapeHtml(formatTime(entry.at))}<br>${escapeHtml(String(entry.after || '').slice(0, 90))}</div>`).join('')}`;
+}
+function selectItem(index) {
+  if (!state.current || !state.current.items || !state.current.items[index]) return;
+  state.selectedIndex = index;
+  const item = state.current.items[index];
+  $$('#itemsBody tr[data-i]').forEach((row) => row.classList.toggle('selected', Number(row.dataset.i) === index));
+  $('editor').classList.add('hidden');
+  $('editorFields').classList.remove('hidden');
+  $('editorClause').textContent = `条款 ${item.clause || ''}`;
+  $('editorTitle').textContent = item.name || '未命名条目';
+  $('editName').value = item.name || '';
+  $('editReq').value = item.requirement || '';
+  $('editMethod').value = item.method || '';
+  $('saveStatus').textContent = '';
+  const references = (item.references || []).map((reference) => `${reference.ref || ''} → 现行 ${reference.current || ''}`).join('；');
+  $('refs').textContent = references ? `原文引用国标：${references}` : '';
+  renderReviewHistory(item.clause);
+  if (window.innerWidth < 1024) $('editorFields').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function renderStdDetail() {
+  const current = state.current;
+  if (!current) return;
+  $('stdEmpty').classList.add('hidden');
+  $('stdDetail').classList.remove('hidden');
+  const meta = current.meta || {};
+  const summary = current.summary || {};
+  $('stdNo').textContent = meta.standard_no || 'STANDARD';
+  $('stdName').textContent = meta.name || '未命名标准';
+  $('stdMeta').innerHTML = [
+    meta.pages ? `${meta.pages} 页` : '',
+    summary.parse_ms ? `解析 ${summary.parse_ms} ms` : '',
+    `修订 v${current.revision ?? 0}`,
+    meta.project ? `项目 ${meta.project}` : '不限定项目',
+    current.updated_at ? `更新 ${formatTime(current.updated_at).slice(0, 10)}` : '',
+  ].filter(Boolean).map((text) => `<span>${escapeHtml(text)}</span>`).join('');
+  const badges = [];
+  badges.push(current.published ? '<span class="pill success">已发布</span>' : '<span class="pill warn">未发布</span>');
+  if (current.weknora && current.weknora.knowledge_id) badges.push(`<span class="pill info">${ic('check')}WeKnora 已同步</span>`);
+  if (meta.project) badges.push(`<span class="pill neutral">${ic('folder')}项目 ${escapeHtml(meta.project)}</span>`);
+  if (meta.confidential) badges.push(`<span class="pill warn">${ic('lock')}受限标准</span>`);
+  $('stdBadges').innerHTML = badges.join('');
+  $('stdStats').innerHTML = [
+    kpi(summary.items ?? 0, '实检项目', 'info', 'layers'),
+    kpi(summary.clauses_traced ?? 0, '条款可溯源', 'info', 'activity'),
+    kpi(summary.reviewed_items ?? 0, '已复核', 'success', 'check'),
+    kpi(summary.pages ?? meta.pages ?? 0, '标准页数', 'neutral', 'file'),
+  ].join('');
+  const reviewed = summary.reviewed_items || 0;
+  const total = summary.items || 0;
+  const percent = total ? Math.round((reviewed / total) * 100) : 0;
+  $('reviewProgress').innerHTML = `<span class="progress-label">复核进度</span><div class="progress"><i style="width:${percent}%"></i></div><span class="progress-label">${reviewed} / ${total}（${percent}%）</span>`;
+  const warnings = current.warnings || [];
+  $('stdWarnings').innerHTML = warnings.length
+    ? `<div class="banner warn">${ic('alert')}<div><b>解析提示</b><div>${warnings.map(escapeHtml).join('<br>')}</div></div></div>`
+    : '';
+  const items = current.items || [];
+  $('itemsBody').innerHTML = items.map((item, index) => {
+    const selected = index === state.selectedIndex ? 'selected' : '';
+    return `<tr data-i="${index}" class="${selected}">
+      <td class="muted">${escapeHtml(item.seq ?? index + 1)}</td>
+      <td><span class="pill neutral">${escapeHtml(item.clause || '—')}</span></td>
+      <td><span class="cell-main">${escapeHtml(item.name || '—')}</span><span class="cell-sub">方法 ${escapeHtml(item.method_clause || '—')}</span></td>
+      <td>${escapeHtml(item.method_clause || '—')}</td>
+      <td>${escapeHtml(item.page ?? '—')}</td>
+      <td>${item.reviewed ? '<span class="pill success">已复核</span>' : '<span class="pill info">待复核</span>'}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="muted">没有抽取到项目</td></tr>';
+  $('exportBtn').disabled = !items.length;
+  $('publishBtn').disabled = !items.length || Boolean(current.published);
+  $('publishBtn').innerHTML = current.published ? `${ic('check')}已发布` : `${ic('upload')}发布到知识库`;
+  if (state.selectedIndex >= 0 && items[state.selectedIndex]) {
+    selectItem(state.selectedIndex);
+  } else {
+    $('editorFields').classList.add('hidden');
+    $('editor').classList.remove('hidden');
+  }
+}
+
+/* ---------------------------------------------------------------- quote */
+function renderQuote(data) {
+  const summary = data.summary || {};
+  const preview = data.preview || {};
+  const verification = data.sales_quote_verification;
+  const badge = verification
+    ? (verification.ok ? '<span class="pill success">金额自检通过</span>' : '<span class="pill danger">金额自检失败</span>')
+    : '<span class="pill warn">未提供模板，仅生成 CRM 草稿</span>';
+  const verifyPills = verification && verification.checks
+    ? `<div class="verify-list">${verification.checks.map((check) => `<span class="pill ${check.ok ? 'success' : 'danger'}">${escapeHtml(check.cell)} ${escapeHtml(check.field)}</span>`).join('')}</div>`
+    : '';
+  $('quoteResult').innerHTML = `
+    <div class="quote-hero">
+      <div class="quote-price"><span>最终价格（含税）</span><b>¥ ${money(summary.final_price)}</b><small>销售报价 ${money(summary.sales_amount)} 元 · 服务税额 ${money(summary.service_tax)} 元</small></div>
+      <div class="quote-badges">${badge}<span class="pill info">${escapeHtml(summary.sample_name || '已生成报价')}</span></div>
+    </div>
+    <div class="kpi-grid five">
+      ${kpi(summary.lines ?? 0, '明细行', 'neutral', 'file')}
+      ${kpi(`¥ ${money(summary.subtotal)}`, 'DVP 小计', 'neutral', 'calc')}
+      ${kpi(`¥ ${money(summary.service_amount)}`, '服务金额', 'neutral', 'shield')}
+      ${kpi(`¥ ${money(summary.total_with_tax)}`, '税价合计', 'neutral', 'chart')}
+      ${kpi(`¥ ${money(summary.product_amount)}`, '产品金额', 'neutral', 'layers')}
+    </div>
+    <div class="quote-actions">
+      <button type="button" class="btn btn-primary" data-download="${escapeHtml(data.quote_id)}" data-kind="crm">${ic('download')}下载 CRM 报价草稿</button>
+      ${data.files && data.files.sales_quote ? `<button type="button" class="btn btn-secondary" data-download="${escapeHtml(data.quote_id)}" data-kind="sales">${ic('download')}下载销售报价表</button>` : ''}
+    </div>
+    <div class="breakdown">${Object.entries(preview).map(([label, value]) => `<div class="breakdown-row"><span>${escapeHtml(label)}</span><b>${typeof value === 'number' ? money(value) : escapeHtml(value)}</b></div>`).join('')}</div>
+    ${verifyPills}
+    <details class="raw-details"><summary>查看接口原始数据</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
+  $('quoteEmpty').classList.add('hidden');
+  $('quoteResult').classList.remove('hidden');
+}
+
+/* ---------------------------------------------------------------- knowledge */
+function renderKbHealth(weknora) {
+  const configured = Boolean(weknora && weknora.configured);
+  const required = Boolean(weknora && weknora.required);
+  const status = $('kbStatus');
+  if (configured) {
+    status.className = 'pill success';
+    status.innerHTML = `${ic('check')}WeKnora 已配置`;
+    $('kbHealth').innerHTML = `
+      <div class="health-title"><span class="dot"></span>WeKnora 混合检索</div>
+      <p>知识库 <code>${escapeHtml(weknora.kb_id || '已配置')}</code>；业务问答强制走唯一知识底座。</p>
+      <p class="health-foot">发布标准后会自动同步到该知识库。</p>`;
+  } else if (required) {
+    status.className = 'pill danger';
+    status.innerHTML = `${ic('alert')}WeKnora 未配置`;
+    $('kbHealth').innerHTML = `
+      <div class="health-title"><span class="dot" style="background:#f04438;box-shadow:0 0 0 3px rgba(240,68,56,.14)"></span>知识底座不可用</div>
+      <p>生产配置要求 WeKnora 为唯一知识底座，当前未连接，发布与问答会拒绝请求。</p>
+      <p class="health-foot">请配置 P0_WEKNORA_BASE_URL / API_KEY / KB_ID。</p>`;
+  } else {
+    status.className = 'pill warn';
+    status.innerHTML = `${ic('alert')}本地演示检索`;
+    $('kbHealth').innerHTML = `
+      <div class="health-title"><span class="dot" style="background:#f79009;box-shadow:0 0 0 3px rgba(247,144,9,.14)"></span>本地关键词回退</div>
+      <p>WeKnora 未连接，当前使用本地关键词检索演示完整链路；发布只写本地审计副本。</p>
+      <p class="health-foot">生产环境应配置 WeKnora 后再演示发布与检索。</p>`;
+  }
+}
+async function loadKbHealth() {
+  try {
+    const data = await jsonFetch('api/v1/system/status');
+    state.kbHealth = data.weknora || {};
+    renderKbHealth(state.kbHealth);
+  } catch (error) {
+    $('kbStatus').className = 'pill danger';
+    $('kbStatus').innerHTML = `${ic('alert')}状态未知`;
+    $('kbHealth').innerHTML = `<div class="banner danger">${ic('alert')}<span>无法读取系统状态：${escapeHtml(error.message)}</span></div>`;
+  }
+}
+async function loadKbStandards() {
+  try {
+    const data = await jsonFetch('api/v1/standards');
+    const published = (data.standards || []).filter((standard) => standard.published);
+    const select = $('kbStdSelect');
+    const current = select.value;
+    select.innerHTML = '<option value="">全部已发布标准</option>' + published.map((standard) => {
+      const label = `${standard.standard_no || standard.name} · ${standard.items} 项`;
+      return `<option value="${escapeHtml(standard.id)}">${escapeHtml(label)}</option>`;
+    }).join('');
+    if (Array.from(select.options).some((option) => option.value === current)) select.value = current;
+  } catch (error) {
+    showError(error);
+  }
+}
+function renderAnswer(data) {
+  const found = data.found !== false;
+  $('answerBox').classList.remove('loading');
+  $('answerBox').classList.toggle('refusal', !found);
+  $('answerBox').textContent = data.answer || '未找到可核实依据。';
+  $('copyAnswerBtn').classList.toggle('hidden', !found);
+  $('citations').innerHTML = (data.citations || []).map((citation, index) => `
+    <div class="citation">
+      <span class="citation-no">${index + 1}</span>
+      <div class="citation-body">
+        <div class="citation-head"><b>${escapeHtml(citation.standard_no || citation.standard_name || '')}</b><span>条款 ${escapeHtml(citation.clause || '—')}</span><span>第 ${escapeHtml(citation.page ?? '—')} 页</span><span class="pill neutral">${escapeHtml(citation.kind_label || '知识片段')}</span></div>
+        <div class="citation-quote">${escapeHtml(citation.quote || '')}</div>
+      </div>
+    </div>`).join('');
+  const retrieval = data.retrieval || {};
+  const mode = retrieval.mode || '';
+  const modeLabel = mode === 'weknora' ? 'WeKnora 混合检索' : mode.indexOf('keyword') === 0 ? '本地关键词检索' : mode === 'local-fallback' ? '本地向量回退' : (mode || '检索');
+  const meta = [`<span class="pill info">${escapeHtml(modeLabel)}</span>`];
+  if (retrieval.top_score !== undefined && retrieval.top_score !== null) meta.push(`<span class="pill neutral">相关度 ${escapeHtml(Number(retrieval.top_score).toFixed(3))}</span>`);
+  if (retrieval.kb_id) meta.push(`<span class="pill neutral">知识库 ${escapeHtml(retrieval.kb_id)}</span>`);
+  if (retrieval.fallback_reason) meta.push(`<span class="pill warn">本地回退</span>`);
+  $('retrievalMeta').innerHTML = meta.join('');
+}
+async function askQuestion() {
+  const question = $('question').value.trim();
+  if (!question) {
+    toast('请输入问题后再检索', 'info');
+    return;
+  }
+  busy($('askBtn'), true, '检索中…');
+  $('answerBox').classList.remove('hidden', 'refusal');
+  $('answerBox').classList.add('loading');
+  $('answerBox').textContent = '正在检索已发布标准…';
+  $('citations').innerHTML = '';
+  $('retrievalMeta').innerHTML = '';
+  $('copyAnswerBtn').classList.add('hidden');
+  try {
+    const data = await jsonFetch('api/v1/standards/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, standard_id: $('kbStdSelect').value || null }),
+    });
+    renderAnswer(data);
+  } catch (error) {
+    $('answerBox').classList.remove('loading');
+    $('answerBox').classList.add('refusal');
+    $('answerBox').textContent = `提问失败：${error.message}`;
+    toast('提问失败', 'error');
+  } finally {
+    busy($('askBtn'), false);
+  }
+}
+
+/* ---------------------------------------------------------------- admin */
+function renderUserKpis() {
+  const users = state.users;
+  const active = users.filter((user) => user.active).length;
+  const restricted = users.filter((user) => user.restricted).length;
+  $('userKpis').innerHTML = [
+    kpi(users.length, '账号总数', 'info', 'users'),
+    kpi(active, '启用账号', 'success', 'check'),
+    kpi(restricted, '项目受限', 'warn', 'folder'),
+    kpi(4, '角色数量', 'violet', 'shield'),
+  ].join('');
+}
+function renderRoleCards() {
+  const counts = {};
+  state.users.forEach((user) => { counts[user.role] = (counts[user.role] || 0) + 1; });
+  $('roleCards').innerHTML = ['admin', 'reviewer', 'sales', 'viewer'].map((role) => `
+    <button type="button" class="role-card ${state.userRoleFilter === role ? 'active' : ''}" data-role="${role}">
+      <div class="role-top"><b>${ROLE_NAMES[role]}</b><span class="role-count">${counts[role] || 0}</span></div>
+      <p>${ROLE_DESCRIPTIONS[role]}</p>
+    </button>`).join('');
+}
+function renderUsers() {
+  const query = ($('userSearch').value || '').trim().toLowerCase();
+  const users = state.users.filter((user) => {
+    if (state.userRoleFilter && user.role !== state.userRoleFilter) return false;
+    if (!query) return true;
+    return `${user.username || ''} ${user.display_name || ''} ${user.department || ''}`.toLowerCase().includes(query);
+  });
+  if (!users.length) {
+    $('userBody').innerHTML = '<tr><td colspan="6"><div class="empty compact"><b>没有匹配的账号</b><p>调整搜索词或角色筛选后重试。</p></div></td></tr>';
+    return;
+  }
+  $('userBody').innerHTML = users.map((user) => {
+    const username = escapeHtml(user.username || '');
+    const name = user.display_name || user.username || '未命名';
+    const options = ['admin', 'reviewer', 'sales', 'viewer'].map((role) => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${ROLE_NAMES[role]}</option>`).join('');
+    const projects = (user.projects || []).map((project) => `<span class="chip">${project === '*' ? '全部项目' : escapeHtml(project)}</span>`).join('') || '<span class="muted">不限制</span>';
+    const status = user.active ? '<span class="pill success">启用</span>' : '<span class="pill neutral">停用</span>';
+    return `<tr>
+      <td><div class="user-cell"><span class="avatar">${escapeHtml(initials(name))}</span><div><span class="u-name">${escapeHtml(name)}</span><span class="u-login">@${username}${user.restricted ? ' · 项目受限' : ''}</span></div></div></td>
+      <td><select class="role-select" data-role-user="${username}">${options}</select></td>
+      <td>${escapeHtml(user.department || '—')}</td>
+      <td>${projects}</td>
+      <td>${status}${user.locked ? '<span class="pill danger">锁定</span>' : ''}</td>
+      <td class="actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-act="projects" data-user="${username}" data-projects="${escapeHtml((user.projects || []).join(','))}">${ic('folder')}项目</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-act="reset" data-user="${username}">${ic('key')}重置</button>
+        <button type="button" class="btn ${user.active ? 'btn-danger' : 'btn-secondary'} btn-sm" data-act="toggle" data-user="${username}" data-active="${user.active ? '1' : '0'}">${user.active ? '停用' : '启用'}</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+function populateAuditUsers() {
+  const select = $('auUser');
+  const current = select.value;
+  select.innerHTML = '<option value="">全部用户</option>' + state.users.map((user) => `<option value="${escapeHtml(user.username)}">${escapeHtml(user.display_name || user.username)}（${escapeHtml(user.username)}）</option>`).join('');
+  if (Array.from(select.options).some((option) => option.value === current)) select.value = current;
+}
+async function loadAdmin() {
+  const data = await jsonFetch('api/v1/auth/users');
+  state.users = data.users || [];
+  populateAuditUsers();
+  renderUserKpis();
+  renderRoleCards();
+  renderUsers();
+  if (state.adminView === 'audit') await loadAudit(false);
+}
+async function patchUser(username, body, successMessage) {
+  try {
+    await jsonFetch(`api/v1/auth/users/${encodeURIComponent(username)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    toast(successMessage);
+    await loadAdmin();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+function openProjectModal(username, projects) {
+  state.projectUser = username;
+  $('projectSub').textContent = `设置 ${username} 可访问的项目；留空表示不限制。`;
+  $('projectInput').value = projects || '';
+  $('projectStatus').textContent = '';
+  const known = Array.from(new Set([
+    ...state.standards.map((standard) => standard.project),
+    ...state.users.flatMap((user) => user.projects || []),
+  ].filter((project) => project && project !== '*'))).slice(0, 8);
+  $('projectPresets').innerHTML = known.map((project) => `<button type="button" data-project="${escapeHtml(project)}">${escapeHtml(project)}</button>`).join('');
+  openModal('modalProject');
+}
+function openResetModal(username) {
+  state.resetUser = username;
+  $('resetSub').textContent = `为 ${username} 生成一次性临时密码。`;
+  $('resetResult').classList.add('hidden');
+  $('resetNotice').classList.remove('hidden');
+  $('resetStatus').textContent = '';
+  $('resetPasswordOut').textContent = '—';
+  $('resetGenerate').disabled = false;
+  $('resetGenerate').innerHTML = `${ic('key')}生成临时密码`;
+  openModal('modalReset');
+}
+function auditFilters() {
+  const filters = {};
+  if ($('auUser').value) filters.user = $('auUser').value;
+  if ($('auEvent').value) filters.event = $('auEvent').value;
+  if ($('auStatus').value) filters.status = $('auStatus').value;
+  if ($('auFrom').value) filters.date_from = $('auFrom').value;
+  if ($('auTo').value) filters.date_to = $('auTo').value;
+  return filters;
+}
+function statusMeta(status) {
+  const code = Number(status);
+  if (Number.isFinite(code) && code >= 200 && code < 300) return { tone: 'success', text: `${code} 成功` };
+  if (code === 401) return { tone: 'warn', text: '401 未认证' };
+  if (code === 403) return { tone: 'danger', text: '403 无权限' };
+  if (code === 423) return { tone: 'danger', text: '423 锁定' };
+  if (code === 429) return { tone: 'warn', text: '429 限流' };
+  if (code >= 500) return { tone: 'danger', text: `${code} 服务错误` };
+  if (code >= 400) return { tone: 'warn', text: `${code} 请求异常` };
+  return { tone: 'neutral', text: status === undefined || status === null || status === '' ? '—' : String(status) };
+}
+function auditEventLabel(entry) {
+  if (entry.event && EVENT_LABELS[entry.event]) return EVENT_LABELS[entry.event];
+  if (entry.event) return entry.event;
+  return '接口访问';
+}
+function renderAuditChart(events) {
+  const days = [];
+  const now = new Date();
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    days.push({ key, label: `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`, ok: 0, bad: 0 });
+  }
+  const byKey = new Map(days.map((day) => [day.key, day]));
+  events.forEach((entry) => {
+    const date = new Date(entry.at);
+    if (Number.isNaN(date.getTime())) return;
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    const day = byKey.get(key);
+    if (!day) return;
+    if (Number(entry.status) >= 400) day.bad += 1;
+    else day.ok += 1;
+  });
+  if (!events.length) {
+    $('auditChart').innerHTML = '<div class="empty compact" style="width:100%"><b>暂无审计活动</b><p>调整筛选条件后重试。</p></div>';
+    return;
+  }
+  const max = Math.max(1, ...days.map((day) => day.ok + day.bad));
+  $('auditChart').innerHTML = days.map((day) => {
+    const okHeight = Math.round((day.ok / max) * 120);
+    const badHeight = Math.round((day.bad / max) * 120);
+    return `<div class="chart-col" title="${escapeHtml(day.key)}：成功 ${day.ok} · 异常 ${day.bad}">
+      <div class="chart-stack">${day.bad ? `<div class="chart-bar bad" style="height:${badHeight}px"></div>` : ''}${day.ok ? `<div class="chart-bar" style="height:${okHeight}px"></div>` : ''}</div>
+      <span class="chart-label">${escapeHtml(day.label)}</span>
+    </div>`;
+  }).join('');
+}
+function renderAudit() {
+  const all = state.audit.all;
+  const failures = all.filter((entry) => Number(entry.status) >= 400).length;
+  const users = new Set(all.map((entry) => entry.user).filter(Boolean)).size;
+  const durations = all.map((entry) => Number(entry.ms)).filter(Number.isFinite);
+  const average = durations.length ? (durations.reduce((sum, value) => sum + value, 0) / durations.length).toFixed(1) : '—';
+  $('auditKpis').innerHTML = [
+    kpi(state.audit.total, '事件总数', 'info', 'activity'),
+    kpi(failures, '异常请求', 'danger', 'alert'),
+    kpi(users, '活跃用户', 'violet', 'users'),
+    kpi(average, '平均耗时', 'neutral', 'clock', '毫秒'),
+  ].join('');
+  renderAuditChart(all);
+  const events = state.audit.events;
+  $('auditBody').innerHTML = events.map((entry, index) => {
+    const status = statusMeta(entry.status);
+    const role = ROLE_NAMES[entry.role] || entry.role || '—';
+    return `<tr data-audit-index="${index}">
+      <td class="muted">${escapeHtml(formatTime(entry.at))}</td>
+      <td><span class="audit-user">${escapeHtml(entry.user || '—')}</span></td>
+      <td class="muted">${escapeHtml(role)}</td>
+      <td><span class="cell-main">${escapeHtml(auditEventLabel(entry))}</span><span class="cell-sub ellipsis path-cell">${escapeHtml(entry.action || entry.path || '')}</span></td>
+      <td><span class="pill ${status.tone}">${escapeHtml(status.text)}</span></td>
+      <td class="muted">${entry.ms !== undefined && entry.ms !== null ? `${escapeHtml(entry.ms)} ms` : '—'}</td>
+      <td class="muted">${escapeHtml(entry.ip || '—')}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7"><div class="empty compact"><b>没有匹配的审计记录</b><p>调整筛选条件后重试。</p></div></td></tr>';
+  const total = state.audit.total;
+  const offset = state.audit.offset;
+  const limit = state.audit.limit;
+  const shown = events.length;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  $('auditMeta').textContent = total ? `共 ${total} 条，显示第 ${offset + 1}–${Math.min(offset + shown, total)} 条` : '共 0 条';
+  $('auditPage').textContent = `${Math.floor(offset / limit) + 1} / ${pages}`;
+  $('auditPrev').disabled = offset <= 0;
+  $('auditNext').disabled = offset + limit >= total;
+}
+async function loadAudit(resetPage) {
+  const filters = auditFilters();
+  const limit = Number($('auLimit').value) || 50;
+  if (resetPage) state.audit.offset = 0;
+  const pageQuery = new URLSearchParams(filters);
+  pageQuery.set('limit', String(limit));
+  pageQuery.set('offset', String(state.audit.offset));
+  const chartQuery = new URLSearchParams(filters);
+  chartQuery.set('limit', '500');
+  chartQuery.set('offset', '0');
+  try {
+    const [page, all] = await Promise.all([
+      jsonFetch(`api/v1/audit/events?${pageQuery.toString()}`),
+      jsonFetch(`api/v1/audit/events?${chartQuery.toString()}`),
+    ]);
+    state.audit = {
+      events: page.events || [],
+      total: page.total || 0,
+      limit,
+      offset: page.offset || 0,
+      all: all.events || [],
+    };
+    renderAudit();
+  } catch (error) {
+    showError(error);
+  }
+}
+function openAuditDetail(index) {
+  const entry = state.audit.events[index];
+  if (!entry) return;
+  const rows = [
+    ['时间', formatTime(entry.at, true)],
+    ['用户', entry.user || '—'],
+    ['角色', ROLE_NAMES[entry.role] || entry.role || '—'],
+    ['事件', auditEventLabel(entry)],
+    ['方法', entry.method || '—'],
+    ['路径', entry.path || '—'],
+    ['动作', entry.action || '—'],
+    ['状态', statusMeta(entry.status).text],
+    ['耗时', entry.ms !== undefined && entry.ms !== null ? `${entry.ms} ms` : '—'],
+    ['IP', entry.ip || '—'],
+  ];
+  $('auditDetailBody').innerHTML = `<dl class="audit-detail-grid">${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join('')}</dl>`;
+  $('auditDetailRaw').textContent = JSON.stringify(entry, null, 2);
+  openModal('modalAuditDetail');
+}
+function switchAdminView(view) {
+  state.adminView = view;
+  $$('#adminTabs button').forEach((button) => button.classList.toggle('active', button.dataset.adminView === view));
+  $('adminUsersView').classList.toggle('hidden', view !== 'users');
+  $('adminAuditView').classList.toggle('hidden', view !== 'audit');
+  if (view === 'audit') loadAudit(true);
+}
+
+/* ---------------------------------------------------------------- bind */
+function bindEvents() {
+  $$('.nav-item').forEach((item) => item.addEventListener('click', () => switchTab(item.dataset.tab)));
+  $('navToggle').addEventListener('click', () => {
+    $('sidebar').classList.add('open');
+    $('navBackdrop').classList.add('show');
+  });
+  $('navBackdrop').addEventListener('click', closeSidebar);
+
+  setupDropzone('reportDrop', 'reportFile', { title: '点击选择，或把报告拖到这里', sub: '只看结构、字段与标记，不上传外部服务' });
+  setupDropzone('stdDrop', 'stdFile', { title: '选择标准 PDF', sub: '数字版 / 扫描件均可' });
+  setupDropzone('quoteDrop', 'quoteFile', { title: '选择 DVP / 测试大纲', sub: '.xlsx / .xlsm' });
+  setupDropzone('templateDrop', 'quoteTemplate', { title: '选择销售报价表模板', sub: '不提供时只生成 CRM 草稿' });
+
+  $('auditBtn').addEventListener('click', async () => {
+    const file = $('reportFile').files[0];
+    if (!file) { toast('请先选择一份 .docx 报告', 'info'); return; }
+    busy($('auditBtn'), true, '审核中…');
+    $('reportStatus').textContent = '';
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const data = await jsonFetch('api/v1/reports/audit', { method: 'POST', body: form });
+      renderReport(data);
+      $('reportStatus').textContent = `完成：${data.summary.fail} 项需要处理`;
+      toast('报告审核完成');
+    } catch (error) {
+      $('reportStatus').textContent = '审核失败';
+      showError(error);
+    } finally {
+      busy($('auditBtn'), false);
+    }
+  });
+  $('recordsSample').addEventListener('click', () => {
+    $('records').value = SAMPLE_RECORDS;
+    toast('已载入示例记录', 'info');
+  });
+  $('validateBtn').addEventListener('click', async () => {
+    busy($('validateBtn'), true, '校验中…');
+    try {
+      const payload = JSON.parse($('records').value);
+      const data = await jsonFetch('api/v1/records/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      renderRecords(data);
+      $('recordsStatus').textContent = `完成：${data.summary.fail} 项问题`;
+      toast('记录校验完成');
+    } catch (error) {
+      $('recordsStatus').textContent = '校验失败';
+      showError(error);
+    } finally {
+      busy($('validateBtn'), false);
+    }
+  });
+
+  $('stdSearch').addEventListener('input', renderStdList);
+  $('stdList').addEventListener('click', (event) => {
+    const item = event.target.closest('[data-std-id]');
+    if (!item) return;
+    loadStandard(item.dataset.stdId).catch(showError);
+  });
+  $('itemsBody').addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-i]');
+    if (row) selectItem(Number(row.dataset.i));
+  });
+  $('parseBtn').addEventListener('click', async () => {
+    const file = $('stdFile').files[0];
+    if (!file) { toast('请先选择标准 PDF', 'info'); return; }
+    busy($('parseBtn'), true, '解析中…');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      if ($('stdProject').value.trim()) form.append('project', $('stdProject').value.trim());
+      const data = await jsonFetch('api/v1/standards/parse', { method: 'POST', body: form });
+      $('parseStatus').textContent = `解析完成：${data.summary.items} 项，${data.summary.clauses_traced} 条可溯源`;
+      toast(`标准解析完成：${data.summary.items} 项`);
+      await loadStandards(data.id);
+    } catch (error) {
+      $('parseStatus').textContent = '解析失败';
+      showError(error);
+    } finally {
+      busy($('parseBtn'), false);
+    }
+  });
+  $('saveBtn').addEventListener('click', async () => {
+    if (!state.current || state.selectedIndex < 0) return;
+    const item = state.current.items[state.selectedIndex];
+    const standardId = state.current.id;
+    busy($('saveBtn'), true, '保存中…');
+    try {
+      await jsonFetch(`api/v1/standards/${encodeURIComponent(standardId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reviewer: (state.me && (state.me.display_name || state.me.username)) || '复核人',
+          items: [{ clause: item.clause, name: $('editName').value, requirement: $('editReq').value, method: $('editMethod').value }],
+        }),
+      });
+      toast('复核修改已保存');
+      await loadStandard(standardId, item.clause);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy($('saveBtn'), false);
+    }
+  });
+  $('exportBtn').addEventListener('click', () => {
+    if (!state.current) return;
+    window.location = `api/v1/standards/${encodeURIComponent(state.current.id)}/export.xlsx`;
+    toast('已开始导出 Excel', 'info');
+  });
+  $('publishBtn').addEventListener('click', async () => {
+    if (!state.current || state.current.published) return;
+    const standard = state.current;
+    const confirmed = await confirmDialog({
+      title: '发布到知识库？',
+      message: `将把「${standard.meta.name || standard.meta.standard_no}」的 ${standard.items.length} 个条款切成知识片段；重复发布会更新同一条知识。`,
+      confirmText: '发布',
+    });
+    if (!confirmed) return;
+    busy($('publishBtn'), true, '发布中…');
+    try {
+      const data = await jsonFetch(`api/v1/standards/${encodeURIComponent(standard.id)}/publish`, { method: 'POST' });
+      toast(`已发布 ${data.chunks} 个知识片段${data.weknora ? '，并同步到 WeKnora' : '（当前为本地演示索引）'}`);
+      const clause = state.selectedIndex >= 0 ? standard.items[state.selectedIndex].clause : '';
+      await loadStandard(standard.id, clause);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy($('publishBtn'), false);
+    }
+  });
+
+  $('quoteBtn').addEventListener('click', async () => {
+    const file = $('quoteFile').files[0];
+    if (!file) { toast('请先选择 DVP / 测试大纲', 'info'); return; }
+    const template = $('quoteTemplate').files[0];
+    busy($('quoteBtn'), true, '生成中…');
+    $('quoteStatus').textContent = '';
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      if (template) form.append('template', template);
+      if ($('quoteProject').value.trim()) form.append('project', $('quoteProject').value.trim());
+      const data = await jsonFetch('api/v1/quotes/generate', { method: 'POST', body: form });
+      renderQuote(data);
+      $('quoteStatus').textContent = '完成';
+      toast('报价已生成');
+    } catch (error) {
+      $('quoteStatus').textContent = '生成失败';
+      showError(error);
+    } finally {
+      busy($('quoteBtn'), false);
+    }
+  });
+  $('quoteResult').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-download]');
+    if (!button) return;
+    const kind = button.dataset.kind === 'crm' ? 'crm' : 'sales';
+    window.location = `api/v1/quotes/${encodeURIComponent(button.dataset.download)}/${kind}.xlsx`;
+  });
+
+  $('askBtn').addEventListener('click', askQuestion);
+  $('question').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') askQuestion();
+  });
+  $('sampleQuestions').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-q]');
+    if (!button) return;
+    $('question').value = button.dataset.q;
+    askQuestion();
+  });
+  $('copyAnswerBtn').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('answerBox').textContent || '');
+      toast('已复制答案');
+    } catch (error) {
+      toast('复制失败，请手动选择文本', 'error');
+    }
+  });
+
+  $('adminTabs').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-admin-view]');
+    if (button) switchAdminView(button.dataset.adminView);
+  });
+  $('userSearch').addEventListener('input', renderUsers);
+  $('roleCards').addEventListener('click', (event) => {
+    const card = event.target.closest('[data-role]');
+    if (!card) return;
+    state.userRoleFilter = state.userRoleFilter === card.dataset.role ? null : card.dataset.role;
+    renderRoleCards();
+    renderUsers();
+  });
+  $('userBody').addEventListener('change', async (event) => {
+    const select = event.target.closest('.role-select');
+    if (!select) return;
+    try {
+      await jsonFetch(`api/v1/auth/users/${encodeURIComponent(select.dataset.roleUser)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: select.value }),
+      });
+      toast(`已更新 ${select.dataset.roleUser} 的角色`);
+      await loadAdmin();
+    } catch (error) {
+      showError(error);
+      await loadAdmin();
+    }
+  });
+  $('userBody').addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-act]');
+    if (!button) return;
+    const username = button.dataset.user;
+    if (button.dataset.act === 'projects') {
+      openProjectModal(username, button.dataset.projects || '');
+    } else if (button.dataset.act === 'reset') {
+      openResetModal(username);
+    } else if (button.dataset.act === 'toggle') {
+      const active = button.dataset.active === '1';
+      const confirmed = await confirmDialog({
+        title: active ? '停用账号？' : '启用账号？',
+        message: active ? `停用后 ${username} 将立即无法访问系统；历史审计记录会保留。` : `启用后 ${username} 可以重新登录并按当前角色使用系统。`,
+        confirmText: active ? '停用' : '启用',
+        tone: active ? 'danger' : 'primary',
+      });
+      if (confirmed) await patchUser(username, { active: !active }, `已${active ? '停用' : '启用'} ${username}`);
+    }
+  });
+  $('newUserBtn').addEventListener('click', () => {
+    $('nuUsername').value = '';
+    $('nuName').value = '';
+    $('nuPassword').value = '';
+    $('nuDept').value = '';
+    $('nuProjects').value = '';
+    $('nuRole').value = 'viewer';
+    $('nuStatus').textContent = '';
+    openModal('modalCreateUser');
+  });
+  $('nuGenPassword').addEventListener('click', () => {
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    let body = '';
+    bytes.forEach((byte) => { body += alphabet[byte % alphabet.length]; });
+    $('nuPassword').value = `Demo@${body}`;
+  });
+  $('nuCreate').addEventListener('click', async () => {
+    const username = $('nuUsername').value.trim();
+    const password = $('nuPassword').value;
+    if (!username || !password) { $('nuStatus').textContent = '请填写用户名和初始密码'; return; }
+    busy($('nuCreate'), true, '创建中…');
+    try {
+      const data = await jsonFetch('api/v1/auth/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          password,
+          role: $('nuRole').value,
+          display_name: $('nuName').value.trim(),
+          department: $('nuDept').value.trim(),
+          projects: $('nuProjects').value.split(/[,，\s]+/).filter(Boolean),
+        }),
+      });
+      closeModal('modalCreateUser');
+      toast(`已创建 ${data.user.username}（${ROLE_NAMES[data.user.role] || data.user.role}）`);
+      await loadAdmin();
+    } catch (error) {
+      $('nuStatus').textContent = error.message;
+    } finally {
+      busy($('nuCreate'), false);
+    }
+  });
+  $('projectPresets').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-project]');
+    if (!button) return;
+    const current = $('projectInput').value.split(/[,，\s]+/).filter(Boolean);
+    if (!current.includes(button.dataset.project)) current.push(button.dataset.project);
+    $('projectInput').value = current.join(', ');
+  });
+  $('projectSave').addEventListener('click', async () => {
+    if (!state.projectUser) return;
+    const projects = $('projectInput').value.split(/[,，\s]+/).filter(Boolean);
+    busy($('projectSave'), true, '保存中…');
+    try {
+      await jsonFetch(`api/v1/auth/users/${encodeURIComponent(state.projectUser)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projects }),
+      });
+      closeModal('modalProject');
+      toast(`已更新 ${state.projectUser} 的项目授权`);
+      await loadAdmin();
+    } catch (error) {
+      $('projectStatus').textContent = error.message;
+    } finally {
+      busy($('projectSave'), false);
+    }
+  });
+  $('resetGenerate').addEventListener('click', async () => {
+    if (!state.resetUser) return;
+    busy($('resetGenerate'), true, '生成中…');
+    try {
+      const data = await jsonFetch(`api/v1/auth/users/${encodeURIComponent(state.resetUser)}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      $('resetResult').classList.remove('hidden');
+      $('resetNotice').classList.add('hidden');
+      $('resetPasswordOut').textContent = data.password;
+      $('resetStatus').textContent = '';
+      toast('临时密码已生成');
+      await loadAdmin();
+    } catch (error) {
+      $('resetStatus').textContent = error.message;
+    } finally {
+      busy($('resetGenerate'), false);
+      $('resetGenerate').disabled = true;
+      $('resetGenerate').innerHTML = `${ic('check')}已生成`;
+    }
+  });
+  $('copyResetPassword').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('resetPasswordOut').textContent || '');
+      toast('临时密码已复制');
+    } catch (error) {
+      toast('复制失败，请手动选择', 'error');
+    }
+  });
+
+  $('auQuery').addEventListener('click', () => loadAudit(true));
+  $('auExport').addEventListener('click', () => {
+    const query = new URLSearchParams(auditFilters());
+    window.location = `api/v1/audit/export.csv?${query.toString()}`;
+    toast('已开始导出审计 CSV', 'info');
+  });
+  $('auditPrev').addEventListener('click', () => {
+    state.audit.offset = Math.max(0, state.audit.offset - state.audit.limit);
+    loadAudit(false);
+  });
+  $('auditNext').addEventListener('click', () => {
+    state.audit.offset += state.audit.limit;
+    loadAudit(false);
+  });
+  $('auditBody').addEventListener('click', (event) => {
+    const row = event.target.closest('tr[data-audit-index]');
+    if (row) openAuditDetail(Number(row.dataset.auditIndex));
+  });
+
+  $$('[data-close]').forEach((button) => button.addEventListener('click', () => closeModal(button.dataset.close)));
+  $$('dialog.modal').forEach((dialog) => {
+    dialog.addEventListener('click', (event) => {
+      if (event.target !== dialog) return;
+      if (dialog.id === 'modalConfirm') settleConfirm(false);
+      else dialog.close();
+    });
+  });
+  $('modalConfirm').addEventListener('cancel', (event) => {
+    event.preventDefault();
+    settleConfirm(false);
+  });
+  $('confirmOk').addEventListener('click', () => settleConfirm(true));
+  $('confirmCancel').addEventListener('click', () => settleConfirm(false));
+  $('confirmClose').addEventListener('click', () => settleConfirm(false));
+}
+
+/* ---------------------------------------------------------------- boot */
+function boot() {
+  $('auEvent').innerHTML = '<option value="">全部事件</option>' + EVENT_OPTIONS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
+  bindEvents();
+  const wanted = params.get('tab');
+  const initialTab = ['report', 'standards', 'quote', 'knowledge', 'admin'].includes(wanted) ? wanted : 'report';
+  loadMe().then((signedIn) => {
+    if (!signedIn) return;
+    switchTab(initialTab);
+    loadRules();
+    loadStandards().catch((error) => {
+      $('stdList').innerHTML = `<div class="muted pad-8">标准加载失败：${escapeHtml(error.message)}</div>`;
+    });
+  }).catch(showError);
+}
+
+boot();

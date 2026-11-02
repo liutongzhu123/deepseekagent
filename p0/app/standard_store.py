@@ -34,7 +34,13 @@ def _write_json(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
-def create(parsed: dict, source_bytes: bytes, file_name: str) -> dict:
+def create(
+    parsed: dict,
+    source_bytes: bytes,
+    file_name: str,
+    project: str = "",
+    created_by: str = "",
+) -> dict:
     with _LOCK:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         standard_id = "std_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
@@ -53,7 +59,28 @@ def create(parsed: dict, source_bytes: bytes, file_name: str) -> dict:
             "source": {"file_name": file_name, "bytes": len(source_bytes)},
             **parsed,
         }
+        # P1 project tag: additive; legacy records simply keep empty values.
+        record["meta"] = {
+            **(record.get("meta") or {}),
+            "project": (project or "").strip(),
+            "created_by": created_by or "",
+        }
         _write_json(directory / "result.json", record)
+        return record
+
+
+def set_project(standard_id: str, project: str, created_by: str | None = None) -> dict:
+    """Assign (or clear) the project tag used by P1 row-level authorization."""
+    with _LOCK:
+        record = load(standard_id)
+        record["meta"] = {
+            **(record.get("meta") or {}),
+            "project": (project or "").strip(),
+        }
+        if created_by is not None:
+            record["meta"]["created_by"] = created_by or ""
+        record["updated_at"] = _now()
+        _write_json(_dir(standard_id) / "result.json", record)
         return record
 
 
@@ -87,6 +114,8 @@ def list_standards() -> list[dict]:
                 "published": record.get("published", False),
                 "revision": record.get("revision", 0),
                 "created_at": record.get("created_at", ""),
+                "project": record["meta"].get("project", ""),
+                "created_by": record["meta"].get("created_by", ""),
             }
         )
     return out
@@ -194,6 +223,8 @@ def publish(standard_id: str) -> dict:
             "standard_id": standard_id,
             "standard_no": record["meta"].get("standard_no", ""),
             "standard_name": record["meta"].get("name", ""),
+            "project": record["meta"].get("project", ""),
+            "created_by": record["meta"].get("created_by", ""),
             "source": record.get("source", {}),
             "chunks": chunks,
             "published_at": _now(),
@@ -288,6 +319,8 @@ def rebuild_index() -> dict:
                 "standard_id": record["id"],
                 "standard_no": record["meta"].get("standard_no", ""),
                 "standard_name": record["meta"].get("name", ""),
+                "project": record["meta"].get("project", ""),
+                "created_by": record["meta"].get("created_by", ""),
                 "source": record.get("source", {}),
                 "chunks": standard_chunks,
                 "published_at": _now(),
@@ -304,6 +337,8 @@ def rebuild_index() -> dict:
                     "standard_name": record["meta"].get("name", ""),
                     "items": len(record.get("items", [])),
                     "chunks": len(standard_chunks),
+                    "project": record["meta"].get("project", ""),
+                    "created_by": record["meta"].get("created_by", ""),
                 }
             )
             chunks.extend(standard_chunks)
