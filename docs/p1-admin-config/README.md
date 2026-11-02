@@ -1,4 +1,4 @@
-# 管理端规则配置（0.7.0）
+# 管理端规则配置（0.7.0，0.7.1 增补模块页展示）
 
 ## 变更范围
 
@@ -10,6 +10,8 @@
 | 标准解析规则字段 | 「技术要求」「试验方法」章节别名；解析字段显示名、必填、Excel 导出列 | `parse_standard()`、`review_fields` 复核清单、`export.xlsx` 明细列 |
 | 报价助手规则字段 | 项目/单价/数量/单位/样品表头别名、单位映射、默认折扣、产品/服务税率、CRM 草稿列 | `parse_dvp()` / `parse_quote_bytes()`（Excel/PDF/图片）、金额计算、销售报价表税率单元格、CRM 报价草稿 |
 
+0.7.1 起，三条业务链路页面内也会只读展示对应配置（报告审核右侧规则卡、标准解析 / 报价助手顶部折叠卡），管理端「规则配置」页签保持原样。详见 [模块页内规则配置](../p1-inline-rules/README.md)。
+
 安全与留痕：
 
 - 只有 `admin` 可访问 `GET /api/v1/admin/config`（`config:read`）和写接口（`config:manage`）；
@@ -20,6 +22,7 @@
 ## 接口
 
 - `GET /api/v1/admin/config` → `{config, path, warning, sections}`
+- `GET /api/v1/config/effective` → `{config, warning}`（模块页只读展示；`rules:read` 即可访问，不含 `path`）
 - `PUT /api/v1/admin/config/{report|standard|quote}`（JSON 分区配置）→ 校验、保存并返回最新配置
 - `POST /api/v1/admin/config/{report|standard|quote}/reset` → 恢复该分区默认值
 - 未配置时，三个业务链路行为与 0.6.0 一致；`/api/v1/rules` 增加 `enabled` / `severity` 字段与 `enabled/total` 统计
@@ -74,7 +77,7 @@ pytest -q tests/test_admin_config.py
 pytest -q
 ```
 
-结果：`tests/test_admin_config.py` 8 passed；合并 #13 多格式报价解析后，全量 `69 passed, 2 skipped`（2 个跳过为需要真实样例的解析/审核用例）。
+结果：0.7.0 时 `tests/test_admin_config.py` 8 passed；0.7.1 增加模块页只读展示用例后 10 passed；全量 `71 passed, 2 skipped`（2 个跳过为需要真实样例的解析/审核用例）。
 
 覆盖内容：
 

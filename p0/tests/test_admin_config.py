@@ -93,6 +93,32 @@ def test_defaults_and_admin_only_access(env):
     assert data["warning"] == ""
 
 
+def test_effective_config_is_readable_by_module_pages(env):
+    assert TestClient(main.app).get("/api/v1/config/effective").status_code == 401
+
+    viewer = _client("viewer2", "viewer-pass-2", "viewer")
+    response = viewer.get("/api/v1/config/effective")
+    assert response.status_code == 200
+    data = response.json()
+    assert "path" not in data
+    config = data["config"]
+    assert len(config["report"]["rules"]) == 11
+    assert len(config["standard"]["fields"]) == 8
+    assert config["quote"]["default_discount"] == 60
+    assert data["warning"] == ""
+
+
+def test_effective_config_tracks_admin_updates(env):
+    admin = _admin(env)
+    section = copy.deepcopy(admin.get("/api/v1/admin/config").json()["config"]["quote"])
+    section["default_discount"] = 55
+    assert admin.put("/api/v1/admin/config/quote", json=section).status_code == 200
+
+    data = admin.get("/api/v1/config/effective").json()
+    assert data["config"]["revision"] == 1
+    assert data["config"]["quote"]["default_discount"] == 55
+
+
 def test_report_rule_update_changes_audit_behaviour(env):
     admin = _admin(env)
     section = copy.deepcopy(admin.get("/api/v1/admin/config").json()["config"]["report"])

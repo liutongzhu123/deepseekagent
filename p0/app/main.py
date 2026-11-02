@@ -52,7 +52,7 @@ AUTH_BOOTSTRAP = auth.bootstrap()
 
 app = FastAPI(
     title="中汽零部件 P1 API",
-    version="0.7.0",
+    version="0.7.1",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -456,6 +456,16 @@ def system_status(request: Request) -> dict:
 def get_admin_config(request: Request) -> dict:
     _require_permission(request, "config:read")
     return admin_config.describe()
+
+
+@app.get("/api/v1/config/effective")
+def get_effective_config(request: Request) -> dict:
+    """Read-only config for the module pages, without the internal file path."""
+    _require_permission(request, "rules:read")
+    result = admin_config.describe()
+    result.pop("path", None)
+    result.pop("sections", None)
+    return result
 
 
 @app.put("/api/v1/admin/config/{section}")
