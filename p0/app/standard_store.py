@@ -337,6 +337,8 @@ def rebuild_index() -> dict:
                     "standard_name": record["meta"].get("name", ""),
                     "items": len(record.get("items", [])),
                     "chunks": len(standard_chunks),
+                    "project": record["meta"].get("project", ""),
+                    "created_by": record["meta"].get("created_by", ""),
                 }
             )
             chunks.extend(standard_chunks)

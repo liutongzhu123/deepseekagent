@@ -420,7 +420,7 @@ def audit_export(
     )
     _audit_event(request, actor, "audit_exported", rows=len(events))
     return Response(
-        content=auth.audit_csv(events),
+        content="\ufeff" + auth.audit_csv(events),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=audit.csv"},
     )
@@ -1028,5 +1028,17 @@ def rebuild_kb(request: Request) -> dict:
 
 @app.get("/api/v1/kb/stats")
 def kb_stats(request: Request) -> dict:
-    _require_permission(request, "kb:stats")
-    return standard_store.index_stats()
+    user = _require_permission(request, "kb:stats")
+    stats = standard_store.index_stats()
+    visible = [
+        record
+        for record in stats.get("standards", [])
+        if auth.can_access_project(
+            user, record.get("project", ""), record.get("created_by", "")
+        )
+    ]
+    if auth.is_restricted(user):
+        stats["standards"] = visible
+        stats["standard_count"] = len(visible)
+        stats["chunk_count"] = sum(int(item.get("chunks", 0)) for item in visible)
+    return stats

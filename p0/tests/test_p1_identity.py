@@ -25,6 +25,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(auth, "_LAST_PRUNE_DATE", None)
     monkeypatch.setattr(main, "AUTH_DISABLED", False)
     monkeypatch.setattr(standard_store, "DATA_DIR", tmp_path / "standards")
+    monkeypatch.setattr(standard_store, "INDEX_PATH", tmp_path / "kb_index.json")
     monkeypatch.setattr(main, "QUOTE_DIR", tmp_path / "quotes")
     return SimpleNamespace(tmp=tmp_path, client=TestClient(main.app))
 
@@ -212,6 +213,39 @@ def test_project_isolation_for_standards_and_quotes(env):
     dave = TestClient(main.app)
     assert _login(dave, "dave", "dave-pass-1").status_code == 200
     assert dave.get("/api/v1/quotes/q_20260101000000_abcdef/crm.xlsx").status_code == 403
+
+
+def test_password_change_invalidates_existing_sessions(env):
+    auth.create_user("dana", "dana-pass-1", role="viewer")
+    client = TestClient(main.app)
+    assert _login(client, "dana", "dana-pass-1").status_code == 200
+    assert client.get("/api/v1/auth/me").status_code == 200
+    changed = client.post(
+        "/api/v1/auth/password",
+        json={"old_password": "dana-pass-1", "new_password": "dana-pass-2"},
+    )
+    assert changed.status_code == 200
+    assert client.get("/api/v1/auth/me").status_code == 401
+    assert _login(TestClient(main.app), "dana", "dana-pass-2").status_code == 200
+
+
+def test_kb_stats_filters_projects(env):
+    auth.create_user("root", "root-pass-1", role="admin")
+    auth.create_user("alice", "alice-pass-1", role="reviewer", projects=["P-A"])
+    parsed = {
+        "meta": {"standard_no": "Q/A 1-2026", "name": "A 标准", "pages": 1},
+        "summary": {"items": 1},
+        "items": [{"seq": 1, "clause": "5.1", "name": "外观", "requirement": "无缺陷", "method_clause": "6.1", "method": "目测", "page": 1, "method_page": 1}],
+    }
+    record_a = standard_store.create(parsed, b"pdf", "a.pdf", project="P-A", created_by="alice")
+    standard_store.create(parsed, b"pdf", "b.pdf", project="P-B", created_by="bob")
+    standard_store.rebuild_index()
+
+    alice = TestClient(main.app)
+    assert _login(alice, "alice", "alice-pass-1").status_code == 200
+    stats = alice.get("/api/v1/kb/stats").json()
+    assert stats["standard_count"] == 1
+    assert [item["id"] for item in stats["standards"]] == [record_a["id"]]
 
 
 def test_provider_seam(env, monkeypatch):

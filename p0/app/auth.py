@@ -82,6 +82,7 @@ _LOCK = threading.RLock()
 _SECRET: bytes | None = None
 _RATE_LOCK = threading.Lock()
 _RATE: dict[str, list[float]] = {}
+_AUDIT_LOCK = threading.RLock()
 _LAST_PRUNE_DATE: str | None = None
 
 
@@ -286,6 +287,7 @@ def create_user(
             "department": (department or "").strip()[:128],
             "projects": normalized,
             "auth_provider": "local",
+            "session_epoch": 0,
             "failed_logins": 0,
             "locked_until": "",
             "last_login_at": "",
@@ -304,6 +306,7 @@ def update_password(username: str, new_password: str) -> None:
         for user in users:
             if user.get("username", "").lower() == username.lower():
                 user["password_hash"] = hash_password(new_password)
+                user["session_epoch"] = int(user.get("session_epoch", 0)) + 1
                 user["failed_logins"] = 0
                 user["locked_until"] = ""
                 user["updated_at"] = _now()
@@ -323,6 +326,7 @@ def reset_password(username: str, new_password: str | None = None) -> dict:
         for user in users:
             if user.get("username", "").lower() == username.lower():
                 user["password_hash"] = hash_password(password)
+                user["session_epoch"] = int(user.get("session_epoch", 0)) + 1
                 user["failed_logins"] = 0
                 user["locked_until"] = ""
                 user["updated_at"] = _now()
@@ -514,9 +518,11 @@ def _b64decode(value: str) -> bytes:
 
 
 def create_session(user: dict) -> str:
+    raw = find_user(user["username"]) or user
     payload = {
         "u": user["username"],
         "r": user["role"],
+        "v": int(raw.get("session_epoch", 0)),
         "exp": int(time.time()) + SESSION_TTL_SECONDS,
         "n": secrets.token_hex(8),
     }
@@ -540,6 +546,8 @@ def read_session(token: str) -> dict | None:
             return None
         user = find_user(payload.get("u", ""))
         if not user or not user.get("active", True):
+            return None
+        if int(payload.get("v", 0)) != int(user.get("session_epoch", 0)):
             return None
         if lock_remaining_seconds(user) > 0:
             return None
@@ -580,30 +588,31 @@ def prune_audit(retention_days: int | None = None) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     kept: list[str] = []
     removed = 0
-    try:
-        lines = AUDIT_PATH.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return 0
-    for line in lines:
+    with _AUDIT_LOCK:
         try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            kept.append(line)
-            continue
-        at = _parse_time(str(entry.get("at", "")))
-        if at is not None and at < cutoff:
-            removed += 1
-        else:
-            kept.append(line)
-    if removed:
-        try:
-            _atomic_write(
-                AUDIT_PATH,
-                "\n".join(kept) + ("\n" if kept else ""),
-                mode=0o640,
-            )
+            lines = AUDIT_PATH.read_text(encoding="utf-8").splitlines()
         except OSError:
             return 0
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)
+                continue
+            at = _parse_time(str(entry.get("at", "")))
+            if at is not None and at < cutoff:
+                removed += 1
+            else:
+                kept.append(line)
+        if removed:
+            try:
+                _atomic_write(
+                    AUDIT_PATH,
+                    "\n".join(kept) + ("\n" if kept else ""),
+                    mode=0o640,
+                )
+            except OSError:
+                return 0
     return removed
 
 
@@ -619,10 +628,11 @@ def _maybe_prune() -> None:
 def audit(entry: dict) -> None:
     record = {"at": _now(), **entry}
     try:
-        AUDIT_DIR.mkdir(parents=True, exist_ok=True)
-        with AUDIT_PATH.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-        _maybe_prune()
+        with _AUDIT_LOCK:
+            AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+            with AUDIT_PATH.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            _maybe_prune()
     except OSError:
         # Auditing must never take the business endpoint down.
         pass
