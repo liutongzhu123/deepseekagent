@@ -982,9 +982,9 @@ function renderAdminConfig() {
     <tr data-rule-id="${escapeHtml(rule.id)}">
       <td><span class="finding-rule">${escapeHtml(rule.id)}</span></td>
       <td><input type="checkbox" data-rule-field="enabled" ${rule.enabled ? 'checked' : ''} aria-label="${escapeHtml(rule.id)} 启用"></td>
-      <td><select data-rule-field="severity">${Object.entries(SEVERITY_NAMES).map(([value, label]) => `<option value="${value}" ${rule.severity === value ? 'selected' : ''}>${label}</option>`).join('')}</select></td>
-      <td><input type="text" data-rule-field="title" value="${escapeHtml(rule.title)}" maxlength="100"></td>
-      <td><input type="text" data-rule-field="description" value="${escapeHtml(rule.description)}" maxlength="500"></td>
+      <td><select data-rule-field="severity" aria-label="${escapeHtml(rule.id)} 严重级别">${Object.entries(SEVERITY_NAMES).map(([value, label]) => `<option value="${value}" ${rule.severity === value ? 'selected' : ''}>${label}</option>`).join('')}</select></td>
+      <td><input type="text" data-rule-field="title" value="${escapeHtml(rule.title)}" maxlength="100" aria-label="${escapeHtml(rule.id)} 名称"></td>
+      <td><input type="text" data-rule-field="description" value="${escapeHtml(rule.description)}" maxlength="500" aria-label="${escapeHtml(rule.id)} 说明"></td>
     </tr>`).join('');
 
   $('cfgStdAliasTech').value = (standard.section_aliases?.['技术要求'] || []).join(', ');
@@ -992,7 +992,7 @@ function renderAdminConfig() {
   $('cfgStdFieldBody').innerHTML = (standard.fields || []).map((field) => `
     <tr data-field-key="${escapeHtml(field.key)}">
       <td><span class="cell-main">${escapeHtml(field.key)}</span></td>
-      <td><input type="text" data-field-prop="label" value="${escapeHtml(field.label)}" maxlength="40"></td>
+      <td><input type="text" data-field-prop="label" value="${escapeHtml(field.label)}" maxlength="40" aria-label="${escapeHtml(field.key)} 显示名"></td>
       <td><input type="checkbox" data-field-prop="required" ${field.required ? 'checked' : ''} aria-label="${escapeHtml(field.key)} 必填"></td>
       <td><input type="checkbox" data-field-prop="export" ${field.export ? 'checked' : ''} aria-label="${escapeHtml(field.key)} 导出"></td>
     </tr>`).join('');
@@ -1009,7 +1009,7 @@ function renderAdminConfig() {
   $('cfgQuoteColumnBody').innerHTML = (quote.crm_columns || []).map((column) => `
     <tr data-column-source="${escapeHtml(column.source)}">
       <td><span class="cell-main">${escapeHtml(CONFIG_SOURCE_NAMES[column.source] || column.source)}</span><span class="cell-sub">${escapeHtml(column.source)}</span></td>
-      <td><input type="text" data-column-prop="label" value="${escapeHtml(column.label)}" maxlength="40"></td>
+      <td><input type="text" data-column-prop="label" value="${escapeHtml(column.label)}" maxlength="40" aria-label="${escapeHtml(column.label)} 列名"></td>
       <td><input type="checkbox" data-column-prop="enabled" ${column.enabled ? 'checked' : ''} aria-label="${escapeHtml(column.label)} 启用"></td>
     </tr>`).join('');
 }
