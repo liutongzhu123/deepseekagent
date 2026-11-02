@@ -1,0 +1,12 @@
+[Unit]
+Description=CQ P0 data-layer backup (PostgreSQL dump + object store)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/cq-ai-p0
+EnvironmentFile=/opt/cq-ai-p0/.env
+ExecStart=/opt/cq-ai-p0/.venv/bin/python scripts/backup_store.py --backup-dir /var/backups/cq-ai-p0 --keep 14
+Nice=10
+IOSchedulingClass=idle

@@ -1,15 +1,23 @@
-"""File-backed store for parsed standards, review edits and KB publication."""
+"""Store for parsed standards, review edits and KB publication.
+
+``P0_STORE=json`` keeps the original file layout; ``P0_STORE=postgres`` writes
+the record, revision chain and clause rows to PostgreSQL and the source/export
+objects to the P1 object store, while still mirroring the JSON tree for a
+single-switch rollback.
+"""
 from __future__ import annotations
 
 import json
 import os
 import re
 import secrets
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import weknora
+from . import store, weknora
+from .xlsx_writer import write_xlsx
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("P0_STANDARD_DIR", ROOT / "data" / "standards"))
@@ -42,11 +50,7 @@ def create(
     created_by: str = "",
 ) -> dict:
     with _LOCK:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
         standard_id = "std_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
-        directory = DATA_DIR / standard_id
-        directory.mkdir(parents=True)
-        (directory / "source.pdf").write_bytes(source_bytes)
         record = {
             "id": standard_id,
             "created_at": _now(),
@@ -65,6 +69,12 @@ def create(
             "project": (project or "").strip(),
             "created_by": created_by or "",
         }
+        if store.config.postgres_enabled():
+            return store.standards.create(record, source_bytes, file_name)
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        directory = DATA_DIR / standard_id
+        directory.mkdir(parents=True)
+        (directory / "source.pdf").write_bytes(source_bytes)
         _write_json(directory / "result.json", record)
         return record
 
@@ -80,11 +90,15 @@ def set_project(standard_id: str, project: str, created_by: str | None = None) -
         if created_by is not None:
             record["meta"]["created_by"] = created_by or ""
         record["updated_at"] = _now()
+        if store.config.postgres_enabled():
+            return store.standards.save(record)
         _write_json(_dir(standard_id) / "result.json", record)
         return record
 
 
 def load(standard_id: str) -> dict:
+    if store.config.postgres_enabled():
+        return store.standards.load(standard_id)
     directory = _dir(standard_id)
     path = directory / "result.json"
     if not path.exists():
@@ -93,6 +107,8 @@ def load(standard_id: str) -> dict:
 
 
 def list_standards() -> list[dict]:
+    if store.config.postgres_enabled():
+        return store.standards.list_standards()
     if not DATA_DIR.exists():
         return []
     out: list[dict] = []
@@ -155,7 +171,10 @@ def update_review(standard_id: str, updates: list[dict], reviewer: str = "") -> 
             record["updated_at"] = _now()
             record["reviewer"] = reviewer
             record["summary"] = _recompute_summary(record)
-            _write_json(_dir(standard_id) / "result.json", record)
+            if store.config.postgres_enabled():
+                store.standards.save(record)
+            else:
+                _write_json(_dir(standard_id) / "result.json", record)
         return record
 
 
@@ -245,11 +264,16 @@ def publish(standard_id: str) -> dict:
                 record["weknora"] = weknora_result
         elif weknora.required():
             raise ValueError("WeKnora 是唯一知识底座，但服务端尚未配置 WeKnora 连接")
-        _write_json(_dir(standard_id) / "kb.json", kb)
         record["published"] = True
         record["published_at"] = kb["published_at"]
         record["updated_at"] = kb["published_at"]
-        _write_json(_dir(standard_id) / "result.json", record)
+        if store.config.postgres_enabled():
+            # ``save`` stores the record and the kb document; the mirror keeps
+            # data/standards/<id>/ usable for a file-mode rollback.
+            store.standards.save(record, kb)
+        else:
+            _write_json(_dir(standard_id) / "kb.json", kb)
+            _write_json(_dir(standard_id) / "result.json", record)
         return {
             "published": True,
             "chunks": len(chunks),
@@ -270,6 +294,8 @@ def published_knowledge_ids(standard_id: str | None = None) -> list[str]:
 
 
 def published_kbs(standard_id: str | None = None) -> list[dict]:
+    if store.config.postgres_enabled():
+        return store.standards.published_kbs(standard_id)
     if standard_id:
         path = _dir(standard_id) / "kb.json"
         return [json.loads(path.read_text(encoding="utf-8"))] if path.exists() else []
@@ -290,6 +316,28 @@ def export_path(standard_id: str) -> Path:
     return _dir(standard_id) / "export.xlsx"
 
 
+def export_bytes(standard_id: str, sheets: list[tuple[str, list[list[object]], list[int] | None]]) -> bytes:
+    """Render the workbook and persist it in the active backend.
+
+    The API returns bytes so the same route works with a local directory and
+    with MinIO; PostgreSQL mode also records the object in ``files``.
+    """
+    _dir(standard_id)
+    with tempfile.TemporaryDirectory(prefix="p0-export-") as tmp:
+        path = Path(tmp) / "export.xlsx"
+        write_xlsx(path, sheets)
+        data = path.read_bytes()
+    if store.config.postgres_enabled():
+        store.standards.save_export(standard_id, data)
+    else:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        target = export_path(standard_id)
+        tmp_target = target.with_name(target.name + ".tmp")
+        tmp_target.write_bytes(data)
+        tmp_target.replace(target)
+    return data
+
+
 INDEX_PATH = DATA_DIR / "kb_index.json"
 
 
@@ -300,18 +348,27 @@ def rebuild_index() -> dict:
     so the demo can be repeated without WeKnora or an external vector store.
     """
     with _LOCK:
-        if not DATA_DIR.exists():
-            return {"standards": 0, "chunks": 0, "built_at": _now()}
+        records: list[dict] = []
+        if store.config.postgres_enabled():
+            for summary in store.standards.list_standards():
+                try:
+                    records.append(store.standards.load(summary["id"]))
+                except KeyError:
+                    continue
+        else:
+            if not DATA_DIR.exists():
+                return {"standards": 0, "chunks": 0, "built_at": _now()}
+            for directory in sorted(DATA_DIR.iterdir()):
+                result_path = directory / "result.json"
+                if not result_path.exists():
+                    continue
+                try:
+                    records.append(json.loads(result_path.read_text(encoding="utf-8")))
+                except (OSError, json.JSONDecodeError):
+                    continue
         standards: list[dict] = []
         chunks: list[dict] = []
-        for directory in sorted(DATA_DIR.iterdir()):
-            result_path = directory / "result.json"
-            if not result_path.exists():
-                continue
-            try:
-                record = json.loads(result_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
+        for record in records:
             standard_chunks = build_chunks(record)
             if not standard_chunks:
                 continue
@@ -325,11 +382,14 @@ def rebuild_index() -> dict:
                 "chunks": standard_chunks,
                 "published_at": _now(),
             }
-            _write_json(directory / "kb.json", kb)
             record["published"] = True
             record["published_at"] = kb["published_at"]
             record["updated_at"] = kb["published_at"]
-            _write_json(result_path, record)
+            if store.config.postgres_enabled():
+                store.standards.save(record, kb)
+            else:
+                _write_json(directory / "kb.json", kb)
+                _write_json(directory / "result.json", record)
             standards.append(
                 {
                     "id": record["id"],
@@ -349,6 +409,7 @@ def rebuild_index() -> dict:
             "standards": standards,
             "chunks": chunks,
         }
+        INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
         _write_json(INDEX_PATH, index)
         return index
 
