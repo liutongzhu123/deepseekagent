@@ -217,6 +217,7 @@ data/auth/users.json             用户与密码哈希（0600）
 data/auth/session_secret         会话签名密钥（0600）
 data/audit/audit.jsonl           登录、业务 API 与语义事件审计（P0_AUDIT_RETENTION_DAYS 保留期）
 data/quotes/<id>/                CRM 草稿、销售报价表与 meta.json（项目/创建人）
+backups/                         本地数据快照（0600，已在 .gitignore 中，不入库）
 ```
 
 可用 `P0_STANDARD_DIR`、`P0_QUOTE_DIR`、`P0_SALES_QUOTE_TEMPLATE`、`MAX_STANDARD_MB` 调整目录/模板/上限；
@@ -234,7 +235,26 @@ WeKnora 用 `P0_WEKNORA_BASE_URL`、`P0_WEKNORA_API_KEY`、`P0_WEKNORA_KB_ID`、
 pytest -q
 ```
 
+CI 在 `.github/workflows/p0-ci.yml`：push/PR 到 `main` 且改动 `p0/**` 时，用 Python 3.12 安装依赖并跑 pytest。
+
 真实样例与保密标准放在 `data/` 或服务器 `/opt/cq-ai-p0/data`，不提交仓库。
+
+## 备份与恢复（P1-0.5）
+
+数据迁移前的文件数据安全网，详见 [`docs/p1-ci-backup/README.md`](../docs/p1-ci-backup/README.md)。
+
+```bash
+# 快照（默认 P0_DATA_DIR/P0_BACKUP_DIR）；归档含账号哈希与客户数据，权限 0600
+python scripts/backup_data.py --data-dir data --backup-dir backups --keep 14
+
+# 只校验，不写盘
+python scripts/restore_data.py backups/p0-data-<时间戳>.tar.gz --verify-only
+
+# 恢复到空目录（非空目录需 --force，旧目录会保留为 *.pre-restore-<时间戳>）
+python scripts/restore_data.py backups/p0-data-<时间戳>.tar.gz --data-dir /tmp/p0-restore-check
+```
+
+每日定时器与异机保留步骤见文档；备份目录不要放在 Web 可访问目录，也不要提交仓库。
 
 ## 已知限制（P1 后）
 
