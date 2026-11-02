@@ -78,8 +78,8 @@ class QuoteLine:
         ]
 
 
-PRODUCT_TAX_RATE = 0.16
-SERVICE_TAX_RATE = 0.06
+PRODUCT_TAX_RATE = _DEFAULT_QUOTE["product_tax_rate"]
+SERVICE_TAX_RATE = _DEFAULT_QUOTE["service_tax_rate"]
 
 
 class QuoteSelfCheckError(ValueError):
