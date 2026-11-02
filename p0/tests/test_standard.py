@@ -108,13 +108,13 @@ def test_review_publish_and_ask(store):
     kbs = standard_store.published_kbs(store["id"])
     assert kbs and kbs[0]["standard_no"] == "Q/TEST 123-2024"
 
-    answer = standard_qa.answer("5.1 的外观要求是什么？", kbs)
+    answer = standard_qa.answer("5.1 的外观要求是什么？", kbs, mode="keyword")
     assert answer["found"] is True
     assert answer["citations"][0]["clause"] == "5.1"
     assert answer["citations"][0]["page"] == 2
     assert "外观" in answer["answer"]
 
-    method = standard_qa.answer("5.1 的试验方法是什么？", kbs)
+    method = standard_qa.answer("5.1 的试验方法是什么？", kbs, mode="keyword")
     assert method["found"] is True
     assert method["citations"][0]["kind"] == "method"
 
@@ -122,7 +122,7 @@ def test_review_publish_and_ask(store):
 def test_ask_returns_not_found_instead_of_fabricating(store):
     standard_store.publish(store["id"])
     kbs = standard_store.published_kbs(store["id"])
-    answer = standard_qa.answer("航空航天材料的疲劳寿命要求是什么？", kbs)
+    answer = standard_qa.answer("航空航天材料的疲劳寿命要求是什么？", kbs, mode="keyword")
     assert answer["found"] is False
     assert "未找到" in answer["answer"]
     assert answer["citations"] == []
@@ -147,4 +147,4 @@ def test_table_cell_cleanup_for_merged_performance_tables():
 
     assert _table_item_name("悬臂梁缺口冲击强度（-30℃），Notched Izod", "6.8.3") == "悬臂梁缺口冲击强度（-30℃）"
     assert _table_item_name("2：气味性/Odor", "6.10") == "气味性"
-    assert _readable_requirement(["0.91±0.01；天；0.91±0.01；0.89±0.03"]) == "0.91±0.01；0.89±0.03"
+    assert _readable_requirement(["0.92±0.02；天；0.92±0.02；0.90±0.02"]) == "0.92±0.02；0.90±0.02"

@@ -1,8 +1,16 @@
 from pathlib import Path
 
+import pytest
 from openpyxl import Workbook, load_workbook
 
-from app.quote import fill_sales_quote, parse_dvp, sales_quote_preview, write_crm_xlsx
+from app.quote import (
+    QuoteSelfCheckError,
+    fill_sales_quote,
+    parse_dvp,
+    sales_quote_preview,
+    verify_sales_quote,
+    write_crm_xlsx,
+)
 from app.report_writer import audit_markdown, batch_summary
 
 
@@ -47,9 +55,9 @@ def make_sales_template(path: Path) -> Path:
 
 
 def test_parse_dvp_and_totals(tmp_path: Path) -> None:
-    source = make_dvp(tmp_path / "JH11前排座椅DVP.xlsx")
+    source = make_dvp(tmp_path / "DEMO1前排座椅DVP.xlsx")
     result = parse_dvp(source)
-    assert result.sample_name == "JH11前排座椅"
+    assert result.sample_name == "DEMO1前排座椅"
     assert len(result.lines) == 2
     assert result.lines[0].unit == "席位/次"
     assert result.lines[1].unit == "次"
@@ -58,7 +66,7 @@ def test_parse_dvp_and_totals(tmp_path: Path) -> None:
 
 
 def test_generate_crm_and_sales_quote(tmp_path: Path) -> None:
-    source = make_dvp(tmp_path / "JH11前排座椅DVP.xlsx")
+    source = make_dvp(tmp_path / "DEMO1前排座椅DVP.xlsx")
     result = parse_dvp(source)
     crm = write_crm_xlsx(tmp_path / "crm.xlsx", result)
     workbook = load_workbook(crm)
@@ -69,13 +77,45 @@ def test_generate_crm_and_sales_quote(tmp_path: Path) -> None:
 
     template = make_sales_template(tmp_path / "template.xlsx")
     out = fill_sales_quote(template, result, tmp_path / "sales.xlsx")
-    filled = load_workbook(out)
+    filled = load_workbook(out, data_only=True)
     ws = filled.active
+    assert ws["C7"].value == 6000
     assert ws["C8"].value == 6000
-    assert ws["C10"].value == "=C8-C9"
+    assert ws["C9"].value == 0
+    assert ws["C10"].value == 6000
+    assert ws["C11"].value == 0
+    assert ws["C12"].value == 360
+    assert ws["C13"].value == 6360
+    assert ws["C14"].value == 0
+    assert ws["C15"].value == 6360
     assert "报价明细" in filled.sheetnames
+    assert "计算口径" in filled.sheetnames
+    # The template's original formulas stay visible on the audit sheet.
+    formulas = {
+        row[1]: row[2] for row in filled["计算口径"].iter_rows(values_only=True) if row[1]
+    }
+    assert formulas["C10"] == "=C8-C9"
+    assert formulas["C13"] == "=C8+C11+C12"
+
+    verification = verify_sales_quote(out, result)
+    assert verification["ok"] is True
+    assert len(verification["checks"]) >= 14
     preview = sales_quote_preview(result)
     assert preview["最终价格"] == 6360
+
+
+def test_sales_quote_self_check_rejects_tampering(tmp_path: Path) -> None:
+    source = make_dvp(tmp_path / "DEMO1前排座椅DVP.xlsx")
+    result = parse_dvp(source)
+    template = make_sales_template(tmp_path / "template.xlsx")
+    out = fill_sales_quote(template, result, tmp_path / "sales.xlsx")
+
+    workbook = load_workbook(out)
+    workbook.active["C13"] = 1
+    workbook.save(out)
+    with pytest.raises(QuoteSelfCheckError) as excinfo:
+        verify_sales_quote(out, result)
+    assert any(item["cell"] == "C13" for item in excinfo.value.mismatches)
 
 
 def test_report_markdown_and_batch_summary() -> None:

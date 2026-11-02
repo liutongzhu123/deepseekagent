@@ -89,7 +89,7 @@ def main() -> int:
 
     results = []
     for item in questions:
-        result = answer(item["question"], kbs)
+        result = answer(item["question"], kbs, mode="keyword")
         text = result.get("answer", "")
         checks = {
             "found_as_expected": bool(result.get("found")) == item["expect_found"],

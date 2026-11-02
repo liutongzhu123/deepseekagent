@@ -25,6 +25,7 @@ from app.quote import (  # noqa: E402
     fill_sales_quote,
     parse_dvp,
     sales_quote_preview,
+    verify_sales_quote,
     write_crm_xlsx,
 )
 
@@ -107,6 +108,7 @@ def main() -> int:
                 }
             )
 
+    sales_verification = verify_sales_quote(sales_path, result)
     summary = result.summary()
     preview = sales_quote_preview(result)
     metrics = {
@@ -117,9 +119,19 @@ def main() -> int:
         "qty_match": qty_ok,
         "unit_match": unit_ok,
         "differences": differences,
+        "sales_quote_verification": sales_verification,
     }
     (out_dir / "quote_eval.json").write_text(
-        json.dumps({"summary": summary, "metrics": metrics, "preview": preview}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "summary": summary,
+                "metrics": metrics,
+                "preview": preview,
+                "sales_quote_verification": sales_verification,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -137,20 +149,27 @@ def main() -> int:
         f"| DVP 合计（未折扣） | {result.subtotal:,.2f} |",
         f"| 折扣 | {result.discount:.0f}% |",
         f"| 销售报价（不含税） | {result.sales_amount:,.2f} |",
-        f"| 产品金额（不含税） | 0.00 |",
-        f"| 服务金额（不含税） | {result.sales_amount:,.2f} |",
+        f"| 产品金额（不含税） | {result.product_amount:,.2f} |",
+        f"| 服务金额（不含税） | {result.service_amount:,.2f} |",
         f"| 产品税率 / 服务税率 | 16% / 6% |",
+        f"| 产品税额 / 服务税额 | {result.product_tax:,.2f} / {result.service_tax:,.2f} |",
         f"| 税价合计 | {result.total_with_tax:,.2f} |",
-        f"| 产生费用 | 0.00 |",
-        f"| 最终价格 | {result.total_with_tax:,.2f} |",
+        f"| 产生费用 | {result.incurred_cost:,.2f} |",
+        f"| 最终价格 | {result.final_price:,.2f} |",
         "",
-        "## 2. 与真实 CRM 报价比对",
+        "## 2. 生成后自检",
+        "",
+        f"- 结果：**通过**（{len(sales_verification['checks'])} 项单元格/算术断言）",
+        "- 写入单元格：C9 产品金额、C10 服务金额、C13 税价合计、C15 最终价格（另含 C7/C8/C11/C12/C14）。",
+        "- 自检命令：`python -m pytest -q tests/test_quote.py`，或调用 `verify_sales_quote()`。",
+        "",
+        "## 3. 与真实 CRM 报价比对",
         "",
         f"- 真实 CRM 中 {result.sample_name} 共 {len(gold)} 行；本工具生成 {len(result.lines)} 行。",
         f"- 项目名称一致 {name_ok}/{compared}，含税单价一致 {price_ok}/{compared}，数量一致 {qty_ok}/{compared}，单位映射一致 {unit_ok}/{compared}。",
         "- 价格/数量 100% 来自 DVP 输入列；单位按字典映射（席位→席位/次、袋子→次）。",
         "",
-        "## 3. 报价明细",
+        "## 4. 报价明细",
         "",
         "| # | 试验项目 | 科室 | 单位 | 数量 | 含税单价 | 折扣 | 折后金额 |",
         "|---:|---|---|---|---:|---:|---:|---:|",
@@ -162,16 +181,17 @@ def main() -> int:
         )
     lines += [
         "",
-        "## 4. 交付物",
+        "## 5. 交付物",
         "",
         f"- CRM 报价草稿：`{crm_path}`",
         f"- 销售报价表（已填）：`{sales_path}`",
         f"- 结构化明细：`{out_dir / 'quote_lines.json'}`",
         f"- 比对指标：`{out_dir / 'quote_eval.json'}`",
         "",
-        "## 5. 说明与限制",
+        "## 6. 说明与限制",
         "",
-        "- 销售报价表保留原模板公式（C10/C11/C12/C13/C15），并新增「报价明细」sheet 便于核对。",
+        "- 销售报价表的金额已写入实际单元格；模板原公式保留在「计算口径」sheet，便于追溯。",
+        "- 生成后 `verify_sales_quote()` 重新打开文件，逐项断言 9 个金额单元格及 5 条算术关系；不一致会抛错。",
         "- 本案例为纯试验服务，产品金额按 0 处理；服务税率 6%。",
         "- 折扣 60% 来自销售政策/合同参数，不在 DVP 中；P0 不自动推断折扣。",
         "- 未做 CRM 写回、审批流和客户侧自动报价；这些不在 P0 范围。",
@@ -179,7 +199,18 @@ def main() -> int:
     ]
     (out_dir / "quote_report.md").write_text("\n".join(lines), encoding="utf-8")
 
-    print(json.dumps({"summary": summary, "metrics": metrics, "preview": preview}, ensure_ascii=False, indent=1))
+    print(
+        json.dumps(
+            {
+                "summary": summary,
+                "metrics": metrics,
+                "preview": preview,
+                "sales_quote_verification": sales_verification,
+            },
+            ensure_ascii=False,
+            indent=1,
+        )
+    )
     print(f"out -> {out_dir}")
     return 0
 

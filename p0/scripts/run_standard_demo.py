@@ -107,9 +107,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--epb-file", required=True, help="EPB sample PDF filename inside --data-dir")
-    parser.add_argument("--pp-file", required=True, help="PP sample PDF filename inside --data-dir")
-    parser.add_argument("--epb-gold", required=True, help="existing reviewed EPB workbook filename inside --data-dir")
+    parser.add_argument("--epb-file", required=True, help="sample A PDF filename inside --data-dir")
+    parser.add_argument("--pp-file", required=True, help="sample B PDF filename inside --data-dir")
+    parser.add_argument("--epb-gold", required=True, help="existing reviewed sample A workbook filename inside --data-dir")
     parser.add_argument("--pp-expected", default=str(ROOT / "eval" / "pp_items.json"))
     args = parser.parse_args()
 
@@ -171,7 +171,7 @@ def main() -> int:
         "",
         f"- 生成时间：{eval_result['generated_at']}",
         "- 方法：本地 PDF 文本层 + 标准自带项目表/材料性能表；未调用外部模型或公网 OCR",
-        "- 样本：EPB 制动钳（44 项，金标准为既有解析表）；PP 材料（21 项，金标准为《标准解析诉求》场景 1 清单）",
+        "- 样本：样例标准 A（44 项，金标准为既有解析表）；样例标准 B（21 项，金标准为业务清单）",
         "",
         "| 标准 | 期望项 | 解析项 | 项名完全一致 | 模糊匹配(≥0.8) | 召回 | 精确 | 条款/页码可溯源 | 技术要求完整 | 试验方法完整 |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -187,16 +187,16 @@ def main() -> int:
         "",
         "## 自评结论",
         "",
-        "- 两个真实样例均跑通，项目召回均为 100%；EPB 44/44、PP 21/21。",
-        "- EPB 项名 41/44 完全一致，3 项为业务同义词（拖滞扭矩/拖滞力矩 2 项、活塞启动力压力/活塞启动压力 1 项），模糊匹配均为 1.0 覆盖。",
-        "- 所有项目的条款、试验方法条款和页码均可回溯；EPB 的 44 项技术要求/试验方法正文完整。",
-        "- PP 的材料性能表为多页合并单元格，PDF 水印碎片会污染数值文本；已做清洗，但数值字段仍需人工复核（置信度 0.7）。",
-        "- 扫描件（QSQR SS8-46）本增量不做 OCR，明确返回不可解析，不伪造结果。",
+        "- 两个真实样例均跑通，项目召回均为 100%；样例 A 44/44、样例 B 21/21。",
+        "- 样例 A 项名 41/44 完全一致，3 项为业务同义词，模糊匹配均为 1.0 覆盖。",
+        "- 所有项目的条款、试验方法条款和页码均可回溯；样例 A 的 44 项技术要求/试验方法正文完整。",
+        "- 样例 B 的材料性能表为多页合并单元格，PDF 水印碎片会污染数值文本；已做清洗，但数值字段仍需人工复核（置信度 0.7）。",
+        "- 扫描件已支持本地 OCR（P1，见 scripts/run_ocr_demo.py），未识别字段返回复核提示，不伪造结果。",
         "",
         "## 已知限制",
         "",
         "- 未使用 LLM，复杂合并表/公式/修约规则依赖规则解析 + 人工复核。",
-        "- PP 的屈服伸长率、弯曲模量等项目按客户清单合并为「拉伸强度/屈服伸长率」「弯曲强度/弯曲模量」一行。",
+        "- 样例 B 的部分项目按客户清单合并为一行。",
         "- 本指标只作 P0 基线；样本量小，不作为生产验收。",
         "",
         "## 交付物",
