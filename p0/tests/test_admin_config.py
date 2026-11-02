@@ -244,6 +244,36 @@ def _dvp(path) -> None:
     workbook.save(path)
 
 
+def test_multiformat_quote_path_uses_custom_header_aliases(tmp_path):
+    config = copy.deepcopy(admin_config.default_config()["quote"])
+    config["default_discount"] = 55
+    config["product_tax_rate"] = 0.1
+    config["headers"]["item"] = ["自定义项目"]
+    config["headers"]["price"] = ["自定义单价"]
+    config["unit_map"] = {"席位": "人天"}
+    source = tmp_path / "DVP.xlsx"
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = "DVP"
+    ws["C8"] = "自定义项目"
+    ws["R9"] = "自定义单价"
+    ws["S9"] = "数量"
+    ws["T9"] = "单位"
+    ws["C11"] = "自定义试验项目"
+    ws["R11"] = 100
+    ws["S11"] = 2
+    ws["T11"] = "席位"
+    workbook.save(source)
+
+    result = quote.parse_quote_bytes(
+        source.read_bytes(), "DVP.xlsx", rule_config=config
+    )
+    assert result.lines[0].item_name == "自定义试验项目"
+    assert result.lines[0].unit == "人天"
+    assert result.lines[0].discount == 55
+    assert result.product_tax_rate == 0.1
+
+
 def test_quote_rules_change_headers_units_tax_and_crm_columns(config_path, tmp_path):
     config = copy.deepcopy(admin_config.default_config()["quote"])
     config["default_discount"] = 50

@@ -562,29 +562,43 @@ function renderQuote(data) {
   const summary = data.summary || {};
   const preview = data.preview || {};
   const verification = data.sales_quote_verification;
-  const badge = verification
-    ? (verification.ok ? '<span class="pill success">金额自检通过</span>' : '<span class="pill danger">金额自检失败</span>')
-    : '<span class="pill warn">未提供模板，仅生成 CRM 草稿</span>';
+  const parseMethod = summary.parse_method || 'Excel 表格';
+  const unpriced = Number(summary.unpriced_lines || 0);
+  const partial = unpriced > 0;
+  const skipReason = data.sales_quote_skipped_reason || '';
+  let badge;
+  if (verification) badge = verification.ok ? '<span class="pill success">金额自检通过</span>' : '<span class="pill danger">金额自检失败</span>';
+  else if (partial) badge = `<span class="pill warn">${unpriced} 行待补单价</span>`;
+  else badge = '<span class="pill warn">未提供模板，仅生成 CRM 草稿</span>';
   const verifyPills = verification && verification.checks
     ? `<div class="verify-list">${verification.checks.map((check) => `<span class="pill ${check.ok ? 'success' : 'danger'}">${escapeHtml(check.cell)} ${escapeHtml(check.field)}</span>`).join('')}</div>`
     : '';
+  const warnings = Array.isArray(summary.warnings) ? summary.warnings : [];
+  const warningBlock = partial
+    ? `<div class="banner warn">${ic('alert')}<span><b>${unpriced}/${summary.lines || 0}</b> 行没有单价：CRM 草稿已标注「待补单价」，本次不生成销售报价表；补齐单价后可重新生成。</span></div>`
+    : (skipReason ? `<div class="banner info">${ic('file')}<span>${escapeHtml(skipReason)}</span></div>` : '');
+  const warningList = warnings.length
+    ? `<ul class="check-list quote-warnings">${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join('')}</ul>`
+    : '';
   $('quoteResult').innerHTML = `
+    ${warningBlock}
     <div class="quote-hero">
-      <div class="quote-price"><span>最终价格（含税）</span><b>¥ ${money(summary.final_price)}</b><small>销售报价 ${money(summary.sales_amount)} 元 · 服务税额 ${money(summary.service_tax)} 元</small></div>
-      <div class="quote-badges">${badge}<span class="pill info">${escapeHtml(summary.sample_name || '已生成报价')}</span></div>
+      <div class="quote-price"><span>${partial ? '已计价部分（含税）' : '最终价格（含税）'}</span><b>¥ ${money(summary.final_price)}</b><small>销售报价 ${money(summary.sales_amount)} 元 · 服务税额 ${money(summary.service_tax)} 元</small></div>
+      <div class="quote-badges">${badge}<span class="pill info">${escapeHtml(summary.sample_name || '已生成报价')}</span><span class="pill neutral">${escapeHtml(parseMethod)}</span></div>
     </div>
     <div class="kpi-grid five">
-      ${kpi(summary.lines ?? 0, '明细行', 'neutral', 'file')}
-      ${kpi(`¥ ${money(summary.subtotal)}`, 'DVP 小计', 'neutral', 'calc')}
+      ${kpi(summary.lines ?? 0, '解析明细', 'neutral', 'file')}
+      ${kpi(`${summary.priced_lines}/${summary.lines}`, '含单价行', partial ? 'warn' : 'neutral', 'check')}
+      ${kpi(`¥ ${money(summary.subtotal)}`, partial ? '已计价小计' : '明细小计', 'neutral', 'calc')}
       ${kpi(`¥ ${money(summary.service_amount)}`, '服务金额', 'neutral', 'shield')}
       ${kpi(`¥ ${money(summary.total_with_tax)}`, '税价合计', 'neutral', 'chart')}
-      ${kpi(`¥ ${money(summary.product_amount)}`, '产品金额', 'neutral', 'layers')}
     </div>
     <div class="quote-actions">
       <button type="button" class="btn btn-primary" data-download="${escapeHtml(data.quote_id)}" data-kind="crm">${ic('download')}下载 CRM 报价草稿</button>
       ${data.files && data.files.sales_quote ? `<button type="button" class="btn btn-secondary" data-download="${escapeHtml(data.quote_id)}" data-kind="sales">${ic('download')}下载销售报价表</button>` : ''}
     </div>
     <div class="breakdown">${Object.entries(preview).map(([label, value]) => `<div class="breakdown-row"><span>${escapeHtml(label)}</span><b>${typeof value === 'number' ? money(value) : escapeHtml(value)}</b></div>`).join('')}</div>
+    ${warningList}
     ${verifyPills}
     <details class="raw-details"><summary>查看接口原始数据</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
   $('quoteEmpty').classList.add('hidden');
@@ -1143,7 +1157,7 @@ function bindEvents() {
 
   setupDropzone('reportDrop', 'reportFile', { title: '点击选择，或把报告拖到这里', sub: '只看结构、字段与标记，不上传外部服务' });
   setupDropzone('stdDrop', 'stdFile', { title: '选择标准 PDF', sub: '数字版 / 扫描件均可' });
-  setupDropzone('quoteDrop', 'quoteFile', { title: '选择 DVP / 测试大纲', sub: '.xlsx / .xlsm' });
+  setupDropzone('quoteDrop', 'quoteFile', { title: '选择报价输入', sub: '.xlsx / .xls / .pdf / .png / .jpg' });
   setupDropzone('templateDrop', 'quoteTemplate', { title: '选择销售报价表模板', sub: '不提供时只生成 CRM 草稿' });
 
   $('auditBtn').addEventListener('click', async () => {
@@ -1269,7 +1283,7 @@ function bindEvents() {
 
   $('quoteBtn').addEventListener('click', async () => {
     const file = $('quoteFile').files[0];
-    if (!file) { toast('请先选择 DVP / 测试大纲', 'info'); return; }
+    if (!file) { toast('请先选择报价输入文件', 'info'); return; }
     const template = $('quoteTemplate').files[0];
     busy($('quoteBtn'), true, '生成中…');
     $('quoteStatus').textContent = '';
@@ -1281,7 +1295,7 @@ function bindEvents() {
       const data = await jsonFetch('api/v1/quotes/generate', { method: 'POST', body: form });
       renderQuote(data);
       $('quoteStatus').textContent = '完成';
-      toast('报价已生成');
+      toast(data.summary && data.summary.unpriced_lines ? '已生成 CRM 草稿，含待补单价行' : '报价已生成', data.summary && data.summary.unpriced_lines ? 'info' : undefined);
     } catch (error) {
       $('quoteStatus').textContent = '生成失败';
       showError(error);

@@ -269,7 +269,7 @@
           <div>
             <div class="eyebrow">Quote assistant</div>
             <h1>报价助手</h1>
-            <p>把 DVP / 测试大纲转成 CRM 报价草稿与销售报价表；单价、数量、单位只从输入读取，金额逐项自检。</p>
+            <p>把 DVP、测试大纲、客户询价报价单（Excel / PDF / 图片）转成 CRM 报价草稿与销售报价表；单价、数量、单位只从输入读取，金额逐项自检。</p>
           </div>
           <div class="page-actions"><span class="pill info"><svg class="icon" aria-hidden="true"><use href="#i-calc"/></svg>金额闭环</span></div>
         </div>
@@ -278,14 +278,14 @@
           <section class="card card-pad" id="quoteUploadCard">
             <div class="card-head">
               <div><h2>上传报价输入</h2><p>生成后自动校验 9 个金额单元格与 5 条算术关系。</p></div>
-              <span class="pill neutral">XLSX</span>
+              <span class="pill neutral">EXCEL / PDF / 图片</span>
             </div>
             <div class="field">
-              <label>DVP / 测试大纲 <span class="req">必填</span></label>
+              <label>报价输入文件 <span class="req">必填</span></label>
               <div class="dropzone compact" id="quoteDrop">
-                <input type="file" id="quoteFile" accept=".xlsx,.xlsm" hidden>
+                <input type="file" id="quoteFile" accept=".xlsx,.xls,.xlsm,.pdf,.png,.jpg,.jpeg,.webp,.bmp" hidden>
                 <span class="dz-icon"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg></span>
-                <div class="dz-body"><div class="dz-title" id="quoteFileTitle">选择 DVP / 测试大纲</div><div class="dz-sub" id="quoteFileSub">.xlsx / .xlsm</div></div>
+                <div class="dz-body"><div class="dz-title" id="quoteFileTitle">选择报价输入</div><div class="dz-sub" id="quoteFileSub">.xlsx / .xls / .pdf / .png / .jpg</div></div>
               </div>
             </div>
             <div class="field">
@@ -310,10 +310,11 @@
             <div class="tip-icon"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg></div>
             <h2>计算口径</h2>
             <ul class="check-list">
-              <li>单价、数量、单位只从 DVP 读取，不由模型生成价格。</li>
+              <li>支持 Excel、PDF、图片；图片和扫描件走服务器本地 OCR，不外发。</li>
+              <li>单价、数量、单位只从报价文件读取，不由模型生成价格。</li>
+              <li>没有单价的询价表会标「待补单价」，只生成 CRM 草稿，不生成含金额的销售报价表。</li>
               <li>折扣由销售政策参数控制，默认 60%，不做自动推断。</li>
               <li>生成后重新打开 Excel，逐项断言金额与算术关系。</li>
-              <li>同时输出 CRM 报价草稿与可下载的销售报价表。</li>
             </ul>
             <div class="notice-box mt-16">自检不通过会直接报错，不会产出金额不一致的报价表。</div>
           </aside>
@@ -322,7 +323,7 @@
           <div id="quoteEmpty" class="empty">
             <div class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-calc"/></svg></div>
             <b>报价结果会显示在这里</b>
-            <p>上传 DVP 后生成报价，这里会给出最终价格、金额构成、自检结论和下载入口。</p>
+            <p>上传报价文件后生成报价，这里会给出解析方式、金额构成、自检结论和下载入口。</p>
           </div>
           <div id="quoteResult" class="hidden"></div>
         </section>
