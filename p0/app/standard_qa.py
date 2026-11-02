@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 
+from . import weknora
 from .embeddings import (
     EmbeddingError,
     EmbeddingUnavailable,
@@ -27,7 +28,8 @@ _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 _CLAUSE = re.compile(r"\d+(?:\.\d+){1,3}")
 _LATIN = re.compile(r"[a-z][a-z0-9./+-]{1,}")
 _STANDARD = re.compile(
-    r"(?:Q/[A-Z]{2,6}|QMAT|QSQR|QJD|SQR|VW)\s*[A-Z]{0,4}\s*\d+(?:[A-Z]\d*)?(?:-\d{2,4})*(?:-\d{4})?",
+    r"(?:Q/[A-Z]{2,6}|QMAT|QSQR|QJD|SQR|VW|ISO|GB(?:/T)?|QC/T|JB/T)"
+    r"\s*[A-Z]{0,4}\s*\d+(?:[A-Z]\d*)?(?:-\d{2,4})*(?:-\d{4})?",
     re.I,
 )
 _STOP_PHRASES = re.compile(
@@ -123,6 +125,37 @@ def _focus(question: str) -> str:
     text = _STOP_PHRASES.sub(" ", text)
     text = re.sub(r"[？?，,。；;：:\s]", "", text)
     return text.lower()
+
+
+def _domain_terms(text: str) -> set[str]:
+    """CJK bigrams + latin tokens after the citation/stop boilerplate is gone."""
+    _clauses, latin, bigrams = _terms(_focus(text))
+    return bigrams | {token for token in latin if len(token) >= 2}
+
+
+def _domain_match(question: str, pool: list[dict]) -> bool:
+    """Cheap domain guard before paying for WeKnora retrieval.
+
+    The hybrid retriever always returns *some* nearest chunk, so a completely
+    unrelated question (ISO 9001, weather, contracts) would otherwise be
+    answered from a visibly unrelated clause.  A question must share either an
+    item-name substring or at least two content terms with the published pool.
+    """
+    focus = _focus(question)
+    if len(focus) < 2:
+        return False
+    for chunk in pool:
+        name = re.sub(r"\s+", "", str(chunk.get("item_name", "")).lower())
+        if len(name) >= 2 and (name in focus or focus in name):
+            return True
+    question_terms = _domain_terms(question)
+    if not question_terms:
+        return False
+    known: set[str] = set()
+    for chunk in pool:
+        known |= _domain_terms(str(chunk.get("item_name", "")))
+        known |= _domain_terms(str(chunk.get("text", "")))
+    return len(question_terms & known) >= 2
 
 
 def _score(question: tuple[set[str], set[str], set[str]], chunk: dict) -> float:
@@ -428,6 +461,170 @@ def answer_vector(
     return _answer_payload(best, chosen, retrieval)
 
 
+def answer_weknora(
+    question: str,
+    kbs: list[dict],
+    *,
+    min_score: float | None = None,
+    top_k: int | None = None,
+) -> dict:
+    """Answer from WeKnora retrieval with the same citation/refusal contract.
+
+    The local published chunks are used for exact clause/page metadata and for
+    the guard rails (a clause or standard that was never published is refused
+    before asking WeKnora, so a stale remote index cannot invent it).
+    """
+    question = (question or "").strip()
+    if not question:
+        return _refusal("请输入问题。", "weknora")
+    if not kbs:
+        return _refusal("未找到相关标准内容：知识库中还没有已发布的标准。", "weknora")
+    if not weknora.configured():
+        raise weknora.WeKnoraUnavailable("未配置 WeKnora 知识底座")
+
+    min_score = weknora.DEFAULT_MIN_SCORE if min_score is None else float(min_score)
+    all_chunks = [chunk for kb in kbs for chunk in kb.get("chunks", [])]
+    clause_candidates = _clause_candidates(question)
+    clause_chunks: list[dict] = []
+    if clause_candidates:
+        clause_chunks = [
+            chunk
+            for chunk in all_chunks
+            if any(
+                str(chunk.get("clause", "")) == asked
+                or str(chunk.get("clause", "")).startswith(asked + ".")
+                for asked in clause_candidates
+            )
+        ]
+        if not clause_chunks:
+            asked = sorted(clause_candidates)[0]
+            return _refusal(
+                f"未找到相关标准内容：已发布标准中没有条款 {asked}。",
+                "weknora",
+                clause_filter=sorted(clause_candidates),
+            )
+
+    asked_standards = _STANDARD.findall(question)
+    allowed_standards: set[str] = set()
+    if asked_standards:
+        known = [kb.get("standard_no", "") for kb in kbs]
+        matched = [asked for asked in asked_standards if _standard_matches(asked, known)]
+        if not matched:
+            return _refusal(
+                (
+                    f"未找到相关标准内容：知识库中没有标准 {asked_standards[0]}。"
+                    "系统不会凭记忆或常识编造标准条款。"
+                ),
+                "weknora",
+                standard_filter=asked_standards,
+            )
+        for asked in matched:
+            for known_no in known:
+                if _standard_matches(asked, [known_no]):
+                    allowed_standards.add(_std_key(known_no))
+
+    pool = clause_chunks or all_chunks
+    if allowed_standards:
+        pool = [chunk for chunk in pool if _std_key(chunk.get("standard_no", "")) in allowed_standards]
+    if not pool:
+        return _refusal(
+            "未找到相关标准内容：问题指定的标准与条款组合不在知识库中。",
+            "weknora",
+            clause_filter=sorted(clause_candidates),
+            standard_filter=asked_standards,
+        )
+    if not clause_candidates and not asked_standards and not _domain_match(question, pool):
+        names = "、".join(kb.get("standard_name", "") for kb in kbs[:3])
+        return _refusal(
+            (
+                "未找到相关标准内容：问题与已发布标准的条款/项目没有可核实的对应关系。"
+                "当前已发布标准：" + (names or "无") +
+                "。系统不会凭记忆或常识编造标准条款。"
+            ),
+            "weknora",
+            domain_guard="no_overlap",
+        )
+
+    knowledge_ids = [
+        knowledge_id
+        for kb in kbs
+        if (
+            not allowed_standards
+            or _std_key(kb.get("standard_no", "")) in allowed_standards
+        )
+        for knowledge_id in [(kb.get("weknora") or {}).get("knowledge_id")]
+        if knowledge_id
+    ]
+    result = weknora.search(
+        question,
+        pool,
+        knowledge_ids=knowledge_ids,
+        top_k=max(1, top_k or DEFAULT_TOP_K),
+    )
+    citations = result.get("citations") or []
+    filtered = []
+    for citation in citations:
+        clause = str(citation.get("clause", ""))
+        if clause_candidates and not any(
+            clause == asked or clause.startswith(asked + ".")
+            for asked in clause_candidates
+        ):
+            continue
+        if allowed_standards and _std_key(citation.get("standard_no", "")) not in allowed_standards:
+            continue
+        filtered.append(citation)
+    citations = filtered
+    if not citations:
+        names = "、".join(kb.get("standard_name", "") for kb in kbs[:3])
+        return _refusal(
+            "未找到相关标准内容。当前已发布标准：" + (names or "无") +
+            "。系统不会凭记忆或常识编造标准条款。",
+            "weknora",
+            kb_id=result.get("kb_id"),
+        )
+
+    top_score = result.get("top_score")
+    if top_score is not None and top_score < min_score and not clause_candidates:
+        names = "、".join(kb.get("standard_name", "") for kb in kbs[:3])
+        return _refusal(
+            (
+                "未找到相关标准内容。当前已发布标准：" + (names or "无") +
+                f"。最相近条款的相关度 {top_score:.3f} 低于阈值 {min_score:.2f}，"
+                "系统不会凭记忆或常识编造标准条款。"
+            ),
+            "weknora",
+            top_score=top_score,
+            min_score=min_score,
+            kb_id=result.get("kb_id"),
+        )
+
+    best = citations[0]
+    lines = [
+        f"《{best.get('standard_name') or best.get('standard_no', '')}》"
+        f"{best.get('clause', '')} {best.get('item_name', '')}".strip()
+    ]
+    for citation in citations:
+        page = citation.get("page")
+        page_text = f"第 {page} 页" if page is not None else "页码未提供"
+        lines.append(
+            f"【{citation.get('kind_label', '知识片段')}】{page_text}："
+            f"{citation.get('quote', '')}"
+        )
+    return {
+        "found": True,
+        "answer": "\n".join(lines),
+        "citations": citations,
+        "retrieval": {
+            "mode": "weknora",
+            "kb_id": result.get("kb_id"),
+            "top_score": top_score,
+            "min_score": min_score,
+            "knowledge_ids": knowledge_ids,
+        },
+    }
+
+
+
 def answer(
     question: str,
     kbs: list[dict],
@@ -438,20 +635,35 @@ def answer(
     min_score: float | None = None,
     top_k: int | None = None,
 ) -> dict:
-    """Answer a question with vector retrieval (P1) or the keyword baseline.
+    """Answer with WeKnora (default), the local vector index, or keyword mode.
 
-    ``mode``: ``auto`` (vector, keyword fallback), ``vector`` (fail if the
-    embedding service is down) or ``keyword`` (baseline/comparison).
+    ``mode``:
+    * ``auto`` / ``weknora`` / ``hybrid`` – WeKnora retrieval; when WeKnora is
+      required (the production default) an outage is surfaced instead of being
+      hidden behind a different knowledge base;
+    * ``local`` / ``vector`` – the P1 bge-m3 local index (debug/offline);
+    * ``keyword`` – the deterministic P0 baseline (comparison only).
     """
-    if mode not in {"auto", "vector", "keyword"}:
+    if mode in {"weknora", "hybrid"}:
+        mode = "auto"
+    if mode not in {"auto", "local", "vector", "keyword"}:
         raise ValueError(f"unknown retrieval mode: {mode}")
     if mode == "keyword":
         return answer_keyword(question, kbs)
+    if mode == "auto":
+        if weknora.configured():
+            try:
+                return answer_weknora(question, kbs, min_score=min_score, top_k=top_k)
+            except weknora.WeKnoraUnavailable as exc:
+                if weknora.required():
+                    raise VectorUnavailable(f"WeKnora 检索暂不可用：{exc}") from exc
+        elif weknora.required():
+            raise VectorUnavailable("WeKnora 是唯一知识底座，但尚未配置连接")
     try:
         client = embedder or default_embedder()
         if client is None:
             raise EmbeddingUnavailable("P0_EMBEDDING_URL is disabled")
-        return answer_vector(
+        result = answer_vector(
             question,
             kbs,
             client,
@@ -459,8 +671,11 @@ def answer(
             min_score=min_score,
             top_k=top_k,
         )
+        if mode == "auto":
+            result["retrieval"]["mode"] = "local-fallback"
+        return result
     except EmbeddingError as exc:
-        if mode == "vector":
+        if mode in {"local", "vector"}:
             raise VectorUnavailable(f"{_VECTOR_UNAVAILABLE_MESSAGE}（{exc}）") from exc
         result = answer_keyword(question, kbs)
         result["retrieval"]["mode"] = "keyword-fallback"

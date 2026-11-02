@@ -5,12 +5,19 @@ P0 的四个可运行切片：
 - **报告审核**——确定性规则 + 记录校验 API（R01–R11），带问题清单/证据/建议与 Markdown 审核报告。
 - **标准解析**——数字版标准 PDF → 条款/项目/技术要求/试验方法结构化结果，支持人工复核、Excel 导出、发布知识库与带引用问答。
 - **报价助手**——DVP/测试大纲 Excel → CRM 报价草稿 + 客户「销售报价表」，价格/数量/单位来自输入，不做模型生成价格。
-- **知识问答**——本地条款级索引重建、5 个带引用问答样例；标准不在库时明确拒答。
+- **知识问答**——WeKnora 唯一知识底座检索，带标准号/条款/页码引用；库外标准、库外条款或相关度不足时明确拒答。
 
-P1 前三项增量（本轮）：
+P0 受控上线（0.5）：
+
+- **登录与审计**——账号密码登录、8 小时签名会话、角色（admin/reviewer/viewer）、登录与业务 API 审计；
+- **HTTPS**——同域名 `/p0/` 反向代理到本机 8090；登录、四条链路与下载均走 HTTPS；
+- **WeKnora 唯一知识底座**——标准发布写入 WeKnora 专用知识库，问答只从 WeKnora 检索，引用可回溯；
+- **四条链路**——报告审核、标准解析、报价助手、知识问答均有可操作 UI 与 API。
+
+P1 前三项增量（2026-11-02 已合并）：
 
 - **报价闭环**——产品金额/服务金额/税价合计/最终价格写入「销售报价表-生成.xlsx」实际单元格；生成后逐项自检，表内数字与计算不一致直接报错。
-- **向量检索**——知识问答接入现有 WeKnora 的 Ollama `bge-m3`（免费本地），替换 n-gram 关键词打分；保留关键词基线做前后对比；库外标准/领域仍明确拒答。
+- **向量检索**——本地 `bge-m3` 向量检索作为离线/调试路径；生产问答已切到 WeKnora 唯一知识底座（0.5），保留关键词基线做前后对比。
 - **扫描件 OCR**——`rapidocr_onnxruntime` + `pypdfium2` 本地 OCR，解析「试验方法和性能要求」合并章节，输出字段级置信度与人工复核清单。
 
 ## 运行
@@ -35,6 +42,25 @@ docker compose up -d --build
 向量检索使用 Ollama 的 `bge-m3`，默认 `P0_EMBEDDING_URL=http://127.0.0.1:11434`；
 WeKnora 服务器上 Ollama 只在容器网络内时，可设为容器地址（如 `http://<ollama-container-ip>:11434`）或先做端口转发。
 `P0_EMBEDDING_URL=off` 可关闭向量检索、退回关键词模式。
+
+## 访问与登录
+
+生产入口：`https://<DOMAIN>/p0/`。未登录访问页面会跳转 `/login`，访问 `/api/*` 返回 401。
+账号存放在 `data/auth/users.json`（PBKDF2-SHA256），会话是 HMAC 签名的 HttpOnly Cookie。
+管理员可用接口或 `scripts/manage_users.py` 创建账号：
+
+```bash
+.venv/bin/python scripts/manage_users.py add <user> <admin|reviewer|viewer>
+.venv/bin/python scripts/manage_users.py reset <user>
+```
+
+- `POST /api/v1/auth/login`（JSON `username/password`，成功后设置 Cookie）
+- `POST /api/v1/auth/logout`
+- `GET  /api/v1/auth/me`
+- `GET/POST /api/v1/auth/users`（管理员）
+- `POST /api/v1/auth/password`（本人改密）
+- `GET  /api/v1/audit/recent`（管理员，最近审计事件）
+- `GET  /api/v1/system/status`（登录后，版本/WeKnora 配置状态）
 
 ## 接口
 
@@ -82,17 +108,20 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 模板原公式保留在「计算口径」sheet；`verify_sales_quote()` 重新打开文件逐项断言 9 个金额单元格和 5 条算术关系，
 不一致抛 `QuoteSelfCheckError`，API 返回 500。
 
-### 知识问答
+### 知识问答（WeKnora 唯一知识底座）
 
-- `POST /api/v1/kb/rebuild` → 重建全部标准的条款级索引，写 `data/standards/kb_index.json`
-- `GET /api/v1/kb/stats` → 索引统计
-- `POST /api/v1/standards/ask` → `{"question":"...","standard_id":"...","mode":"auto|vector|keyword","top_k":6}`
-  带引用问答；返回 `retrieval.mode/top_score/candidates`
+- `POST /api/v1/standards/ask` → `{"question":"...","standard_id":"...","mode":"auto|weknora|local|keyword","top_k":6}`
+  带引用问答；返回 `retrieval.mode/top_score/kb_id/knowledge_ids` 与 `citations[]`
+- `POST /api/v1/kb/rebuild` → 重建本地条款级审计索引（不再作为生产问答来源）
+- `GET /api/v1/kb/stats` → 本地索引统计
 
-默认 `mode=auto`：用 bge-m3 向量检索，embedding 服务不可用时退回关键词并标 `keyword-fallback`；
-`mode=vector` 在服务不可用时返回 503，`mode=keyword` 用于前后对比。
-向量检索的守卫：条款号必须存在、标准号必须在库、未命中条款且相似度低于阈值（默认 0.60）时明确拒答。
-向量缓存写 `data/standards/kb_vectors.json`，按 chunk id + 文本哈希校验，重建索引后自动失效。
+默认 `mode=auto`：调用 WeKnora 的混合检索（向量+关键词），用本地已发布 chunk 的元数据把命中内容映射回
+标准号/条款/页码；`P0_WEKNORA_REQUIRED=1` 时 WeKnora 不可用直接 503，不会静默切回本地索引。
+`mode=local|vector` 走本地 bge-m3（离线调试/前后对比），`mode=keyword` 是 P0 关键词基线。
+
+守卫：条款号必须存在、标准号必须在库、相关度低于 `P0_WEKNORA_MIN_SCORE`（默认 0.35）时明确拒答。
+标准发布时 `POST /api/v1/standards/{id}/publish` 会写入 WeKnora 的 P0 业务专用知识库；
+重复发布更新同一条 knowledge；本地 `kb.json` 保留审计副本与 `weknora.knowledge_id`。
 
 问答只返回条款原文与标准号/条款/页码引用；标准或条款不在库时明确回答「未找到」，不编造。
 
@@ -154,14 +183,19 @@ data/standards/<id>/result.json  解析/复核结果
 data/standards/<id>/export.xlsx  Excel 导出
 data/standards/<id>/kb.json      发布后的知识片段
 data/standards/kb_index.json     重建后的合并索引
-data/standards/kb_vectors.json   bge-m3 向量缓存（P1，按 chunk 哈希失效）
+data/standards/kb_vectors.json   本地 bge-m3 向量缓存（仅调试）
+data/auth/users.json             用户与密码哈希（0600）
+data/auth/session_secret         会话签名密钥（0600）
+data/audit/audit.jsonl           登录与业务 API 审计
 data/quotes/<id>/                CRM 草稿与销售报价表
 ```
 
 可用 `P0_STANDARD_DIR`、`P0_QUOTE_DIR`、`P0_SALES_QUOTE_TEMPLATE`、`MAX_STANDARD_MB` 调整目录/模板/上限；
 OCR 可用 `P0_OCR_ENABLED=0` 关闭，`P0_OCR_DPI`（默认 220）、`P0_OCR_MAX_PAGES` 控制速度；
-向量检索可用 `P0_EMBEDDING_URL`、`P0_EMBEDDING_MODEL`、`P0_VECTOR_MIN_SCORE`、`P0_VECTOR_TOP_K`、
-`P0_VECTOR_CACHE` 调整。
+本地向量检索（仅调试）可用 `P0_EMBEDDING_URL`、`P0_EMBEDDING_MODEL`、`P0_VECTOR_MIN_SCORE`、
+`P0_VECTOR_TOP_K`、`P0_VECTOR_CACHE` 调整。
+WeKnora 用 `P0_WEKNORA_BASE_URL`、`P0_WEKNORA_API_KEY`、`P0_WEKNORA_KB_ID`、`P0_WEKNORA_REQUIRED`、
+`P0_WEKNORA_MIN_SCORE`、`P0_WEKNORA_TOP_K`、`P0_WEKNORA_RERANK` 调整。
 
 ## 测试
 
