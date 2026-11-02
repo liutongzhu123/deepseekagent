@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily CQ P0 data-layer backup (PostgreSQL + objects)
+
+[Timer]
+OnCalendar=*-*-* 03:40:00
+RandomizedDelaySec=10min
+Persistent=true
+Unit=p0-store-backup.service
+
+[Install]
+WantedBy=timers.target

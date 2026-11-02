@@ -8,9 +8,9 @@ P1-S1 turns the P0 login gate into a multi-user identity base:
 * an OIDC/SSO configuration seam (status only; local login stays the default);
 * append-only JSONL audit with filtering, CSV export and retention pruning.
 
-The dependency footprint deliberately stays at the Python standard library.  The
-JSON user store remains the interim storage until the P1 PostgreSQL work lands;
-``current_user``/``require_permission`` are the seams the API uses.
+The JSON store remains the default.  Setting ``P0_STORE=postgres`` swaps users
+and audit events to the P1 PostgreSQL data layer while keeping the JSON files
+as a rollback mirror; ``current_user``/``require_permission`` are unchanged.
 """
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from . import store
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("P0_DATA_DIR", ROOT / "data"))
@@ -241,6 +243,8 @@ def can_create_in_project(user: dict, project: str) -> bool:
 # Users
 # ---------------------------------------------------------------------------
 def load_users() -> list[dict]:
+    if store.config.postgres_enabled():
+        return store.users.load_users()
     if not USERS_PATH.exists():
         return []
     try:
@@ -252,6 +256,9 @@ def load_users() -> list[dict]:
 
 
 def save_users(users: list[dict]) -> None:
+    if store.config.postgres_enabled():
+        store.users.save_users(users)
+        return
     _atomic_write(USERS_PATH, json.dumps({"users": users}, ensure_ascii=False, indent=1))
 
 
@@ -585,6 +592,8 @@ def _read_audit() -> list[dict]:
 def prune_audit(retention_days: int | None = None) -> int:
     """Drop audit lines older than the retention window; return removed count."""
     days = AUDIT_RETENTION_DAYS if retention_days is None else int(retention_days)
+    if store.config.postgres_enabled():
+        return store.audit.prune(days)
     if days <= 0 or not AUDIT_PATH.exists():
         return 0
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -629,6 +638,13 @@ def _maybe_prune() -> None:
 
 def audit(entry: dict) -> None:
     record = {"at": _now(), **entry}
+    if store.config.postgres_enabled():
+        try:
+            store.audit.append(record)
+            _maybe_prune()
+        except Exception:  # noqa: BLE001 - auditing must never break a request
+            pass
+        return
     try:
         with _AUDIT_LOCK:
             AUDIT_DIR.mkdir(parents=True, exist_ok=True)
@@ -669,6 +685,11 @@ def filter_audit(
     date_from: str = "",
     date_to: str = "",
 ) -> list[dict]:
+    if store.config.postgres_enabled():
+        return store.audit.filter_entries(
+            user=user, role=role, event=event, method=method, path=path,
+            status=status, date_from=date_from, date_to=date_to,
+        )
     lower = _time_bound(date_from, end=False)
     upper = _time_bound(date_to, end=True)
     wanted_user = (user or "").strip().lower()
@@ -715,6 +736,12 @@ def query_audit(
 ) -> dict:
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
+    if store.config.postgres_enabled():
+        return store.audit.query(
+            user=user, role=role, event=event, method=method, path=path,
+            status=status, date_from=date_from, date_to=date_to,
+            limit=limit, offset=offset,
+        )
     matched = filter_audit(
         user=user,
         role=role,
@@ -791,7 +818,18 @@ def bootstrap() -> dict:
             password = os.getenv("P0_ADMIN_PASSWORD", "")
             generated = not password
             if generated:
-                password = secrets.token_urlsafe(18)
+                # token_urlsafe usually satisfies the policy, but not by
+                # construction (it can emit only letters).  Generate until the
+                # bootstrap password can pass the same validation as a user.
+                for _ in range(20):
+                    password = secrets.token_urlsafe(18)
+                    try:
+                        validate_password(password)
+                    except ValueError:
+                        continue
+                    break
+                else:  # pragma: no cover - statistically unreachable
+                    raise RuntimeError("could not generate a policy-compliant admin password")
             create_user(
                 username,
                 password,

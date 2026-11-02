@@ -5,13 +5,13 @@ review workbenches can call them without coupling to parser internals.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import secrets
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote as url_quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
@@ -28,12 +28,12 @@ from . import admin_config
 from . import auth
 from . import ocr as ocr_service
 from . import quote as quote_service
+from . import quote_store, store
 from . import report_writer, standard_qa, standard_store, weknora
 from .docx_parser import parse_docx
 from .pdf_text import extract_pages
 from .rules import RecordInput, audit_report, rules_catalog, validate_records
 from .standard_parser import parse_standard
-from .xlsx_writer import write_xlsx
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
@@ -52,7 +52,7 @@ AUTH_BOOTSTRAP = auth.bootstrap()
 
 app = FastAPI(
     title="中汽零部件 P1 API",
-    version="0.7.2",
+    version="0.7.3",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -110,6 +110,18 @@ def _client_ip(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else ""
+
+
+def _attachment_header(filename: str) -> str:
+    """RFC 5987 attachment header that keeps Chinese filenames intact."""
+    fallback = "".join(
+        char if 32 <= ord(char) < 127 and char not in {'"', "\\"} else "_"
+        for char in filename
+    ) or "download"
+    return (
+        f'attachment; filename="{fallback}"; '
+        f"filename*=UTF-8''{url_quote(filename, safe='')}"
+    )
 
 
 @app.middleware("http")
@@ -536,13 +548,17 @@ class AskRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
-    return {
+    payload = {
         "status": "ok",
         "service": "p0-report-review+standard-parsing+quote+weknora-qa",
         "version": app.version,
         "auth": "enabled",
         "weknora": "configured" if weknora.configured() else "missing",
+        "store": store.config.store_mode(),
     }
+    if store.config.postgres_enabled():
+        payload["object_store"] = store.config.object_store_mode()
+    return payload
 
 
 @app.get("/")
@@ -834,9 +850,8 @@ def export_standard(standard_id: str, request: Request) -> FileResponse:
         + [item.get(field["key"], "") for field in fields]
         for item in record["items"]
     ]
-    path = standard_store.export_path(standard_id)
-    write_xlsx(
-        path,
+    data = standard_store.export_bytes(
+        standard_id,
         [
             ("实检项目", summary_rows, [16, 28, 32]),
             (
@@ -850,10 +865,10 @@ def export_standard(standard_id: str, request: Request) -> FileResponse:
         f"{meta.get('standard_no') or meta.get('name', 'standard')}-解析.xlsx"
     )
     _audit_event(request, user, "standard_exported", standard_id=standard_id)
-    return FileResponse(
-        path,
+    return Response(
+        content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=filename,
+        headers={"Content-Disposition": _attachment_header(filename)},
     )
 
 
@@ -978,26 +993,21 @@ async def generate_quote(
         quote_id = "q_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
         directory = QUOTE_DIR / quote_id
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "meta.json").write_text(
-            json.dumps(
-                {
-                    "quote_id": quote_id,
-                    "project": project,
-                    "created_by": user["username"],
-                    "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "source_name": filename,
-                    "parse_method": result.parse_method,
-                    "lines": len(result.lines),
-                    "priced_lines": result.priced_lines,
-                },
-                ensure_ascii=False,
-                indent=1,
-            ),
-            encoding="utf-8",
-        )
+        meta = {
+            "quote_id": quote_id,
+            "project": project,
+            "created_by": user["username"],
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source_name": filename,
+            "parse_method": result.parse_method,
+            "lines": len(result.lines),
+            "priced_lines": result.priced_lines,
+        }
+        stored_files: dict[str, bytes] = {}
         crm_path = quote_service.write_crm_xlsx(
             directory / "CRM报价草稿.xlsx", result, quote_cfg["crm_columns"]
         )
+        stored_files["CRM报价草稿.xlsx"] = Path(crm_path).read_bytes()
         files = {"crm": f"{ROOT_PATH}/api/v1/quotes/{quote_id}/crm.xlsx"}
 
         template_bytes = await template.read() if template is not None else b""
@@ -1006,6 +1016,7 @@ async def generate_quote(
             template_name = template.filename or "sales-template.xlsx"
             template_path = str(directory / template_name)
             Path(template_path).write_bytes(template_bytes)
+            stored_files[template_name] = template_bytes
         configured = os.getenv("P0_SALES_QUOTE_TEMPLATE", "")
         sales_verification = None
         sales_skipped_reason = ""
@@ -1028,7 +1039,9 @@ async def generate_quote(
                 },
             )
             sales_verification = quote_service.verify_sales_quote(sales_out, result)
+            stored_files["销售报价表-生成.xlsx"] = Path(sales_out).read_bytes()
             files["sales_quote"] = f"{ROOT_PATH}/api/v1/quotes/{quote_id}/sales.xlsx"
+        quote_store.create(meta, stored_files, base_dir=QUOTE_DIR)
         _audit_event(
             request, user, "quote_generated", quote_id=quote_id,
             project=project, lines=result.summary().get("lines", 0),
@@ -1060,45 +1073,36 @@ _QUOTE_ID = re.compile(r"^q_[0-9]{14}_[0-9a-f]{6}$")
 def _quote_meta(quote_id: str) -> dict:
     if not _QUOTE_ID.fullmatch(quote_id):
         raise HTTPException(status_code=404, detail="quote not found")
-    path = QUOTE_DIR / quote_id / "meta.json"
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    meta = quote_store.load(quote_id, base_dir=QUOTE_DIR)
+    return meta if isinstance(meta, dict) else {}
 
 
-def _quote_file(quote_id: str, name: str, request: Request) -> Path:
+def _quote_download(quote_id: str, name: str, request: Request, filename: str) -> Response:
     user = _require_permission(request, "quote:download")
     if not _QUOTE_ID.fullmatch(quote_id):
         raise HTTPException(status_code=404, detail="quote not found")
     meta = _quote_meta(quote_id)
     _assert_project_access(user, meta)
-    path = QUOTE_DIR / quote_id / name
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="quote file not found")
+    try:
+        data = quote_store.read_file(quote_id, name, base_dir=QUOTE_DIR)
+    except (KeyError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail="quote file not found") from None
     _audit_event(request, user, "quote_downloaded", quote_id=quote_id, file_name=name)
-    return path
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": _attachment_header(filename)},
+    )
 
 
 @app.get("/api/v1/quotes/{quote_id}/crm.xlsx")
-def download_crm(quote_id: str, request: Request) -> FileResponse:
-    return FileResponse(
-        _quote_file(quote_id, "CRM报价草稿.xlsx", request),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="CRM报价草稿.xlsx",
-    )
+def download_crm(quote_id: str, request: Request) -> Response:
+    return _quote_download(quote_id, "CRM报价草稿.xlsx", request, "CRM报价草稿.xlsx")
 
 
 @app.get("/api/v1/quotes/{quote_id}/sales.xlsx")
-def download_sales_quote(quote_id: str, request: Request) -> FileResponse:
-    return FileResponse(
-        _quote_file(quote_id, "销售报价表-生成.xlsx", request),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename="销售报价表-生成.xlsx",
-    )
+def download_sales_quote(quote_id: str, request: Request) -> Response:
+    return _quote_download(quote_id, "销售报价表-生成.xlsx", request, "销售报价表-生成.xlsx")
 
 
 # ---------------------------------------------------------------------------

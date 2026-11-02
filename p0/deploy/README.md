@@ -1,4 +1,4 @@
-# 部署说明（P0 受控上线 0.5 + P1-S1 身份/权限/审计 0.6）
+# 部署说明（P0 受控上线 0.5 + P1-S1 身份/权限/审计 0.6 + P1-1 数据层 0.7.3）
 
 当前 P0 服务器（`<P0_HOST>`，真实地址只在工单/服务器本地）使用 **venv + systemd** 运行：
 `/opt/cq-ai-p0`，服务名 `cq-p0-api`，监听 `127.0.0.1:8090`。
@@ -32,8 +32,21 @@ P0_OCR_ENABLED=1
 P0_AUDIT_RETENTION_DAYS=180
 MAX_UPLOAD_MB=20
 MAX_STANDARD_MB=200
+
+# P1-1 数据层（迁移完成前保持 P0_STORE=json）
+P0_STORE=json
+# P0_DATABASE_URL=postgresql+psycopg://p0:<password>@127.0.0.1:5432/p0
+# P0_OBJECT_STORE=minio
+# P0_MINIO_ENDPOINT=127.0.0.1:9000
+# P0_MINIO_ACCESS_KEY=<minio access key>
+# P0_MINIO_SECRET_KEY=<minio secret key>
+# P0_MINIO_BUCKET=cq-p0
+# P0_MINIO_SECURE=0
+# P0_STORE_MIRROR=1
 ```
 
+- `P0_STORE=postgres` 的完整迁移/对账/回滚步骤见 `docs/p1-data-layer/README.md`；
+  迁移完成前不要打开该开关。
 - 首次启动若没有 `P0_ADMIN_PASSWORD`，会在 `data/auth/initial_admin_password.txt`
   生成一次性密码（0600）；设置环境变量后该文件会被删除。
 - `P0_WEKNORA_RERANK=1` 会改用带重排的 `/knowledge-search`，精度更高但明显更慢；
@@ -145,16 +158,22 @@ HTTP 自动跳 HTTPS。
 - 用户与密码哈希：`data/auth/users.json`（0600）；会话密钥：`data/auth/session_secret`；
 - 解析原件、复核结果、导出、报价：`data/standards/`、`data/quotes/`；
 - 管理端规则配置：`data/config/rules.json`（0600，随每日快照一起备份）；
+- `P0_STORE=postgres` 后，同一批数据的主副本在 PostgreSQL 与 MinIO；
+  JSON 树是迁移期镜像/回滚点，仍会同步写入；对象存储的本地目录模式在 `data/objects/`；
 - 以上均含客户保密材料，禁止复制到仓库或外发。
 
-## CI 与数据备份（P1-0.5）
+## CI 与数据备份（P1-0.5 / P1-1）
 
 - CI：`.github/workflows/p0-ci.yml`，push/PR 到 `main` 且改动 `p0/**` 时跑 pytest；
-- 每日快照：`p0-backup.timer`（03:30，`Persistent=true`）调用
+  P1-1 起附带 PostgreSQL 16 service，集成测试通过 `P0_TEST_DATABASE_URL` 运行；
+- 每日文件快照：`p0-backup.timer`（03:30，`Persistent=true`）调用
   `scripts/backup_data.py`，默认写到 `/var/backups/cq-ai-p0`，保留 14 份；
+- 数据层快照：`p0-store-backup.timer`（03:40）调用 `scripts/backup_store.py`，
+  产出 `pg_dump` + 对象 tar + SHA-256 清单；恢复用 `scripts/restore_store.py`；
 - 恢复：`scripts/restore_data.py` 先 `--verify-only` 校验，再恢复到空目录或
   `--force` 替换（旧目录保留为 `data.pre-restore-<时间戳>`）；
-- 安装、异机同步、恢复演练与回滚步骤见 `docs/p1-ci-backup/README.md`；
+- 安装、异机同步、恢复演练与回滚步骤见 `docs/p1-ci-backup/README.md` 与
+  `docs/p1-data-layer/README.md`；
   备份归档含账号哈希、会话密钥和客户数据，权限 0600，必须异机保存且限制访问。
 
 ## Docker（待内部镜像仓库可用）

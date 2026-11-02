@@ -249,6 +249,11 @@ python3 scripts/run_ocr_demo.py --pdf <扫描件.pdf> --out-dir deliverables/ocr
 
 ## 数据
 
+`P0_STORE=json`（默认）仍使用 `data/` 下的 JSON/文件；`P0_STORE=postgres` 后，
+用户、审计、标准（含版本链/条款）、报价进入 PostgreSQL，原件/导出/报价表进入
+MinIO 或本地对象目录，JSON 树作为迁移期镜像保留。切换、迁移、对账、回滚与备份
+步骤见 [`docs/p1-data-layer/README.md`](../docs/p1-data-layer/README.md)。
+
 默认保存在 `data/standards/`（已在 `.gitignore` 中，不入库）：
 
 ```
@@ -267,6 +272,9 @@ backups/                         本地数据快照（0600，已在 .gitignore �
 ```
 
 可用 `P0_STANDARD_DIR`、`P0_QUOTE_DIR`、`P0_SALES_QUOTE_TEMPLATE`、`MAX_STANDARD_MB` 调整目录/模板/上限；
+数据层可用 `P0_STORE`、`P0_DATABASE_URL`、`P0_OBJECT_STORE`、`P0_OBJECT_DIR`、
+`P0_MINIO_ENDPOINT`、`P0_MINIO_ACCESS_KEY`、`P0_MINIO_SECRET_KEY`、`P0_MINIO_BUCKET`、
+`P0_MINIO_SECURE`、`P0_STORE_MIRROR` 调整；完整说明见 `docs/p1-data-layer/README.md`；
 `P0_CONFIG_PATH` 指定规则配置文件（默认 `data/config/rules.json`；文件不存在时使用默认规则）；
 `P0_AUDIT_RETENTION_DAYS`（默认 180）、`P0_SESSION_TTL`（默认 8 小时）控制审计保留与会话时长；
 `P0_OIDC_ISSUER` / `P0_OIDC_CLIENT_ID` 仅作为 SSO 预留配置，当前登录仍走本地账号；
@@ -303,6 +311,15 @@ python scripts/restore_data.py backups/p0-data-<时间戳>.tar.gz --data-dir /tm
 
 每日定时器与异机保留步骤见文档；备份目录不要放在 Web 可访问目录，也不要提交仓库。
 
+数据层（PostgreSQL + 对象存储）的快照与恢复：
+
+```bash
+P0_DATABASE_URL=... P0_MINIO_*... \
+  python scripts/backup_store.py --backup-dir /var/backups/cq-ai-p0 --keep 14
+python scripts/restore_store.py --backup-dir /var/backups/cq-ai-p0 --verify-only
+python scripts/restore_store.py --backup-dir /var/backups/cq-ai-p0 --yes
+```
+
 ## 已知限制（P1 后）
 
 - 扫描件 OCR 只针对印刷体；表格数值未做单元格级结构化，涉及表格/截断/低置信度页的字段会进入复核清单；OCR 在请求内同步执行（44 页约 1.5–2 分钟），期间单进程服务不响应其他请求，批量/并发需队列（P2）；
@@ -313,7 +330,9 @@ python scripts/restore_data.py backups/p0-data-<时间戳>.tar.gz --data-dir /tm
 - 报价助手不做 CRM 写回、审批流、客户侧自动报价；折扣不自动推断；
 - 向量检索依赖 Ollama `bge-m3`；阈值 0.60 是在当前 2 份标准/129 片段上校准的，扩库后需复测；条款号/标准号守卫不替代语义评测；
 - 保密标准只做本地规则解析与本地 OCR，不调用外部大模型/公网 OCR。
-- P1-S1 的用户库与审计仍是 JSON/JSONL 文件（尚未迁 PostgreSQL），审计查询会全量扫描文件，数据量上来后需换 DB/索引；
+- P1-1 数据层已提供 PostgreSQL + MinIO 代码与迁移/回滚/备份脚本，但共享服务器上的
+  PostgreSQL/MinIO 安装与生产切换尚未执行（见 `docs/p1-data-layer/README.md` 的限制）；
+  未切换前仍是 JSON/JSONL 文件；
 - 项目隔离目前到「项目」粒度；部门/客户级授权要等 CRM 字段契约确认后接入，OIDC/SSO 只预留了配置与状态接口，未实现登录跳转；
 - 管理员重置密码后返回一次性临时密码，需要人工安全传递；尚未强制首次登录改密；
 - 项目隔离覆盖标准与报价；报告审核不落库，暂不做行级隔离；
