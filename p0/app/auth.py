@@ -483,7 +483,7 @@ def provider_status() -> dict:
         "oidc": {
             "configured": bool(issuer and client_id),
             "status": "reserved",
-            "issuer": issuer,
+            "issuer_configured": bool(issuer),
         },
     }
 
