@@ -39,6 +39,26 @@ MAX_STANDARD_MB=200
   默认走 `/knowledge-bases/{kb}/hybrid-search`（向量+关键词，约 0.3 秒）。
 - 生产不要设置 `P0_AUTH_DISABLED`；该变量仅供 pytest 使用。
 
+## OCR 系统依赖
+
+扫描件 OCR 用本机 ONNX 推理，不依赖云 OCR。`opencv-python` 需要系统 GL 库，
+新服务器首次部署时执行：
+
+```bash
+apt-get update
+apt-get install -y libgl1 libglib2.0-0
+cd /opt/cq-ai-p0
+.venv/bin/pip install -r requirements.txt
+```
+
+装完确认 OCR 引擎可加载（首次加载模型约 0.3 秒）：
+
+```bash
+.venv/bin/python -c "import cv2, onnxruntime; from rapidocr_onnxruntime import RapidOCR; RapidOCR(); print('ocr ok')"
+```
+
+实测数据（耗时、置信度、复核项、并发限制）见 `docs/ocr-scan-validation/README.md`。
+
 ## 更新代码与重启
 
 ```bash
