@@ -146,6 +146,16 @@ HTTP 自动跳 HTTPS。
 - 解析原件、复核结果、导出、报价：`data/standards/`、`data/quotes/`；
 - 以上均含客户保密材料，禁止复制到仓库或外发。
 
+## CI 与数据备份（P1-0.5）
+
+- CI：`.github/workflows/p0-ci.yml`，push/PR 到 `main` 且改动 `p0/**` 时跑 pytest；
+- 每日快照：`p0-backup.timer`（03:30，`Persistent=true`）调用
+  `scripts/backup_data.py`，默认写到 `/var/backups/cq-ai-p0`，保留 14 份；
+- 恢复：`scripts/restore_data.py` 先 `--verify-only` 校验，再恢复到空目录或
+  `--force` 替换（旧目录保留为 `data.pre-restore-<时间戳>`）；
+- 安装、异机同步、恢复演练与回滚步骤见 `docs/p1-ci-backup/README.md`；
+  备份归档含账号哈希、会话密钥和客户数据，权限 0600，必须异机保存且限制访问。
+
 ## Docker（待内部镜像仓库可用）
 
 Docker Hub 当前从该服务器不可达，镜像构建暂未使用。

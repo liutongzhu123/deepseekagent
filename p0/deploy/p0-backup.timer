@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily CQ P0 file-data snapshot (P1-0.5)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10min
+Persistent=true
+Unit=p0-backup.service
+
+[Install]
+WantedBy=timers.target

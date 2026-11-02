@@ -1,0 +1,11 @@
+[Unit]
+Description=CQ P0 daily file-data snapshot (P1-0.5)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/cq-ai-p0
+ExecStart=/opt/cq-ai-p0/.venv/bin/python scripts/backup_data.py --data-dir /opt/cq-ai-p0/data --backup-dir /var/backups/cq-ai-p0 --keep 14
+Nice=10
+IOSchedulingClass=idle
