@@ -921,8 +921,16 @@ input[type="checkbox"] {
 .config-fact b { color: var(--ink-2); font-weight: 600; }
 .rule-main { flex: 1; min-width: 0; }
 .rule-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin-left: auto; flex: none; }
-.module-config { margin-bottom: 16px; overflow: hidden; }
-.module-config summary { padding: 13px 18px; }
+.module-config-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 13px 18px;
+}
+.config-open-btn { color: var(--brand); border-color: #b2ddff; background: #f5faff; }
+.config-open-btn:hover:not(:disabled) { color: var(--brand); border-color: #84caff; background: var(--brand-soft); }
+.config-open-btn .icon { width: 16px; height: 16px; }
 .mc-icon {
   display: grid;
   place-items: center;
@@ -956,6 +964,13 @@ input[type="checkbox"] {
 .alias-values { display: flex; flex-wrap: wrap; gap: 5px; }
 .alias-values .chip { margin: 0; }
 
+dialog.modal.config-modal { width: min(980px, calc(100vw - 32px)); }
+dialog.modal.config-modal[open] { display: flex; flex-direction: column; overflow: hidden; }
+.config-modal .modal-body { min-height: 0; overflow: auto; }
+.config-modal .modal-foot { padding-top: 14px; border-top: 1px solid var(--line); }
+.config-section { scroll-margin-top: 76px; transition: border-color .2s ease, box-shadow .2s ease; }
+.config-section.config-target { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(23, 105, 170, .18), var(--shadow-sm); }
+
 @media (max-width: 900px) {
   .module-config-grid { grid-template-columns: 1fr; }
   .mc-title small { white-space: normal; }
@@ -964,4 +979,6 @@ input[type="checkbox"] {
   .config-bar { flex-direction: column; }
   .config-meta { white-space: normal; }
   .config-numbers { grid-template-columns: 1fr; }
+  .module-config-bar { flex-wrap: wrap; }
+  .module-config-bar .mc-title { flex-basis: calc(100% - 42px); }
 }

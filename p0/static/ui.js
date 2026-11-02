@@ -340,9 +340,16 @@ function switchTab(name) {
     loadKbStandards();
   }
   if (name === 'report' || name === 'standards' || name === 'quote') loadModuleConfig();
-  if (name === 'admin') loadAdmin().catch(showError);
+  if (name === 'admin') {
+    loadAdmin().catch(showError);
+    switchAdminView(state.adminView || 'users');
+  }
   const nextParams = new URLSearchParams(location.search);
   nextParams.set('tab', name);
+  if (name !== 'admin') {
+    nextParams.delete('view');
+    nextParams.delete('section');
+  }
   history.replaceState(null, '', `${location.pathname}?${nextParams.toString()}`);
 }
 
@@ -1266,27 +1273,72 @@ async function resetConfigSection(section, label) {
     showError(error);
   }
 }
-function switchAdminView(view) {
+const ADMIN_CONFIG_SECTIONS = {
+  report: { id: 'config-section-report', label: '报告审核规则' },
+  standard: { id: 'config-section-standard', label: '标准解析规则字段' },
+  quote: { id: 'config-section-quote', label: '报价助手规则字段' },
+};
+let adminConfigLoad = Promise.resolve();
+let configFocusTimer = null;
+function adminConfigSection(section) {
+  return ADMIN_CONFIG_SECTIONS[section] || null;
+}
+function syncAdminLocation(view, section = '') {
+  const nextParams = new URLSearchParams(location.search);
+  nextParams.set('tab', 'admin');
+  if (view) nextParams.set('view', view);
+  if (section) nextParams.set('section', section);
+  else nextParams.delete('section');
+  history.replaceState(null, '', `${location.pathname}?${nextParams.toString()}`);
+}
+function focusAdminConfigSection(section) {
+  const meta = adminConfigSection(section);
+  if (!meta || !can('config:manage')) return false;
+  const target = $(meta.id);
+  if (!target) return false;
+  target.classList.remove('config-target');
+  void target.offsetWidth;
+  target.classList.add('config-target');
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  window.clearTimeout(configFocusTimer);
+  configFocusTimer = window.setTimeout(() => target.classList.remove('config-target'), 3200);
+  return true;
+}
+function switchAdminView(view, section = '') {
   state.adminView = view;
   $$('#adminTabs button').forEach((button) => button.classList.toggle('active', button.dataset.adminView === view));
   $('adminUsersView').classList.toggle('hidden', view !== 'users');
   $('adminAuditView').classList.toggle('hidden', view !== 'audit');
   $('adminConfigView').classList.toggle('hidden', view !== 'config');
   if (view === 'audit') loadAudit(true);
-  if (view === 'config') loadAdminConfig().catch(showError);
+  if (view === 'config') adminConfigLoad = loadAdminConfig().catch(showError);
+  syncAdminLocation(view, view === 'config' ? section : '');
 }
-function openAdminConfig() {
+async function openAdminConfig(section = '') {
+  if (!can('config:manage')) return;
+  closeModal('modalStdConfig');
+  closeModal('modalQuoteConfig');
   state.adminView = 'config';
   switchTab('admin');
-  switchAdminView('config');
+  syncAdminLocation('config', section);
+  const meta = adminConfigSection(section);
+  if (!meta) return;
+  await adminConfigLoad;
+  // 等两帧让配置表格完成布局，再滚动到目标分区，避免落点因表格高度变化而偏移。
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (focusAdminConfigSection(section)) toast(`已定位到「${meta.label}」`, 'info');
+  }));
 }
 
 /* ---------------------------------------------------------------- bind */
 function bindEvents() {
   $$('.nav-item').forEach((item) => item.addEventListener('click', () => switchTab(item.dataset.tab)));
   document.addEventListener('click', (event) => {
-    if (event.target.closest('.js-open-admin-config')) openAdminConfig();
+    const configLink = event.target.closest('.js-open-admin-config');
+    if (configLink) openAdminConfig(configLink.dataset.configSection || '');
   });
+  $('stdConfigOpen').addEventListener('click', () => openModal('modalStdConfig'));
+  $('quoteConfigOpen').addEventListener('click', () => openModal('modalQuoteConfig'));
   $('navToggle').addEventListener('click', () => {
     $('sidebar').classList.add('open');
     $('navBackdrop').classList.add('show');
@@ -1665,9 +1717,23 @@ function boot() {
   bindEvents();
   const wanted = params.get('tab');
   const initialTab = ['report', 'standards', 'quote', 'knowledge', 'admin'].includes(wanted) ? wanted : 'report';
+  const wantedView = params.get('view');
+  const initialAdminView = ['users', 'audit', 'config'].includes(wantedView) ? wantedView : 'users';
+  const wantedSection = params.get('section') || '';
+  const initialConfigSection = initialAdminView === 'config' && adminConfigSection(wantedSection) ? wantedSection : '';
+  if (initialTab === 'admin') state.adminView = initialAdminView;
   loadMe().then((signedIn) => {
     if (!signedIn) return;
     switchTab(initialTab);
+    if (initialConfigSection && can('config:manage') && !$('panel-admin').classList.contains('hidden')) {
+      syncAdminLocation('config', initialConfigSection);
+      adminConfigLoad.then(() => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const meta = adminConfigSection(initialConfigSection);
+          if (focusAdminConfigSection(initialConfigSection) && meta) toast(`已定位到「${meta.label}」`, 'info');
+        }));
+      });
+    }
     loadStandards().catch((error) => {
       $('stdList').innerHTML = `<div class="muted pad-8">标准加载失败：${escapeHtml(error.message)}</div>`;
     });
