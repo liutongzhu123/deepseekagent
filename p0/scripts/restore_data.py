@@ -117,6 +117,8 @@ def verify_archive(archive: Path) -> dict:
 
             expected_members: set[str] = set()
             for entry in manifest.get("files", []):
+                if not isinstance(entry, dict):
+                    raise RestoreError("malformed file entry in manifest")
                 relative = entry.get("path", "")
                 validate_relative_path(relative)
                 member_name = DATA_PREFIX + relative
