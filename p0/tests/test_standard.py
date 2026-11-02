@@ -63,6 +63,81 @@ def test_scanned_pdf_reports_without_items():
     assert any("扫描件" in warning for warning in result["warnings"])
 
 
+def chinese_method_only_pages() -> list[str]:
+    cover = "\n".join(
+        [
+            "Q/DEMO 002-2026",
+            "汽车座椅用泡沫材料雾化性能的测定",
+            "2026-01-01 发布",
+        ]
+    )
+    body = "\n".join(
+        [
+            "1 范围",
+            "本标准适用于演示标准。",
+            "2 规范性引用文件",
+            "GB/T 8170 数字修约规则。",
+            "3 术语",
+            "3.1 雾化",
+            "雾化是指挥发性成分凝结的现象。",
+            "4 试验原理",
+            "通过加热试样并在玻璃板上冷凝后测量光泽度。",
+            "5 试验设备",
+            "5.1 雾化测试仪",
+            "由加热装置和冷却系统两部分组成。",
+            "6 试验方法",
+            "6.1 试样的准备",
+            "6.1.1 试样必须取自制造后存放48h以上的零件。",
+            "6.1.2 试样应在标准环境中放置24h。",
+            "6.2 清洁",
+            "6.2.1 将玻璃板清洗干净。",
+            "6.3 试验过程",
+            "6.3.1 将试样放入烧杯。",
+            "6.3.2 加热并冷却后测量光泽度。",
+            "7 结果表示",
+            "7.1 按公式计算雾化值。",
+        ]
+    )
+    return [cover, body]
+
+
+def test_chinese_only_method_standard_is_extracted_for_review():
+    result = parse_standard(chinese_method_only_pages(), "演示标准.pdf")
+    assert result["mapping_source"] == "method-only"
+    # "5 试验设备" must not be mistaken for the requirements section.
+    assert [item["clause"] for item in result["items"]] == ["6.1", "6.2", "6.3"]
+    assert result["summary"]["items"] == 3
+    assert result["summary"]["review_required_items"] == 3
+    assert all(item["review_required"] for item in result["items"])
+    assert all(item["method"] for item in result["items"])
+    assert all(item["requirement"] == "" for item in result["items"])
+    assert result["items"][2]["method"].startswith("将试样放入烧杯")
+    assert any("未识别到「技术要求」章节" in warning for warning in result["warnings"])
+
+
+def test_pure_chinese_headings_are_detected_but_body_sentences_are_not():
+    from app.standard_parser import _clean_lines, _detect_headings
+
+    lines = _clean_lines(
+        [
+            "6 试验方法\n6.1 试样的准备\n6.1.1 试样必须取自制造后存放48h以上的零件。",
+            "6.2 清洁\n6.2.1 将玻璃板清洗干净。",
+        ],
+        "",
+    )
+    headings = _detect_headings(lines)
+    assert [heading.num for heading in headings] == ["6", "6.1", "6.2"]
+
+
+def test_section_aliases_are_recognised():
+    from app.standard_parser import _clean_lines, _detect_headings, _section_number
+
+    lines = _clean_lines(["5 技术条件\n5.1 外观\n6 检验方法\n6.1 外观检查"], "")
+    headings = _detect_headings(lines)
+    assert _section_number(headings, "技术要求") == "5"
+    assert _section_number(headings, "试验方法") == "6"
+
+
 def test_xlsx_writer_roundtrip(tmp_path):
     path = tmp_path / "out.xlsx"
     write_xlsx(

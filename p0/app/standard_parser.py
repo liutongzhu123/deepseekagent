@@ -140,14 +140,19 @@ def _detect_headings(lines: list[_Line]) -> list[_Heading]:
             continue
         if not _has_cjk(rest):
             continue
-        if not re.search(r"[A-Za-z]{2,}", rest):
-            continue
         if re.search(r"[，。；：,;:]", rest):
             continue
         if len(rest) > 120:
             continue
         if re.match(r"^\d", rest):
             continue
+        if not re.search(r"[A-Za-z]{2,}", rest):
+            # Scanned Chinese standards usually have no English subtitle.
+            # Accept a pure-Chinese heading only when it is short and
+            # label-like; otherwise a wrapped body line that happens to start
+            # with a clause number would be promoted to a heading.
+            if len(rest) < 2 or len(rest) > 30:
+                continue
         headings.append(
             _Heading(num=num, text=rest, page=line.page, line_idx=line.idx)
         )
@@ -156,10 +161,24 @@ def _detect_headings(lines: list[_Line]) -> list[_Heading]:
     return headings
 
 
+_SECTION_ALIASES = {
+    "技术要求": ("技术要求", "技术条件", "性能要求", "要求"),
+    "试验方法": ("试验方法", "试验方法及要求", "检验方法", "测试方法"),
+}
+
+
 def _section_number(headings: list[_Heading], keyword: str) -> str | None:
-    for heading in headings:
-        if heading.num.count(".") == 0 and keyword in heading.name:
-            return heading.num
+    """Find a top-level section by name, accepting common near-synonyms.
+
+    Scanned enterprise standards often omit the English subtitle and use a
+    variant such as "技术条件" or "试验方法及要求"; only top-level headings are
+    considered so a clause like "5.3 试验要求" cannot become the section.
+    """
+    aliases = _SECTION_ALIASES.get(keyword, (keyword,))
+    for alias in aliases:
+        for heading in headings:
+            if heading.num.count(".") == 0 and alias in heading.name:
+                return heading.num
     return None
 
 
@@ -289,6 +308,127 @@ def _item_name(tech: _Heading, method: _Heading, tech_by_num: dict[str, _Heading
             group = parent_name
             name = f"{parent_name}-{name}"
     return name, group
+
+
+# OCR sometimes loses a chapter number but keeps the chapter title on its own
+# line.  Such a line still marks the end of the previous section.
+_SECTION_BOUNDARY_TITLES = {
+    "范围",
+    "规范性引用文件",
+    "术语",
+    "术语和定义",
+    "试验原理",
+    "试验设备",
+    "试验方法",
+    "结果表示",
+    "试验报告",
+    "技术要求",
+    "检验规则",
+    "标志、包装、运输和贮存",
+    "附录",
+}
+
+
+def _is_section_boundary(text: str) -> bool:
+    return re.sub(r"\s+", "", text) in _SECTION_BOUNDARY_TITLES
+
+
+def _section_text(
+    lines: list[_Line], headings: list[_Heading], heading: _Heading
+) -> str:
+    """Text of one heading including all of its nested subclauses."""
+    depth = heading.num.count(".")
+    next_idx = next(
+        (
+            other.line_idx
+            for other in headings
+            if other.line_idx > heading.line_idx and other.num.count(".") <= depth
+        ),
+        len(lines),
+    )
+    for line in lines[heading.line_idx + 1 :]:
+        if line.idx >= next_idx:
+            break
+        if _is_section_boundary(line.text):
+            next_idx = line.idx
+            break
+    return _text_for(lines, heading, next_idx)
+
+
+def _parse_single_section_items(
+    lines: list[_Line],
+    headings: list[_Heading],
+    section_num: str,
+    kind: str,
+) -> list[dict]:
+    """Build review-only items when only one of the two sections exists.
+
+    A test-method-only standard (a determination method, for example) has no
+    "技术要求" section at all.  Instead of returning zero items, expose the
+    method section's second-level clauses as candidate items with an empty
+    requirement field; the review workbench fills in the business content.
+    """
+    section = [h for h in headings if h.num.split(".")[0] == section_num]
+    candidates = [
+        h for h in section if h.num != section_num and h.num.count(".") == 1
+    ]
+    if not candidates:
+        candidates = [
+            h for h in section if h.num != section_num and _is_leaf(h, section)
+        ]
+    label = "技术要求" if kind == "requirement" else "试验方法"
+    populated = "requirement" if kind == "requirement" else "method"
+    missing = "method" if kind == "requirement" else "requirement"
+    items: list[dict] = []
+    for seq, heading in enumerate(candidates, start=1):
+        text = _section_text(lines, headings, heading)
+        name = _chinese_name(heading.text).strip() or heading.num
+        requirement = text if kind == "requirement" else ""
+        method = text if kind == "method" else ""
+        review_fields = [
+            {
+                "field": missing,
+                "confidence": 0.0,
+                "reason": (
+                    "未识别到「试验方法」章节，需人工补充试验方法"
+                    if kind == "requirement"
+                    else "未识别到「技术要求」章节，需人工补充判定要求"
+                ),
+            },
+            {
+                "field": "name",
+                "confidence": 0.6,
+                "reason": f"项目名称取自「{label}」章节标题，需人工确认",
+            },
+        ]
+        if not text:
+            review_fields.append(
+                {
+                    "field": populated,
+                    "confidence": 0.0,
+                    "reason": f"「{label}」章节未提取到正文，需对照原 PDF 复核",
+                }
+            )
+        items.append(
+            {
+                "seq": seq,
+                "name": name,
+                "name_auto": name,
+                "group": label,
+                "clause": heading.num,
+                "requirement": requirement,
+                "method_clause": heading.num if kind == "method" else "",
+                "method": method,
+                "page": heading.page,
+                "method_page": heading.page,
+                "confidence": 0.5,
+                "review_required": True,
+                "review_fields": review_fields,
+                "reviewed": False,
+                "references": _find_references(requirement, method),
+            }
+        )
+    return items
 
 
 def _find_references(requirement: str, method: str) -> list[dict[str, str]]:
@@ -605,7 +745,7 @@ def _merge_split_ocr_headings(lines: list[_Line]) -> list[_Line]:
     while index < len(lines):
         line = lines[index]
         text = line.text.strip()
-        if re.fullmatch(r"5(?:\.\d+){1,3}", text) and index + 1 < len(lines):
+        if re.fullmatch(r"\d{1,2}(?:\.\d+){1,3}", text) and index + 1 < len(lines):
             following = lines[index + 1]
             candidate = following.text.strip()
             looks_like_name = (
@@ -967,10 +1107,13 @@ def parse_standard(
 
     tech_sec = _section_number(headings, "技术要求")
     method_sec = _section_number(headings, "试验方法")
-    if tech_sec is None:
-        tech_sec = "5" if any(h.num == "5" for h in headings) else None
-    if method_sec is None:
-        method_sec = "6" if any(h.num == "6" for h in headings) else None
+    if tech_sec is not None and tech_sec == method_sec:
+        # A single combined "技术要求和试验方法" section cannot be split into
+        # two clause streams; treat it as a method section for human review.
+        warnings.append(
+            "「技术要求」与「试验方法」指向同一章节，已按试验方法章节抽取待复核项目"
+        )
+        tech_sec = None
 
     if not items:
         if tech_sec is not None and method_sec is not None:
@@ -1036,14 +1179,44 @@ def parse_standard(
                         "page": tech.page,
                         "method_page": method.page,
                         "confidence": confidence,
-                        "review_required": False,
-                        "review_fields": [],
+                        "review_required": source == "heading-match",
+                        "review_fields": (
+                            [
+                                {
+                                    "field": "name",
+                                    "confidence": confidence,
+                                    "reason": "项目与试验方法按标题名称相似度匹配，需人工复核",
+                                }
+                            ]
+                            if source == "heading-match"
+                            else []
+                        ),
                         "reviewed": False,
                         "references": _find_references(requirement, method_text),
                     }
                 )
             if source == "heading-match":
                 warnings.append("未找到完整检验项目表，项目与试验方法按标题名称匹配，需人工复核")
+        elif method_sec is not None:
+            items = _parse_single_section_items(lines, headings, method_sec, "method")
+            if items:
+                source = "method-only"
+                warnings.append(
+                    "未识别到「技术要求」章节，已按「试验方法」章节标题生成待复核项目，"
+                    "判定要求需人工补充"
+                )
+            else:
+                warnings.append("未识别到可抽取的「试验方法」条款，无法抽取项目")
+        elif tech_sec is not None:
+            items = _parse_single_section_items(lines, headings, tech_sec, "requirement")
+            if items:
+                source = "requirement-only"
+                warnings.append(
+                    "未识别到「试验方法」章节，已按「技术要求」章节标题生成待复核项目，"
+                    "试验方法需人工补充"
+                )
+            else:
+                warnings.append("未识别到可抽取的「技术要求」条款，无法抽取项目")
         else:
             warnings.append("未识别到「技术要求/试验方法」章节，无法抽取项目")
 
@@ -1060,6 +1233,10 @@ def parse_standard(
                 for warning in warnings
                 if "未找到完整检验项目表" not in warning
                 and "未识别到「技术要求/试验方法」章节" not in warning
+                and "未识别到「技术要求」章节" not in warning
+                and "未识别到「试验方法」章节" not in warning
+                and "按「试验方法」章节标题生成" not in warning
+                and "按「技术要求」章节标题生成" not in warning
             ]
             warnings.append(
                 "材料性能以多页合并表格给出，已按表格结构抽取项目和试验方法，需人工复核"
