@@ -322,6 +322,8 @@ def r07_pages(data: ReportData) -> Finding:
 
 
 def r08_notes(data: ReportData, expected_notices: int = DEFAULT_EXPECTED_NOTICES) -> Finding:
+    if expected_notices <= 0:
+        return _skip("R08", "注意事项条数", "规则配置为不校验注意事项条数")
     if data.notices == 0:
         return _skip("R08", "注意事项条数", "未识别到注意事项段落")
     if data.notices != expected_notices:

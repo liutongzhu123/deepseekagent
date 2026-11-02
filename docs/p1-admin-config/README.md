@@ -74,7 +74,7 @@ pytest -q tests/test_admin_config.py
 pytest -q
 ```
 
-结果：`tests/test_admin_config.py` 6 passed；全量 `60 passed, 2 skipped`（2 个跳过为需要真实样例的解析/审核用例）。
+结果：`tests/test_admin_config.py` 7 passed；全量 `61 passed, 2 skipped`（2 个跳过为需要真实样例的解析/审核用例）。
 
 覆盖内容：
 

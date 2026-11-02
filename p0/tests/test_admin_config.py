@@ -128,6 +128,15 @@ def test_report_rule_update_changes_audit_behaviour(env):
     assert json.loads((env.tmp / "config" / "rules.json").read_text("utf-8"))["revision"] == 1
 
 
+def test_expected_notices_zero_disables_the_count_check():
+    config = copy.deepcopy(admin_config.default_config()["report"])
+    config["expected_notices"] = 0
+    result = audit_report(_report(notices=8), config)
+    by_id = {item["rule_id"]: item for item in result["findings"]}
+    assert by_id["R08"]["status"] == "skip"
+    assert "不校验" in by_id["R08"]["message"]
+
+
 def test_invalid_sections_are_rejected_and_reset_restores_defaults(env):
     admin = _admin(env)
     section = copy.deepcopy(admin.get("/api/v1/admin/config").json()["config"]["report"])
