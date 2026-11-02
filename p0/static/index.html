@@ -58,11 +58,11 @@
       </div>
       <div class="nav-section hidden" id="adminNavSection">
         <div class="nav-label">系统治理</div>
-        <button class="nav-item" data-tab="admin"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span>权限与审计</span><span class="nav-tag">P1</span></button>
+        <button class="nav-item" data-tab="admin"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span>权限、审计与规则</span><span class="nav-tag">P1</span></button>
       </div>
     </nav>
     <div class="side-foot">
-      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.6.0</span></div>
+      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.7.0</span></div>
       <div class="user-card" id="userBox">
         <span class="avatar">··</span>
         <div class="user-meta"><b>正在确认登录状态…</b><span>请稍候</span></div>
@@ -78,7 +78,7 @@
       </div>
       <div class="topbar-right">
         <span class="env-pill"><span class="dot"></span>内部受控环境</span>
-        <span class="version-pill">P1 · v0.6.0</span>
+        <span class="version-pill">P1 · v0.7.0</span>
       </div>
     </header>
     <main class="content">
@@ -88,9 +88,9 @@
           <div>
             <div class="eyebrow">Report review</div>
             <h1>报告审核</h1>
-            <p>上传检验报告，按 11 条确定性规则自动核对编号、均值、日期、签名与模板；每条结论都带原文证据和修改建议。</p>
+            <p>上传检验报告，按管理员配置启用的确定性规则自动核对编号、均值、日期、签名与模板；每条结论都带原文证据和修改建议。</p>
           </div>
-          <div class="page-actions"><span class="pill info" id="ruleHeadPill"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>11 条确定性规则</span></div>
+          <div class="page-actions"><span class="pill info" id="ruleHeadPill"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>确定性规则</span></div>
         </div>
         <div id="reportRoleNotice" class="banner warn hidden"></div>
         <div class="report-layout">
@@ -386,15 +386,16 @@
       <section id="panel-admin" class="panel hidden">
         <div class="page-head">
           <div>
-            <div class="eyebrow">Identity &amp; audit</div>
-            <h1>权限与审计</h1>
-            <p>管理账号、角色与项目授权；每一次登录、复核、发布、报价和导出都会留下可查询的审计记录。</p>
+            <div class="eyebrow">Governance</div>
+            <h1>权限、审计与规则</h1>
+            <p>管理账号、角色与项目授权，配置三条业务链路的规则与字段；每一次登录、复核、发布、报价、导出和规则变更都会留下可查询的审计记录。</p>
           </div>
-          <div class="page-actions"><span class="pill success"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>P1 · 身份与审计</span></div>
+          <div class="page-actions"><span class="pill success"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>P1 · 治理与规则</span></div>
         </div>
         <div class="segmented" id="adminTabs">
           <button type="button" data-admin-view="users" class="active">用户与角色</button>
           <button type="button" data-admin-view="audit">审计日志</button>
+          <button type="button" data-admin-view="config">规则配置</button>
         </div>
 
         <div id="adminUsersView">
@@ -467,6 +468,147 @@
                 <span id="auditPage" class="page-indicator">1 / 1</span>
                 <button class="btn btn-secondary btn-sm" id="auditNext">下一页</button>
               </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="adminConfigView" class="hidden">
+          <div class="config-bar">
+            <div>
+              <b>规则配置</b>
+              <p>管理员在这里定义三条业务链路的规则与字段；保存后立即对新的审核、解析和报价生效，并写入审计日志。</p>
+            </div>
+            <span class="config-meta" id="configMeta">—</span>
+          </div>
+          <div id="configWarning" class="banner warn hidden"></div>
+
+          <section class="card card-pad config-section">
+            <div class="card-head">
+              <div>
+                <h2>报告审核规则</h2>
+                <p>停用的规则仍会出现在审核结果中并标记为「未检查」；严重级别只影响失败/提示结论，参数用于确定性阈值。</p>
+              </div>
+              <div class="row">
+                <button type="button" class="btn btn-secondary btn-sm" id="reportConfigReset"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>恢复默认</button>
+                <button type="button" class="btn btn-primary btn-sm" id="reportConfigSave"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>保存审核规则</button>
+              </div>
+            </div>
+            <div class="form-grid config-numbers">
+              <div class="field">
+                <label for="cfgMeanTolerance">均值容差（分）</label>
+                <input type="number" id="cfgMeanTolerance" step="0.01" min="0" max="1">
+                <span class="hint">报告均值与三次评分均值之差不超过该值时视为正确，默认 0.05。</span>
+              </div>
+              <div class="field">
+                <label for="cfgExpectedNotices">注意事项应有条数</label>
+                <input type="number" id="cfgExpectedNotices" step="1" min="0" max="50">
+                <span class="hint">中文报告模板通常为 8 条；设为 0 表示不校验条数。</span>
+              </div>
+            </div>
+            <div class="table-wrap config-table">
+              <table>
+                <thead><tr><th>规则</th><th>启用</th><th>严重级别</th><th>规则名称</th><th>规则说明</th></tr></thead>
+                <tbody id="cfgRuleBody"><tr><td colspan="5" class="muted">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="card card-pad config-section mt-16">
+            <div class="card-head">
+              <div>
+                <h2>标准解析规则字段</h2>
+                <p>章节别名决定「技术要求 / 试验方法」的识别词；字段的必填项缺失时进入人工复核清单，导出勾选决定 Excel「试验方法明细」列。</p>
+              </div>
+              <div class="row">
+                <button type="button" class="btn btn-secondary btn-sm" id="standardConfigReset"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>恢复默认</button>
+                <button type="button" class="btn btn-primary btn-sm" id="standardConfigSave"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>保存解析规则</button>
+              </div>
+            </div>
+            <div class="form-grid config-numbers">
+              <div class="field">
+                <label for="cfgStdAliasTech">技术要求章节别名</label>
+                <input type="text" id="cfgStdAliasTech" placeholder="技术要求, 技术条件, 性能要求">
+                <span class="hint">逗号分隔；命中任一词的顶级章节会被识别为技术要求。</span>
+              </div>
+              <div class="field">
+                <label for="cfgStdAliasMethod">试验方法章节别名</label>
+                <input type="text" id="cfgStdAliasMethod" placeholder="试验方法, 检验方法, 测试方法">
+                <span class="hint">逗号分隔；命中任一词的顶级章节会被识别为试验方法。</span>
+              </div>
+            </div>
+            <div class="table-wrap config-table">
+              <table>
+                <thead><tr><th>字段</th><th>显示名（导出表头）</th><th>必填（缺失进复核）</th><th>导出到 Excel</th></tr></thead>
+                <tbody id="cfgStdFieldBody"><tr><td colspan="4" class="muted">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="card card-pad config-section mt-16">
+            <div class="card-head">
+              <div>
+                <h2>报价助手规则字段</h2>
+                <p>表头别名与单位映射用于识别 DVP；折扣和税率参与金额计算；CRM 列决定「CRM报价草稿」的输出字段。</p>
+              </div>
+              <div class="row">
+                <button type="button" class="btn btn-secondary btn-sm" id="quoteConfigReset"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>恢复默认</button>
+                <button type="button" class="btn btn-primary btn-sm" id="quoteConfigSave"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>保存报价规则</button>
+              </div>
+            </div>
+            <div class="form-grid config-numbers">
+              <div class="field">
+                <label for="cfgQuoteDiscount">默认折扣（%）</label>
+                <input type="number" id="cfgQuoteDiscount" step="0.5" min="0" max="100">
+                <span class="hint">未单独传折扣时使用，默认 60%。</span>
+              </div>
+              <div class="field">
+                <label for="cfgQuoteProductTax">产品税率（%）</label>
+                <input type="number" id="cfgQuoteProductTax" step="0.1" min="0" max="100">
+                <span class="hint">默认 16%，写入销售报价表 B11 并参与自检。</span>
+              </div>
+              <div class="field">
+                <label for="cfgQuoteServiceTax">服务税率（%）</label>
+                <input type="number" id="cfgQuoteServiceTax" step="0.1" min="0" max="100">
+                <span class="hint">默认 6%，写入销售报价表 B12 并参与自检。</span>
+              </div>
+            </div>
+            <div class="form-grid config-numbers">
+              <div class="field">
+                <label for="cfgQuoteHeadersItem">试验项目表头别名</label>
+                <input type="text" id="cfgQuoteHeadersItem" placeholder="试验项目, 测试项目">
+                <span class="hint">逗号分隔；命中任一值的单元格作为项目列。</span>
+              </div>
+              <div class="field">
+                <label for="cfgQuoteHeadersPrice">单价表头别名</label>
+                <input type="text" id="cfgQuoteHeadersPrice" placeholder="单价, 含税单价">
+                <span class="hint">逗号分隔；用于定位单价列。</span>
+              </div>
+              <div class="field">
+                <label for="cfgQuoteHeadersQuantity">数量表头别名</label>
+                <input type="text" id="cfgQuoteHeadersQuantity" placeholder="数量">
+                <span class="hint">逗号分隔；用于定位数量列。</span>
+              </div>
+              <div class="field">
+                <label for="cfgQuoteHeadersUnit">单位表头别名</label>
+                <input type="text" id="cfgQuoteHeadersUnit" placeholder="单位">
+                <span class="hint">逗号分隔；用于定位单位列。</span>
+              </div>
+              <div class="field">
+                <label for="cfgQuoteHeadersSample">样品名称表头别名</label>
+                <input type="text" id="cfgQuoteHeadersSample" placeholder="零件/总成">
+                <span class="hint">逗号分隔；命中后从该行提取样品名称。</span>
+              </div>
+            </div>
+            <div class="field">
+              <label for="cfgQuoteUnitMap">单位映射</label>
+              <textarea id="cfgQuoteUnitMap" rows="5" placeholder="每行一条：源单位=目标单位"></textarea>
+              <span class="hint">每行「源=目标」，例如「席位=席位/次」；未命中的单位原样输出，空值按「次」。</span>
+            </div>
+            <div class="table-wrap config-table">
+              <table>
+                <thead><tr><th>数据来源</th><th>CRM 列名</th><th>启用</th></tr></thead>
+                <tbody id="cfgQuoteColumnBody"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
+              </table>
             </div>
           </section>
         </div>

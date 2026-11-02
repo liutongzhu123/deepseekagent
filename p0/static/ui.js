@@ -21,6 +21,8 @@ const PERMISSIONS = {
   'quote:generate': ['admin', 'sales'],
   'user:manage': ['admin'],
   'audit:read': ['admin'],
+  'config:read': ['admin'],
+  'config:manage': ['admin'],
 };
 
 const EVENT_LABELS = {
@@ -46,6 +48,8 @@ const EVENT_LABELS = {
   quote_downloaded: '下载报价',
   audit_exported: '导出审计',
   kb_rebuilt: '重建索引',
+  admin_config_updated: '更新规则配置',
+  admin_config_reset: '恢复默认规则',
 };
 
 const EVENT_OPTIONS = [
@@ -67,6 +71,8 @@ const EVENT_OPTIONS = [
   ['quote_generated', '生成报价'],
   ['quote_downloaded', '下载报价'],
   ['audit_exported', '导出审计'],
+  ['admin_config_updated', '更新规则配置'],
+  ['admin_config_reset', '恢复默认规则'],
 ];
 
 const state = {
@@ -81,6 +87,7 @@ const state = {
   resetUser: null,
   kbHealth: null,
   audit: { events: [], total: 0, limit: 50, offset: 0, all: [] },
+  config: null,
 };
 
 const SAMPLE_RECORDS = `{
@@ -284,7 +291,7 @@ const TAB_META = {
   standards: { title: '标准解析' },
   quote: { title: '报价助手' },
   knowledge: { title: '知识问答' },
-  admin: { title: '权限与审计' },
+  admin: { title: '权限、审计与规则' },
 };
 function closeSidebar() {
   $('sidebar').classList.remove('open');
@@ -338,12 +345,14 @@ async function loadRules() {
   try {
     const data = await jsonFetch('api/v1/rules');
     const rules = data.rules || [];
-    $('ruleCount').textContent = rules.length;
-    $('ruleHeadPill').innerHTML = `${ic('shield')}${rules.length} 条确定性规则`;
+    const enabled = data.enabled === undefined ? rules.length : data.enabled;
+    $('ruleCount').textContent = enabled;
+    $('ruleHeadPill').innerHTML = `${ic('shield')}${enabled} / ${rules.length} 条规则启用`;
     $('reportRules').innerHTML = rules.map((rule) => `
-      <div class="rule-item">
+      <div class="rule-item ${rule.enabled === false ? 'rule-disabled' : ''}">
         <span class="finding-rule">${escapeHtml(rule.id)}</span>
         <div><b>${escapeHtml(rule.title)}</b><span class="desc">${escapeHtml(rule.description)}</span></div>
+        ${rule.enabled === false ? '<span class="pill neutral">已停用</span>' : ''}
       </div>`).join('') || '<div class="muted">暂无规则</div>';
   } catch (error) {
     $('reportRules').innerHTML = `<div class="muted">规则加载失败：${escapeHtml(error.message)}</div>`;
@@ -946,12 +955,195 @@ function openAuditDetail(index) {
   $('auditDetailRaw').textContent = JSON.stringify(entry, null, 2);
   openModal('modalAuditDetail');
 }
+/* ---------------------------------------------------------------- rule config */
+const CONFIG_SOURCE_NAMES = {
+  sample_name: '样品名称',
+  item_name: '项目 / 检验项目',
+  standard: '标准',
+  department: '检验科室',
+  unit: '单位',
+  quantity: '数量',
+  unit_price: '含税单价',
+  has_discount: '是否有折扣',
+  discount: '折扣',
+  note: '备注',
+};
+const SEVERITY_NAMES = { high: '高', medium: '中', low: '低', info: '提示' };
+function splitList(value) {
+  return String(value || '').split(/[,，\n]+/).map((item) => item.trim()).filter(Boolean);
+}
+function configTime(value) {
+  return value ? formatTime(value, true) : '尚未保存，当前为默认规则';
+}
+function renderAdminConfig() {
+  const wrapper = state.config || {};
+  const config = wrapper.config || {};
+  const report = config.report || { rules: [] };
+  const standard = config.standard || { section_aliases: {}, fields: [] };
+  const quote = config.quote || { headers: {}, unit_map: {}, crm_columns: [] };
+
+  $('configMeta').textContent = `配置版本 ${config.revision ?? 0} · ${configTime(config.updated_at)}${config.updated_by ? ` · ${config.updated_by}` : ''}`;
+  if (wrapper.warning) {
+    $('configWarning').classList.remove('hidden');
+    $('configWarning').innerHTML = `${ic('alert')}<span>${escapeHtml(wrapper.warning)}</span>`;
+  } else {
+    $('configWarning').classList.add('hidden');
+  }
+
+  $('cfgMeanTolerance').value = report.mean_tolerance ?? 0.05;
+  $('cfgExpectedNotices').value = report.expected_notices ?? 8;
+  $('cfgRuleBody').innerHTML = (report.rules || []).map((rule) => `
+    <tr data-rule-id="${escapeHtml(rule.id)}">
+      <td><span class="finding-rule">${escapeHtml(rule.id)}</span></td>
+      <td><input type="checkbox" data-rule-field="enabled" ${rule.enabled ? 'checked' : ''} aria-label="${escapeHtml(rule.id)} 启用"></td>
+      <td><select data-rule-field="severity" aria-label="${escapeHtml(rule.id)} 严重级别">${Object.entries(SEVERITY_NAMES).map(([value, label]) => `<option value="${value}" ${rule.severity === value ? 'selected' : ''}>${label}</option>`).join('')}</select></td>
+      <td><input type="text" data-rule-field="title" value="${escapeHtml(rule.title)}" maxlength="100" aria-label="${escapeHtml(rule.id)} 名称"></td>
+      <td><input type="text" data-rule-field="description" value="${escapeHtml(rule.description)}" maxlength="500" aria-label="${escapeHtml(rule.id)} 说明"></td>
+    </tr>`).join('');
+
+  $('cfgStdAliasTech').value = (standard.section_aliases?.['技术要求'] || []).join(', ');
+  $('cfgStdAliasMethod').value = (standard.section_aliases?.['试验方法'] || []).join(', ');
+  $('cfgStdFieldBody').innerHTML = (standard.fields || []).map((field) => `
+    <tr data-field-key="${escapeHtml(field.key)}">
+      <td><span class="cell-main">${escapeHtml(field.key)}</span></td>
+      <td><input type="text" data-field-prop="label" value="${escapeHtml(field.label)}" maxlength="40" aria-label="${escapeHtml(field.key)} 显示名"></td>
+      <td><input type="checkbox" data-field-prop="required" ${field.required ? 'checked' : ''} aria-label="${escapeHtml(field.key)} 必填"></td>
+      <td><input type="checkbox" data-field-prop="export" ${field.export ? 'checked' : ''} aria-label="${escapeHtml(field.key)} 导出"></td>
+    </tr>`).join('');
+
+  $('cfgQuoteDiscount').value = quote.default_discount ?? 60;
+  $('cfgQuoteProductTax').value = Math.round((quote.product_tax_rate ?? 0.16) * 10000) / 100;
+  $('cfgQuoteServiceTax').value = Math.round((quote.service_tax_rate ?? 0.06) * 10000) / 100;
+  $('cfgQuoteHeadersItem').value = (quote.headers?.item || []).join(', ');
+  $('cfgQuoteHeadersPrice').value = (quote.headers?.price || []).join(', ');
+  $('cfgQuoteHeadersQuantity').value = (quote.headers?.quantity || []).join(', ');
+  $('cfgQuoteHeadersUnit').value = (quote.headers?.unit || []).join(', ');
+  $('cfgQuoteHeadersSample').value = (quote.headers?.sample || []).join(', ');
+  $('cfgQuoteUnitMap').value = Object.entries(quote.unit_map || {}).map(([source, target]) => `${source}=${target}`).join('\n');
+  $('cfgQuoteColumnBody').innerHTML = (quote.crm_columns || []).map((column) => `
+    <tr data-column-source="${escapeHtml(column.source)}">
+      <td><span class="cell-main">${escapeHtml(CONFIG_SOURCE_NAMES[column.source] || column.source)}</span><span class="cell-sub">${escapeHtml(column.source)}</span></td>
+      <td><input type="text" data-column-prop="label" value="${escapeHtml(column.label)}" maxlength="40" aria-label="${escapeHtml(column.label)} 列名"></td>
+      <td><input type="checkbox" data-column-prop="enabled" ${column.enabled ? 'checked' : ''} aria-label="${escapeHtml(column.label)} 启用"></td>
+    </tr>`).join('');
+}
+async function loadAdminConfig() {
+  state.config = await jsonFetch('api/v1/admin/config');
+  renderAdminConfig();
+}
+function collectReportConfig() {
+  const rules = $$('#cfgRuleBody tr[data-rule-id]').map((row) => ({
+    id: row.dataset.ruleId,
+    enabled: row.querySelector('[data-rule-field="enabled"]').checked,
+    severity: row.querySelector('[data-rule-field="severity"]').value,
+    title: row.querySelector('[data-rule-field="title"]').value.trim(),
+    description: row.querySelector('[data-rule-field="description"]').value.trim(),
+  }));
+  return {
+    mean_tolerance: Number($('cfgMeanTolerance').value),
+    expected_notices: Number($('cfgExpectedNotices').value),
+    rules,
+  };
+}
+function collectStandardConfig() {
+  const fields = $$('#cfgStdFieldBody tr[data-field-key]').map((row) => ({
+    key: row.dataset.fieldKey,
+    label: row.querySelector('[data-field-prop="label"]').value.trim(),
+    required: row.querySelector('[data-field-prop="required"]').checked,
+    export: row.querySelector('[data-field-prop="export"]').checked,
+  }));
+  return {
+    section_aliases: {
+      '技术要求': splitList($('cfgStdAliasTech').value),
+      '试验方法': splitList($('cfgStdAliasMethod').value),
+    },
+    fields,
+  };
+}
+function parseUnitMap(value) {
+  const unitMap = {};
+  String(value || '').split('\n').forEach((line) => {
+    const text = line.trim();
+    if (!text) return;
+    const parts = text.split(/[=＝]/);
+    if (parts.length !== 2) throw new Error(`单位映射行格式不正确：${text}（应为「源=目标」）`);
+    const source = parts[0].trim();
+    const target = parts[1].trim();
+    if (!source || !target) throw new Error(`单位映射行格式不正确：${text}`);
+    unitMap[source] = target;
+  });
+  return unitMap;
+}
+function collectQuoteConfig() {
+  const columns = $$('#cfgQuoteColumnBody tr[data-column-source]').map((row) => ({
+    source: row.dataset.columnSource,
+    label: row.querySelector('[data-column-prop="label"]').value.trim(),
+    enabled: row.querySelector('[data-column-prop="enabled"]').checked,
+  }));
+  return {
+    default_discount: Number($('cfgQuoteDiscount').value),
+    product_tax_rate: Number($('cfgQuoteProductTax').value) / 100,
+    service_tax_rate: Number($('cfgQuoteServiceTax').value) / 100,
+    headers: {
+      item: splitList($('cfgQuoteHeadersItem').value),
+      price: splitList($('cfgQuoteHeadersPrice').value),
+      quantity: splitList($('cfgQuoteHeadersQuantity').value),
+      unit: splitList($('cfgQuoteHeadersUnit').value),
+      sample: splitList($('cfgQuoteHeadersSample').value),
+    },
+    unit_map: parseUnitMap($('cfgQuoteUnitMap').value),
+    crm_columns: columns,
+  };
+}
+async function saveConfigSection(section, button, collector) {
+  let body;
+  try {
+    body = collector();
+  } catch (error) {
+    showError(error);
+    return;
+  }
+  busy(button, true, '保存中…');
+  try {
+    state.config = await jsonFetch(`api/v1/admin/config/${section}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    renderAdminConfig();
+    await loadRules();
+    toast('规则配置已保存，对新的请求立即生效');
+  } catch (error) {
+    showError(error);
+  } finally {
+    busy(button, false);
+  }
+}
+async function resetConfigSection(section, label) {
+  const confirmed = await confirmDialog({
+    title: `恢复默认${label}？`,
+    message: '当前自定义值会被默认规则覆盖；已保存的业务数据不受影响。',
+    confirmText: '恢复默认',
+    tone: 'danger',
+  });
+  if (!confirmed) return;
+  try {
+    state.config = await jsonFetch(`api/v1/admin/config/${section}/reset`, { method: 'POST' });
+    renderAdminConfig();
+    await loadRules();
+    toast(`已恢复默认${label}`);
+  } catch (error) {
+    showError(error);
+  }
+}
 function switchAdminView(view) {
   state.adminView = view;
   $$('#adminTabs button').forEach((button) => button.classList.toggle('active', button.dataset.adminView === view));
   $('adminUsersView').classList.toggle('hidden', view !== 'users');
   $('adminAuditView').classList.toggle('hidden', view !== 'audit');
+  $('adminConfigView').classList.toggle('hidden', view !== 'config');
   if (view === 'audit') loadAudit(true);
+  if (view === 'config') loadAdminConfig().catch(showError);
 }
 
 /* ---------------------------------------------------------------- bind */
@@ -1141,6 +1333,12 @@ function bindEvents() {
     const button = event.target.closest('[data-admin-view]');
     if (button) switchAdminView(button.dataset.adminView);
   });
+  $('reportConfigSave').addEventListener('click', () => saveConfigSection('report', $('reportConfigSave'), collectReportConfig));
+  $('standardConfigSave').addEventListener('click', () => saveConfigSection('standard', $('standardConfigSave'), collectStandardConfig));
+  $('quoteConfigSave').addEventListener('click', () => saveConfigSection('quote', $('quoteConfigSave'), collectQuoteConfig));
+  $('reportConfigReset').addEventListener('click', () => resetConfigSection('report', '审核规则'));
+  $('standardConfigReset').addEventListener('click', () => resetConfigSection('standard', '解析规则'));
+  $('quoteConfigReset').addEventListener('click', () => resetConfigSection('quote', '报价规则'));
   $('userSearch').addEventListener('input', renderUsers);
   $('roleCards').addEventListener('click', (event) => {
     const card = event.target.closest('[data-role]');

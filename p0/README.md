@@ -28,6 +28,14 @@ P1-S1 第一个增量（0.6.0，身份 / 权限 / 审计）：
 - **全量审计**——请求级审计 + 登录/用户/复核/发布/报价/导出等语义事件；管理员可按用户/事件/状态/时间查询并导出 CSV，支持保留期清理；
 - **管理台**——管理员在「权限与审计」页签管理用户、角色、项目授权和审计查询。
 
+P1 管理端规则配置增量（0.7.0，管理员定义三条链路的规则与字段）：
+
+- **报告审核规则**——逐条启用/停用 R01–R11、改规则名称/说明/严重级别，配置均值容差与注意事项应有条数；
+- **标准解析规则字段**——配置「技术要求 / 试验方法」章节别名、字段显示名、必填项（缺失进入人工复核清单）与 Excel 导出列；
+- **报价助手规则字段**——配置项目/单价/数量/单位/样品表头别名、单位映射、默认折扣、产品/服务税率、CRM 报价草稿列；
+- **即时生效与留痕**——保存后对新的审核/解析/报价请求生效，配置版本递增并写 `admin_config_updated` 审计事件；
+- **安全边界**——`config:read` / `config:manage` 仅 admin 可用，未配置时使用与旧版本一致的默认规则。
+
 ## 运行
 
 ```bash
@@ -64,7 +72,7 @@ WeKnora 服务器上 Ollama 只在容器网络内时，可设为容器地址（�
 
 角色与主要权限：
 
-| 角色 | 报告审核 | 标准解析/复核/发布 | 报价 | 知识问答 | 用户/审计 |
+| 角色 | 报告审核 | 标准解析/复核/发布 | 报价 | 知识问答 | 用户/审计/规则 |
 |---|---|---|---|---|---|
 | admin | ✓ | ✓ | ✓ | ✓ | ✓ |
 | reviewer | ✓ | ✓ | - | ✓ | - |
@@ -87,6 +95,9 @@ WeKnora 服务器上 Ollama 只在容器网络内时，可设为容器地址（�
 - `GET  /api/v1/audit/export.csv?...`（管理员）
 - `GET  /api/v1/audit/recent`（管理员，最近审计事件）
 - `GET  /api/v1/system/status`（登录后，版本/WeKnora 配置状态）
+- `GET  /api/v1/admin/config`（管理员，当前规则配置 + 版本/来源路径）
+- `PUT  /api/v1/admin/config/{report|standard|quote}`（管理员，保存分区配置，先校验后原子写盘）
+- `POST /api/v1/admin/config/{report|standard|quote}/reset`（管理员，恢复该分区默认值）
 
 ## 接口
 
@@ -102,6 +113,7 @@ WeKnora 服务器上 Ollama 只在容器网络内时，可设为容器地址（�
 规则：R01 页眉编号 / R02 均值 / R03 字段一致 / R04 日期顺序 / R05 设备溯源 /
 R06 符合性判定 / R07 页码 / R08 注意事项 / R09 标记符号 / R10 签名印章 /
 R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`。
+`GET /api/v1/rules` 返回每条规则的 `enabled/severity` 与启用数量；停用的规则在审核结果中为 `skip` 并说明原因。
 
 ### 标准解析
 
@@ -110,7 +122,7 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 - `GET /api/v1/standards` → 已解析标准列表
 - `GET /api/v1/standards/{id}` → 完整结果（含 `review_history`）
 - `PATCH /api/v1/standards/{id}` → 复核修改（按 `clause` 更新 `name/requirement/method`）
-- `GET /api/v1/standards/{id}/export.xlsx` → 3 列「实检项目」+ 7 列「试验方法明细」
+- `GET /api/v1/standards/{id}/export.xlsx` → 「实检项目」+「试验方法明细」；明细列由管理端字段配置决定（默认 7 列）
 - `POST /api/v1/standards/{id}/publish` → 发布知识库（按条款切块）
 
 解析策略：
@@ -119,9 +131,9 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 2. 没有项目表时按标题名称相似度匹配；
 3. 材料性能以跨页合并表格给出时，用 pdfplumber 读取表格几何、清洗 PDF 水印碎片、按方法条款/方法标题回填；
 4. 文本层不足 500 字符时自动走 OCR；部分企业标准的「5 试验方法和性能要求」合并章节按项目=5.x.y、方法/要求=5.x.y.z 抽取；
-5. 章节标题按中英文名称识别（含「技术条件／检验方法／测试方法」等近义词）；扫描件只有中文标题时也参与识别；
+5. 章节标题按中英文名称识别（含「技术条件／检验方法／测试方法」等近义词，管理端可增删别名）；扫描件只有中文标题时也参与识别；
 6. 只有「试验方法」或只有「技术要求」一个章节的标准（如纯测定方法标准），按该章节的下级条款生成候选项目，缺失字段与项目名称进入人工复核，不再直接判 0 项；
-7. 每条记录保留 `clause/method_clause/page/method_page`，可回溯原文；OCR 结果另带 `confidence_detail/review_fields/review_required`，名称相似度匹配与单章节候选项目也标 `review_required`/`review_fields`。
+7. 每条记录保留 `clause/method_clause/page/method_page`，可回溯原文；OCR 结果另带 `confidence_detail/review_fields/review_required`，名称相似度匹配与单章节候选项目也标 `review_required`/`review_fields`；管理端标记为必填的字段缺失时同样加入 `review_fields`。
 
 ### 报价助手
 
@@ -140,7 +152,8 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 
 解析规则：单价、数量、单位只从输入读取；单位按字典映射（席位→席位/次、袋子→次等）；
 折扣由销售政策参数传入（默认 60%），不由模型推断。图片/扫描件的行来自本地 OCR，
-只做表格定位与文本抽取，不生成价格。
+只做表格定位与文本抽取，不生成价格。管理端可配置表头/样品别名、单位映射、默认折扣、
+产品/服务税率与 CRM 草稿列；这些参数对 Excel、PDF、图片三条解析路径生效。
 
 缺少单价时（客户测试大纲、图片询价）：明细照常解析，`needs_price=true`，
 CRM 草稿的「含税单价」留空并标注「待补单价」，**不生成**含金额的销售报价表；
@@ -234,10 +247,12 @@ data/auth/users.json             用户与密码哈希（0600）
 data/auth/session_secret         会话签名密钥（0600）
 data/audit/audit.jsonl           登录、业务 API 与语义事件审计（P0_AUDIT_RETENTION_DAYS 保留期）
 data/quotes/<id>/                CRM 草稿、销售报价表与 meta.json（项目/创建人）
+data/config/rules.json           管理员规则配置（0600，含报告/标准/报价三个分区）
 backups/                         本地数据快照（0600，已在 .gitignore 中，不入库）
 ```
 
 可用 `P0_STANDARD_DIR`、`P0_QUOTE_DIR`、`P0_SALES_QUOTE_TEMPLATE`、`MAX_STANDARD_MB` 调整目录/模板/上限；
+`P0_CONFIG_PATH` 指定规则配置文件（默认 `data/config/rules.json`；文件不存在时使用默认规则）；
 `P0_AUDIT_RETENTION_DAYS`（默认 180）、`P0_SESSION_TTL`（默认 8 小时）控制审计保留与会话时长；
 `P0_OIDC_ISSUER` / `P0_OIDC_CLIENT_ID` 仅作为 SSO 预留配置，当前登录仍走本地账号；
 OCR 可用 `P0_OCR_ENABLED=0` 关闭，`P0_OCR_DPI`（默认 220）、`P0_OCR_MAX_PAGES` 控制速度；
@@ -286,4 +301,7 @@ python scripts/restore_data.py backups/p0-data-<时间戳>.tar.gz --data-dir /tm
 - P1-S1 的用户库与审计仍是 JSON/JSONL 文件（尚未迁 PostgreSQL），审计查询会全量扫描文件，数据量上来后需换 DB/索引；
 - 项目隔离目前到「项目」粒度；部门/客户级授权要等 CRM 字段契约确认后接入，OIDC/SSO 只预留了配置与状态接口，未实现登录跳转；
 - 管理员重置密码后返回一次性临时密码，需要人工安全传递；尚未强制首次登录改密；
-- 项目隔离覆盖标准与报价；报告审核不落库，暂不做行级隔离。
+- 项目隔离覆盖标准与报价；报告审核不落库，暂不做行级隔离；
+- 管理端规则配置是可校验的开关/阈值/别名/字段定义，不是任意规则脚本或 DSL：不能新增 R12 或编写自定义判定逻辑；
+- 配置是 `data/config/rules.json` 单文件（0600），保存时校验并原子替换，`revision` 递增；无审批流、无按时间点回滚，误改后可「恢复默认」或从备份快照恢复；
+- 规则变更只影响保存后的新请求，已生成的审核结果、已解析标准、已有报价不重算。

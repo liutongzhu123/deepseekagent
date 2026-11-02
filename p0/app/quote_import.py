@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_right as _bisect_right
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -98,6 +100,56 @@ _HEADER_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 _HEADER_HINTS = tuple(keyword for _, keywords in _HEADER_KEYWORDS for keyword in keywords)
 _ITEM_HINTS = ("试验项目", "测试项目", "检验项目", "实验项目", "检测项目")
 ITEM_HINTS = _ITEM_HINTS
+
+# Per-request admin overrides (rule configuration).  A ContextVar keeps the
+# override scoped to one request/task instead of mutating the module globals.
+_HEADER_ALIASES: ContextVar[dict[str, tuple[str, ...]] | None] = ContextVar(
+    "quote_header_aliases", default=None
+)
+
+
+def _active_aliases() -> dict[str, tuple[str, ...]]:
+    return _HEADER_ALIASES.get() or {}
+
+
+def _header_keywords() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    overrides = _active_aliases()
+    if not overrides:
+        return _HEADER_KEYWORDS
+    merged: list[tuple[str, tuple[str, ...]]] = []
+    known: set[str] = set()
+    for kind, keywords in _HEADER_KEYWORDS:
+        extra = overrides.get(kind, ())
+        merged.append((kind, tuple(dict.fromkeys((*keywords, *extra)))))
+        known.add(kind)
+    for kind, extra in overrides.items():
+        if kind not in known and extra:
+            merged.append((kind, tuple(extra)))
+    return tuple(merged)
+
+
+def _header_hints() -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(hint for _, keywords in _header_keywords() for hint in keywords)
+    )
+
+
+def _item_hints() -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys((*_ITEM_HINTS, *(_active_aliases().get("item") or ())))
+    )
+
+
+@contextmanager
+def header_aliases(aliases: dict[str, list[str]] | None):
+    """Apply admin-configured header aliases for this request only."""
+    token = _HEADER_ALIASES.set(
+        {key: tuple(values) for key, values in (aliases or {}).items() if values}
+    )
+    try:
+        yield
+    finally:
+        _HEADER_ALIASES.reset(token)
 _SECTION_RE = re.compile(r"^[一二三四五六七八九十]+[、.．]")
 _TOTAL_RE = re.compile(r"总计|合计|小计|含税总价|优惠后|价税合计")
 _NUMBER_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
@@ -137,7 +189,7 @@ def _is_header_cell(text: str) -> bool:
     cleaned = _clean(text)
     if not cleaned or len(cleaned) > 28:
         return False
-    return any(hint in cleaned for hint in _HEADER_HINTS)
+    return any(hint in cleaned for hint in _header_hints())
 
 
 def _header_kind(text: str) -> str | None:
@@ -152,7 +204,7 @@ def _header_kind(text: str) -> str | None:
         return None
     # OCR sometimes prefixes a merged header cell with its 序号 ("1测试项目").
     probe = re.sub(r"^\d+[、.．]?\s*", "", cleaned)
-    for kind, keywords in _HEADER_KEYWORDS:
+    for kind, keywords in _header_keywords():
         for keyword in keywords:
             if probe.startswith(keyword):
                 return kind
@@ -163,7 +215,7 @@ def _is_item_header(text: str) -> bool:
     cleaned = _clean(text)
     if not cleaned or len(cleaned) > 40:
         return False
-    return any(hint in cleaned for hint in _ITEM_HINTS)
+    return any(hint in cleaned for hint in _item_hints())
 
 
 def header_kind(text: str) -> str | None:
@@ -174,6 +226,11 @@ def header_kind(text: str) -> str | None:
 def is_item_header(text: str) -> bool:
     """Public item-column header check used by the generic grid parser."""
     return _is_item_header(text)
+
+
+def item_hints() -> tuple[str, ...]:
+    """Active item-header hints, including admin-configured aliases."""
+    return _item_hints()
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +562,7 @@ def _tokens_from_ocr_lines(lines: list[Any]) -> list[_Token]:
 def _split_merged_header(token: _Token) -> list[_Token]:
     """Split an OCR line that merged several header cells into sub-tokens."""
     found: list[tuple[int, int, str]] = []
-    for kind, keywords in _HEADER_KEYWORDS:
+    for kind, keywords in _header_keywords():
         for keyword in keywords:
             start = 0
             while True:

@@ -170,15 +170,18 @@ _SECTION_ALIASES = {
 }
 
 
-def _section_number(headings: list[_Heading], keyword: str) -> str | None:
+def _section_number(
+    headings: list[_Heading], keyword: str, aliases: list[str] | tuple[str, ...] | None = None
+) -> str | None:
     """Find a top-level section by name, accepting common near-synonyms.
 
     Scanned enterprise standards often omit the English subtitle and use a
     variant such as "技术条件" or "试验方法及要求"; only top-level headings are
     considered so a clause like "5.3 试验要求" cannot become the section.
+    Administrators can override the alias list from the rule-config page.
     """
-    aliases = _SECTION_ALIASES.get(keyword, (keyword,))
-    for alias in aliases:
+    alias_list = tuple(aliases) if aliases else _SECTION_ALIASES.get(keyword, (keyword,))
+    for alias in alias_list:
         for heading in headings:
             if heading.num.count(".") == 0 and alias in heading.name:
                 return heading.num
@@ -1067,17 +1070,57 @@ def _parse_combined_items(
     return parsed
 
 
+def _apply_field_rules(items: list[dict], fields: list[dict] | None) -> int:
+    """Mark items whose administrator-required fields were not extracted.
+
+    Returns the number of newly requested review fields.  Field visibility
+    (``export``) is applied by the Excel export endpoint, not here, so the
+    stored result keeps every extracted value for audit.
+    """
+    required = [
+        field
+        for field in (fields or [])
+        if isinstance(field, dict) and field.get("required")
+    ]
+    added = 0
+    for item in items:
+        review_fields = item.setdefault("review_fields", [])
+        for field in required:
+            key = field.get("key", "")
+            value = item.get(key)
+            missing = value is None or (isinstance(value, str) and not value.strip())
+            if not missing:
+                continue
+            if any(entry.get("field") == key for entry in review_fields):
+                continue
+            review_fields.append(
+                {
+                    "field": key,
+                    "confidence": 0.0,
+                    "reason": f"字段「{field.get('label') or key}」按规则必填但未提取到",
+                }
+            )
+            item["review_required"] = True
+            added += 1
+    return added
+
+
 def parse_standard(
     pages: list[str], file_name: str = "", pdf_bytes: bytes | None = None,
     page_confidence: list[float] | None = None, ocr: dict | None = None,
+    rule_config: dict | None = None,
 ) -> dict:
     """Parse one standard PDF (already split into page texts).
 
     ``pdf_bytes`` is optional and only used for the table-structure fallback;
     ``page_confidence``/``ocr`` are supplied by the OCR pipeline for scanned
-    PDFs and drive the per-field review flags.
+    PDFs and drive the per-field review flags.  ``rule_config`` is the
+    administrator-managed ``standard`` section (section aliases and field
+    requirements); omitted means the documented defaults.
     """
     started = time.perf_counter()
+    rule_config = rule_config or {}
+    section_aliases = rule_config.get("section_aliases") or {}
     meta = _extract_meta(pages, file_name)
     warnings: list[str] = []
 
@@ -1108,8 +1151,8 @@ def parse_standard(
             "试验方法/试验要求=5.x.y.z，置信度低或缺失的字段已标出"
         )
 
-    tech_sec = _section_number(headings, "技术要求")
-    method_sec = _section_number(headings, "试验方法")
+    tech_sec = _section_number(headings, "技术要求", section_aliases.get("技术要求"))
+    method_sec = _section_number(headings, "试验方法", section_aliases.get("试验方法"))
     if tech_sec is not None and tech_sec == method_sec:
         # A single combined "技术要求和试验方法" section cannot be split into
         # two clause streams; treat it as a method section for human review.
@@ -1251,6 +1294,25 @@ def parse_standard(
     if ocr:
         meta["is_scanned"] = True
         meta["ocr"] = ocr
+
+    field_rule_hits = _apply_field_rules(items, rule_config.get("fields"))
+    if field_rule_hits:
+        warnings.append(
+            f"按规则配置有 {field_rule_hits} 个必填字段未提取到，已加入人工复核清单"
+        )
+    if rule_config:
+        meta["rule_config"] = {
+            "section_aliases": {
+                key: list(value)
+                for key, value in section_aliases.items()
+                if isinstance(value, (list, tuple))
+            },
+            "required_fields": [
+                field.get("key")
+                for field in rule_config.get("fields", [])
+                if isinstance(field, dict) and field.get("required")
+            ],
+        }
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     review_required = sum(1 for item in items if item.get("review_required"))

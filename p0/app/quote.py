@@ -30,6 +30,7 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 
 from . import quote_import
+from .admin_config import DEFAULT_QUOTE as _DEFAULT_QUOTE
 from .xlsx_writer import write_xlsx
 
 SUPPORTED_SUFFIXES = quote_import.SUPPORTED_SUFFIXES
@@ -37,34 +38,12 @@ SUPPORTED_INPUT_HINT = (
     "仅支持 Excel（.xlsx/.xlsm/.xls）、PDF 或图片（.png/.jpg/.jpeg/.webp/.bmp）报价输入"
 )
 
-CRM_HEADERS = [
-    "样品名称",
-    "项目名称",
-    "检验项目",
-    "标准",
-    "检验科室",
-    "单位",
-    "数量",
-    "含税单价",
-    "是否有折扣",
-    "折扣",
-    "备注",
-]
+CRM_HEADERS = [column["label"] for column in _DEFAULT_QUOTE["crm_columns"]]
 
-_UNIT_MAP = {
-    "席位": "席位/次",
-    "席位/次": "席位/次",
-    "袋子": "次",
-    "袋": "次",
-    "套": "套",
-    "件": "件",
-    "批": "批",
-    "次": "次",
-    "小时": "小时",
-    "h": "小时",
-    "回路": "回路",
-    "种": "种",
-    "材料": "材料",
+_UNIT_MAP = dict(_DEFAULT_QUOTE["unit_map"])
+_CRM_COLUMNS = [dict(column) for column in _DEFAULT_QUOTE["crm_columns"]]
+_HEADER_ALIASES = {
+    key: tuple(values) for key, values in _DEFAULT_QUOTE["headers"].items()
 }
 
 
@@ -105,8 +84,8 @@ class QuoteLine:
         ]
 
 
-PRODUCT_TAX_RATE = 0.16
-SERVICE_TAX_RATE = 0.06
+PRODUCT_TAX_RATE = _DEFAULT_QUOTE["product_tax_rate"]
+SERVICE_TAX_RATE = _DEFAULT_QUOTE["service_tax_rate"]
 
 
 class QuoteSelfCheckError(ValueError):
@@ -132,6 +111,8 @@ class QuoteResult:
     incurred_cost: float = 0.0
     parse_method: str = ""
     parse_meta: dict[str, Any] = field(default_factory=dict)
+    product_tax_rate: float = PRODUCT_TAX_RATE
+    service_tax_rate: float = SERVICE_TAX_RATE
 
     @property
     def priced_lines(self) -> int:
@@ -167,11 +148,11 @@ class QuoteResult:
 
     @property
     def product_tax(self) -> float:
-        return round(self.product_amount * PRODUCT_TAX_RATE, 2)
+        return round(self.product_amount * self.product_tax_rate, 2)
 
     @property
     def service_tax(self) -> float:
-        return round(self.service_amount * SERVICE_TAX_RATE, 2)
+        return round(self.service_amount * self.service_tax_rate, 2)
 
     @property
     def total_with_tax(self) -> float:
@@ -195,9 +176,9 @@ class QuoteResult:
             "sales_amount": self.sales_amount,
             "product_amount": self.product_amount,
             "service_amount": self.service_amount,
-            "product_tax_rate": PRODUCT_TAX_RATE,
+            "product_tax_rate": self.product_tax_rate,
             "product_tax": self.product_tax,
-            "service_tax_rate": SERVICE_TAX_RATE,
+            "service_tax_rate": self.service_tax_rate,
             "service_tax": self.service_tax,
             "total_with_tax": self.total_with_tax,
             "incurred_cost": self.incurred_cost,
@@ -239,9 +220,30 @@ def _number(value: Any) -> float | None:
         return None
 
 
-def _unit(value: Any) -> str:
+def _unit(value: Any, unit_map: dict[str, str] | None = None) -> str:
     text = _text(value)
-    return _UNIT_MAP.get(text, text or "次")
+    mapping = unit_map or _UNIT_MAP
+    return mapping.get(text, text or "次")
+
+
+def _header_aliases(headers: dict[str, list[str]] | None, key: str) -> tuple[str, ...]:
+    if headers and headers.get(key):
+        return tuple(headers[key])
+    return _HEADER_ALIASES.get(key, ())
+
+
+def _quote_rates(rule_config: dict | None) -> tuple[float, float]:
+    config = rule_config or {}
+    return (
+        float(config.get("product_tax_rate", PRODUCT_TAX_RATE)),
+        float(config.get("service_tax_rate", SERVICE_TAX_RATE)),
+    )
+
+
+def _quote_discount(rule_config: dict | None, discount: float | None) -> float:
+    if discount is not None:
+        return discount
+    return float((rule_config or {}).get("default_discount", 60.0))
 
 
 def _department(item: str, standard: str = "") -> str:
@@ -252,25 +254,39 @@ def _department(item: str, standard: str = "") -> str:
     return "车身附件试验研究部"
 
 
-def _find_layout(ws) -> tuple[int, int, int, int, int, int] | None:
+def _find_layout(
+    ws, headers: dict[str, list[str]] | None = None
+) -> tuple[int, int, int, int, int, int] | None:
     """Return (item_row, item_col, price_row, price_col, qty_col, unit_col)."""
+    item_aliases = _header_aliases(headers, "item")
+    price_aliases = _header_aliases(headers, "price")
+    quantity_aliases = set(_header_aliases(headers, "quantity"))
+    unit_aliases = set(_header_aliases(headers, "unit"))
     item_row = item_col = None
-    for row in range(1, min(ws.max_row, 30) + 1):
-        for col in range(1, min(ws.max_column, 30) + 1):
-            if "试验项目" in _text(ws.cell(row, col).value):
-                item_row, item_col = row, col
+    # Alias order is priority: a sheet that has both 试验项目 and 测试项目
+    # keeps using 试验项目, matching the pre-config behaviour.
+    for alias in item_aliases:
+        for row in range(1, min(ws.max_row, 30) + 1):
+            for col in range(1, min(ws.max_column, 30) + 1):
+                if alias in _text(ws.cell(row, col).value):
+                    item_row, item_col = row, col
+                    break
+            if item_col:
                 break
-        if item_row:
+        if item_col:
             break
     if item_row is None or item_col is None:
         return None
 
     price_row = price_col = qty_col = unit_col = None
-    for row in range(item_row, min(item_row + 6, ws.max_row) + 1):
-        for col in range(1, min(ws.max_column, 30) + 1):
-            value = _text(ws.cell(row, col).value)
-            if value == "单价":
-                price_row, price_col = row, col
+    for alias in price_aliases:
+        for row in range(item_row, min(item_row + 6, ws.max_row) + 1):
+            for col in range(1, min(ws.max_column, 30) + 1):
+                if _text(ws.cell(row, col).value) == alias:
+                    price_row, price_col = row, col
+                    break
+            if price_col:
+                break
         if price_col:
             break
     if price_col is None:
@@ -281,9 +297,9 @@ def _find_layout(ws) -> tuple[int, int, int, int, int, int] | None:
     for row in range(price_row or item_row, min((price_row or item_row) + 2, ws.max_row) + 1):
         for col in range(price_col + 1, min(ws.max_column, 40) + 1):
             value = _text(ws.cell(row, col).value)
-            if value == "数量" and qty_col is None:
+            if value in quantity_aliases and qty_col is None:
                 qty_col = col
-            if value == "单位" and unit_col is None:
+            if value in unit_aliases and unit_col is None:
                 unit_col = col
         if qty_col and unit_col:
             break
@@ -292,23 +308,34 @@ def _find_layout(ws) -> tuple[int, int, int, int, int, int] | None:
     return item_row, item_col, price_row or item_row, price_col, qty_col, unit_col
 
 
-def parse_dvp(path: str | Path, discount: float = 60.0, source_name: str | None = None) -> QuoteResult:
+def parse_dvp(
+    path: str | Path,
+    discount: float | None = None,
+    source_name: str | None = None,
+    rule_config: dict | None = None,
+) -> QuoteResult:
+    rule_config = rule_config or {}
+    headers = rule_config.get("headers")
+    unit_map = rule_config.get("unit_map")
+    discount = _quote_discount(rule_config, discount)
+    product_rate, service_rate = _quote_rates(rule_config)
     path = Path(path)
     display_name = source_name or path.name
     workbook = load_workbook(path, data_only=True)
     # Prefer a DVP sheet; fall back to the first non-empty sheet.
     ws = next((sheet for sheet in workbook.worksheets if "座椅" in sheet.title or "DVP" in sheet.title), workbook.worksheets[0])
 
-    layout = _find_layout(ws)
+    layout = _find_layout(ws, headers)
     if layout is None:
         raise ValueError("未找到「试验项目 + 单价/数量/单位」表头，无法解析 DVP")
     item_row, item_col, price_row, price_col, qty_col, unit_col = layout
 
+    sample_aliases = _header_aliases(headers, "sample")
     sample_name = ""
     for row in range(1, max(item_row - 1, 1) + 1):
         for col in range(1, min(ws.max_column, 20) + 1):
             value = _text(ws.cell(row, col).value)
-            if "零件/总成" in value:
+            if any(alias in value for alias in sample_aliases):
                 sample_name = value.split("：", 1)[-1].split(":", 1)[-1].strip()
                 break
         if sample_name:
@@ -319,7 +346,13 @@ def parse_dvp(path: str | Path, discount: float = 60.0, source_name: str | None 
     if prefix and not re.match(r"[A-Za-z]", sample_name):
         sample_name = prefix.group(1) + sample_name
 
-    result = QuoteResult(source_file=display_name, sample_name=sample_name, discount=discount)
+    result = QuoteResult(
+        source_file=display_name,
+        sample_name=sample_name,
+        discount=discount,
+        product_tax_rate=product_rate,
+        service_tax_rate=service_rate,
+    )
     last_item = ""
     for row in range(item_row + 2, min(item_row + 200, ws.max_row + 1)):
         item = _clean_item(ws.cell(row, item_col).value)
@@ -331,7 +364,7 @@ def parse_dvp(path: str | Path, discount: float = 60.0, source_name: str | None 
             continue
         price = _number(ws.cell(row, price_col).value)
         qty = _number(ws.cell(row, qty_col).value)
-        unit = _unit(ws.cell(row, unit_col).value)
+        unit = _unit(ws.cell(row, unit_col).value, unit_map)
         if price is None or qty is None:
             result.warnings.append(f"第 {row} 行「{item}」缺少单价或数量，已跳过")
             continue
@@ -440,7 +473,7 @@ def _find_item_header(rows: list[list[Any]]) -> tuple[int, int] | None:
             text = _text(cell)
             if not text or len(text) > 40 or not quote_import.is_item_header(text):
                 continue
-            positions = [text.find(hint) for hint in quote_import.ITEM_HINTS if hint in text]
+            positions = [text.find(hint) for hint in quote_import.item_hints() if hint in text]
             position = min(positions) if positions else 99
             score = (position, len(text), row_index, column)
             if best is None or score < best[0]:
@@ -468,20 +501,29 @@ def _row_is_total(row: list[Any]) -> bool:
     return False
 
 
+def _sample_pattern(sample_aliases: list[str] | tuple[str, ...] | None):
+    if not sample_aliases:
+        return _SAMPLE_RE
+    escaped = "|".join(re.escape(alias) for alias in sample_aliases)
+    return re.compile(r"(?:" + escaped + r")[：:]\s*(.+)")
+
+
 def _detect_sample(
     rows: list[list[Any]],
     header_row: int,
     sample_col: int | None,
     filename: str,
+    sample_aliases: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     if sample_col is not None:
         for row in rows[header_row + 1 : header_row + 4]:
             value = _clean_item(_cell_text(row, sample_col))
             if value:
                 return value
+    pattern = _sample_pattern(sample_aliases)
     for row in rows[: min(header_row + 1, len(rows))]:
         for cell in row:
-            match = _SAMPLE_RE.search(_text(cell))
+            match = pattern.search(_text(cell))
             if not match:
                 continue
             value = re.split(r"[\n（(]|\s+(?=[A-Za-z])", match.group(1), maxsplit=1)[0]
@@ -508,7 +550,12 @@ def _parse_grid(
     rows: list[list[Any]],
     filename: str,
     discount: float,
+    rule_config: dict | None = None,
 ) -> QuoteResult | None:
+    quote_cfg = rule_config or {}
+    headers = quote_cfg.get("headers") or {}
+    unit_map = quote_cfg.get("unit_map")
+    product_rate, service_rate = _quote_rates(quote_cfg)
     header = _find_item_header(rows)
     if header is None:
         return None
@@ -529,7 +576,10 @@ def _parse_grid(
     note_col = columns["note"]
 
     sample_name = _with_file_prefix(
-        _detect_sample(rows, header_row, sample_col, filename), filename
+        _detect_sample(
+            rows, header_row, sample_col, filename, headers.get("sample")
+        ),
+        filename,
     )
     is_dvp = "DVP" in Path(filename).name.upper()
 
@@ -537,6 +587,8 @@ def _parse_grid(
         source_file=filename,
         sample_name=sample_name,
         discount=discount,
+        product_tax_rate=product_rate,
+        service_tax_rate=service_rate,
     )
     warnings: list[str] = []
     qty_defaulted = False
@@ -583,7 +635,7 @@ def _parse_grid(
                         last_line.needs_price = False
                     if quantity is not None:
                         last_line.quantity = quantity
-                    unit_text = _unit(_cell_text(row, unit_col)) if unit_col is not None else ""
+                    unit_text = _unit(_cell_text(row, unit_col), unit_map) if unit_col is not None else ""
                     if unit_text:
                         last_line.unit = unit_text
                     note = _clean_item(_cell_text(row, note_col))
@@ -599,7 +651,7 @@ def _parse_grid(
 
         price = _row_number(row, price_col)
         quantity = _row_number(row, qty_col)
-        unit_text = _unit(_cell_text(row, unit_col)) if unit_col is not None else ""
+        unit_text = _unit(_cell_text(row, unit_col), unit_map) if unit_col is not None else ""
 
         sample = _clean_item(_cell_text(row, sample_col)) if sample_col is not None else ""
         if not sample:
@@ -646,9 +698,19 @@ def _result_from_raw(
     raw_rows: list[quote_import.RawQuoteRow],
     filename: str,
     discount: float,
+    rule_config: dict | None = None,
 ) -> QuoteResult:
+    quote_cfg = rule_config or {}
+    unit_map = quote_cfg.get("unit_map")
+    product_rate, service_rate = _quote_rates(quote_cfg)
     sample_name = _sample_from_filename(filename)
-    result = QuoteResult(source_file=filename, sample_name=sample_name, discount=discount)
+    result = QuoteResult(
+        source_file=filename,
+        sample_name=sample_name,
+        discount=discount,
+        product_tax_rate=product_rate,
+        service_tax_rate=service_rate,
+    )
     seen: set[tuple[str, str]] = set()
     low_confidence = 0
     for index, raw in enumerate(raw_rows, start=1):
@@ -669,7 +731,7 @@ def _result_from_raw(
                 item_name=item,
                 standard=standard,
                 department=_department(item, standard),
-                unit=_unit(raw.unit) if raw.unit else "次",
+                unit=_unit(raw.unit, unit_map) if raw.unit else "次",
                 quantity=float(raw.quantity) if raw.quantity else 1.0,
                 unit_price=float(raw.unit_price) if raw.unit_price is not None else 0.0,
                 discount=discount,
@@ -686,32 +748,51 @@ def _result_from_raw(
     return result
 
 
+def _import_header_aliases(headers: dict[str, list[str]] | None) -> dict[str, tuple[str, ...]]:
+    if not headers:
+        return {}
+    mapping: dict[str, tuple[str, ...]] = {}
+    for key in ("item", "price", "quantity", "unit", "sample"):
+        values = headers.get(key) or []
+        if not values:
+            continue
+        mapping["qty" if key == "quantity" else key] = tuple(values)
+    return mapping
+
+
 def parse_quote_bytes(
     data: bytes,
     filename: str,
-    discount: float = 60.0,
+    discount: float | None = None,
+    rule_config: dict | None = None,
 ) -> QuoteResult:
     """Parse any supported quote input (Excel / PDF / image) from raw bytes."""
-    extraction = quote_import.extract_quote_source(data, filename)
-    candidates: list[tuple[QuoteResult, str]] = []
+    rule_config = rule_config or {}
+    discount = _quote_discount(rule_config, discount)
+    headers = rule_config.get("headers")
+    with quote_import.header_aliases(_import_header_aliases(headers)):
+        extraction = quote_import.extract_quote_source(data, filename)
+        candidates: list[tuple[QuoteResult, str]] = []
 
-    if extraction.kind == "pdf" and extraction.grids:
-        combined: list[list[str]] = []
-        for _, grid in extraction.grids:
-            combined.extend(grid)
-        parsed = _parse_grid(combined, filename, discount)
-        if parsed is not None:
-            candidates.append((parsed, extraction.method_label))
-    elif extraction.grids:
-        for sheet, grid in extraction.grids:
-            parsed = _parse_grid(grid, filename, discount)
+        if extraction.kind == "pdf" and extraction.grids:
+            combined: list[list[str]] = []
+            for _, grid in extraction.grids:
+                combined.extend(grid)
+            parsed = _parse_grid(combined, filename, discount, rule_config)
             if parsed is not None:
-                candidates.append((parsed, f"{extraction.method_label}（{sheet}）"))
+                candidates.append((parsed, extraction.method_label))
+        elif extraction.grids:
+            for sheet, grid in extraction.grids:
+                parsed = _parse_grid(grid, filename, discount, rule_config)
+                if parsed is not None:
+                    candidates.append((parsed, f"{extraction.method_label}（{sheet}）"))
 
-    if extraction.raw_rows:
-        parsed = _result_from_raw(extraction.raw_rows, filename, discount)
-        if parsed.lines:
-            candidates.append((parsed, extraction.method_label))
+        if extraction.raw_rows:
+            parsed = _result_from_raw(
+                extraction.raw_rows, filename, discount, rule_config
+            )
+            if parsed.lines:
+                candidates.append((parsed, extraction.method_label))
 
     if not candidates:
         raise ValueError(
@@ -736,16 +817,56 @@ def parse_quote_bytes(
 
 def parse_quote(
     path: str | Path,
-    discount: float = 60.0,
+    discount: float | None = None,
     source_name: str | None = None,
+    rule_config: dict | None = None,
 ) -> QuoteResult:
     path = Path(path)
     data = path.read_bytes()
-    return parse_quote_bytes(data, source_name or path.name, discount=discount)
+    return parse_quote_bytes(
+        data,
+        source_name or path.name,
+        discount=discount,
+        rule_config=rule_config,
+    )
 
 
-def write_crm_xlsx(path: str | Path, result: QuoteResult) -> Path:
-    rows: list[list[Any]] = [CRM_HEADERS] + [line.to_crm_row() for line in result.lines]
+_CRM_WIDTHS = {
+    "sample_name": 18,
+    "item_name": 34,
+    "standard": 24,
+    "department": 22,
+    "unit": 10,
+    "quantity": 8,
+    "unit_price": 12,
+    "has_discount": 10,
+    "discount": 8,
+    "note": 26,
+}
+
+
+def _crm_value(line: QuoteLine, source: str) -> Any:
+    if source == "has_discount":
+        return "是"
+    if source == "unit_price":
+        return "" if line.needs_price else line.unit_price
+    if source == "note":
+        return line.crm_note()
+    return getattr(line, source, "")
+
+
+def write_crm_xlsx(
+    path: str | Path, result: QuoteResult, columns: list[dict] | None = None
+) -> Path:
+    active = [
+        column
+        for column in (columns or _CRM_COLUMNS)
+        if isinstance(column, dict) and column.get("enabled", True)
+    ] or list(_CRM_COLUMNS)
+    rows: list[list[Any]] = [[column["label"] for column in active]] + [
+        [_crm_value(line, column["source"]) for column in active]
+        for line in result.lines
+    ]
     summary = [
         ["报价汇总", ""],
         ["样品名称", result.sample_name],
@@ -755,14 +876,14 @@ def write_crm_xlsx(path: str | Path, result: QuoteResult) -> Path:
         ["DVP 合计（未折扣）", result.subtotal],
         ["折扣（%）", result.discount],
         ["销售报价（不含税）", result.sales_amount],
-        ["服务税率", "6%"],
+        ["服务税率", f"{result.service_tax_rate:.0%}"],
         ["税额", result.service_tax],
         ["税价合计", result.total_with_tax],
     ]
     return write_xlsx(
         path,
         [
-            ("CRM报价草稿", rows, [18, 34, 34, 24, 22, 10, 8, 12, 10, 8, 26]),
+            ("CRM报价草稿", rows, [_CRM_WIDTHS.get(column["source"], 16) for column in active]),
             ("报价汇总", summary, [28, 24]),
         ],
     )
@@ -932,8 +1053,8 @@ def verify_sales_quote(path: str | Path, result: QuoteResult, tolerance: float =
     c13 = _cell_number(ws, "C13") or 0.0
     c14 = _cell_number(ws, "C14") or 0.0
     c15 = _cell_number(ws, "C15") or 0.0
-    b11 = _cell_number(ws, "B11") or PRODUCT_TAX_RATE
-    b12 = _cell_number(ws, "B12") or SERVICE_TAX_RATE
+    b11 = _cell_number(ws, "B11") or result.product_tax_rate
+    b12 = _cell_number(ws, "B12") or result.service_tax_rate
     arithmetic = [
         ("服务金额 = 销售报价 - 产品金额", c10, c8 - c9, "C10 = C8-C9"),
         ("产品税额 = 产品金额 × 产品税率", c11, c9 * b11, "C11 = C9*B11"),
@@ -979,9 +1100,9 @@ def sales_quote_preview(result: QuoteResult) -> dict:
         "销售报价（不含税）": result.sales_amount,
         "产品金额（不含税）": result.product_amount,
         "服务金额（不含税）": result.service_amount,
-        "产品税率": "16%",
+        "产品税率": f"{result.product_tax_rate:.0%}",
         "产品税额": result.product_tax,
-        "服务税率": "6%",
+        "服务税率": f"{result.service_tax_rate:.0%}",
         "服务税额": result.service_tax,
         "税价合计": result.total_with_tax,
         "产生费用": result.incurred_cost,

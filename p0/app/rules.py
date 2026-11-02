@@ -56,6 +56,83 @@ RULES: list[tuple[str, str, str]] = [
 ]
 
 
+DEFAULT_MEAN_TOLERANCE = 0.05
+DEFAULT_EXPECTED_NOTICES = 8
+
+_RULE_FUNCTIONS = {
+    "R01": "r01_header",
+    "R02": "r02_mean",
+    "R03": "r03_fields",
+    "R04": "r04_dates",
+    "R05": "r05_device",
+    "R06": "r06_judgment",
+    "R07": "r07_pages",
+    "R08": "r08_notes",
+    "R09": "r09_markup",
+    "R10": "r10_signature",
+    "R11": "r11_template",
+}
+
+
+def _rule_meta(config: dict | None) -> tuple[dict[str, dict], float, int]:
+    """Return (rule_id -> config, mean tolerance, expected notices)."""
+    config = config or {}
+    rules = {
+        item.get("id"): item
+        for item in (config.get("rules") or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    tolerance = config.get("mean_tolerance", DEFAULT_MEAN_TOLERANCE)
+    expected = config.get("expected_notices", DEFAULT_EXPECTED_NOTICES)
+    try:
+        tolerance = abs(float(tolerance))
+    except (TypeError, ValueError):
+        tolerance = DEFAULT_MEAN_TOLERANCE
+    try:
+        expected = int(expected)
+    except (TypeError, ValueError):
+        expected = DEFAULT_EXPECTED_NOTICES
+    return rules, tolerance, expected
+
+
+def rules_catalog(config: dict | None = None) -> list[dict]:
+    """Rule metadata for ``/api/v1/rules`` including admin overrides."""
+    meta, _, _ = _rule_meta(config)
+    catalog: list[dict] = []
+    for rule_id, title, description in RULES:
+        override = meta.get(rule_id, {})
+        catalog.append(
+            {
+                "id": rule_id,
+                "title": override.get("title") or title,
+                "description": override.get("description", description),
+                "enabled": override.get("enabled", True),
+                "severity": override.get("severity", "medium"),
+            }
+        )
+    return catalog
+
+
+def _apply_rule_meta(finding: Finding, override: dict | None) -> Finding:
+    if not override:
+        return finding
+    if override.get("enabled") is False:
+        return Finding(
+            finding.rule_id,
+            override.get("title") or finding.title,
+            "skip",
+            "info",
+            "该规则已由管理员在规则配置中停用",
+            "",
+            "",
+        )
+    if override.get("title"):
+        finding.title = override["title"]
+    if finding.status in {"fail", "warn"} and override.get("severity"):
+        finding.severity = override["severity"]
+    return finding
+
+
 def _mean(scores: Iterable[float]) -> float | None:
     values = [value for value in scores if isinstance(value, (int, float))]
     if not values:
@@ -96,7 +173,7 @@ def r01_header(data: ReportData) -> Finding:
     return _pass("R01", "页眉报告编号一致", f"封面与正文均为 {data.cover_number}", f"页眉={data.header_numbers}")
 
 
-def r02_mean(data: ReportData) -> Finding:
+def r02_mean(data: ReportData, tolerance: float = DEFAULT_MEAN_TOLERANCE) -> Finding:
     computed = _mean(data.scores)
     if computed is None:
         return _skip("R02", "检验均值计算", "未识别到 3 名评价员的检验结果")
@@ -109,7 +186,7 @@ def r02_mean(data: ReportData) -> Finding:
             "high",
             "在结果表中填写检验均值，或由模板公式自动计算",
         )
-    if abs(computed - data.reported_mean) > 0.05:
+    if abs(computed - data.reported_mean) > tolerance:
         return _fail(
             "R02",
             "检验均值计算",
@@ -244,19 +321,21 @@ def r07_pages(data: ReportData) -> Finding:
     return _pass("R07", "页码完整", f"页码 1..{total} 连续")
 
 
-def r08_notes(data: ReportData) -> Finding:
+def r08_notes(data: ReportData, expected_notices: int = DEFAULT_EXPECTED_NOTICES) -> Finding:
+    if expected_notices <= 0:
+        return _skip("R08", "注意事项条数", "规则配置为不校验注意事项条数")
     if data.notices == 0:
         return _skip("R08", "注意事项条数", "未识别到注意事项段落")
-    if data.notices != 8:
+    if data.notices != expected_notices:
         return _fail(
             "R08",
             "注意事项条数",
-            f"中文报告注意事项应为 8 条，实际 {data.notices} 条",
+            f"中文报告注意事项应为 {expected_notices} 条，实际 {data.notices} 条",
             f"notices={data.notices}",
             "medium",
             "按模板补齐/删除注意事项",
         )
-    return _pass("R08", "注意事项条数", "注意事项 8 条")
+    return _pass("R08", "注意事项条数", f"注意事项 {expected_notices} 条")
 
 
 def r09_markup(data: ReportData) -> Finding:
@@ -300,20 +379,18 @@ def r11_template(data: ReportData) -> Finding:
     return Finding("R11", "模板识别", "warn", "low", "未识别为已知模板", f"basis={data.basis[:80]}", "确认主机厂模板")
 
 
-def audit_report(data: ReportData) -> dict:
-    findings = [
-        r01_header(data),
-        r02_mean(data),
-        r03_fields(data),
-        r04_dates(data),
-        r05_device(data),
-        r06_judgment(data),
-        r07_pages(data),
-        r08_notes(data),
-        r09_markup(data),
-        r10_signature(data),
-        r11_template(data),
-    ]
+def audit_report(data: ReportData, config: dict | None = None) -> dict:
+    """Run the enabled report rules with the configured thresholds/severity."""
+    meta, tolerance, expected_notices = _rule_meta(config)
+    findings = []
+    for rule_id, function_name in _RULE_FUNCTIONS.items():
+        if rule_id == "R02":
+            finding = r02_mean(data, tolerance)
+        elif rule_id == "R08":
+            finding = r08_notes(data, expected_notices)
+        else:
+            finding = globals()[function_name](data)
+        findings.append(_apply_rule_meta(finding, meta.get(rule_id)))
     return {
         "file": data.file_name,
         "template": data.template_family,
@@ -342,7 +419,8 @@ def _rmean(scores: list[float] | None) -> float | None:
     return _mean(scores or [])
 
 
-def validate_records(records: list[RecordInput]) -> dict:
+def validate_records(records: list[RecordInput], config: dict | None = None) -> dict:
+    _, tolerance, _ = _rule_meta(config)
     findings: list[Finding] = []
     seen: dict[str, int] = {}
     for index, record in enumerate(records, start=1):
@@ -353,7 +431,7 @@ def validate_records(records: list[RecordInput]) -> dict:
             findings.append(_fail("REC-01", "记录均值", f"{sample}: 缺评分", f"row={index}", "high", "补齐 3 次评分"))
         elif record.reported_mean is None:
             findings.append(_fail("REC-01", "记录均值", f"{sample}: 缺复核均值", f"computed={computed}", "high", "填写复核均值"))
-        elif abs(computed - record.reported_mean) > 0.05:
+        elif abs(computed - record.reported_mean) > tolerance:
             findings.append(
                 _fail("REC-01", "记录均值", f"{sample}: 复核均值 {record.reported_mean} 与计算 {computed} 不一致", f"row={index}", "high", "修正复核均值")
             )

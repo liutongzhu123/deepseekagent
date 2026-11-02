@@ -75,6 +75,8 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
     "user:manage": ("admin",),
     "audit:read": ("admin",),
     "audit:export": ("admin",),
+    "config:read": ("admin",),
+    "config:manage": ("admin",),
     "system:status": ("admin", "reviewer", "sales", "viewer"),
 }
 

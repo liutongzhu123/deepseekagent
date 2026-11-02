@@ -24,13 +24,14 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import admin_config
 from . import auth
 from . import ocr as ocr_service
 from . import quote as quote_service
 from . import report_writer, standard_qa, standard_store, weknora
 from .docx_parser import parse_docx
 from .pdf_text import extract_pages
-from .rules import RULES, RecordInput, audit_report, validate_records
+from .rules import RecordInput, audit_report, rules_catalog, validate_records
 from .standard_parser import parse_standard
 from .xlsx_writer import write_xlsx
 
@@ -51,7 +52,7 @@ AUTH_BOOTSTRAP = auth.bootstrap()
 
 app = FastAPI(
     title="中汽零部件 P1 API",
-    version="0.6.0",
+    version="0.7.0",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -451,6 +452,42 @@ def system_status(request: Request) -> dict:
     }
 
 
+@app.get("/api/v1/admin/config")
+def get_admin_config(request: Request) -> dict:
+    _require_permission(request, "config:read")
+    return admin_config.describe()
+
+
+@app.put("/api/v1/admin/config/{section}")
+def update_admin_config(section: str, payload: dict, request: Request) -> dict:
+    user = _require_permission(request, "config:manage")
+    try:
+        admin_config.update_section(section, payload, updated_by=user.get("username", ""))
+    except admin_config.ConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = admin_config.describe()
+    _audit_event(
+        request, user, "admin_config_updated",
+        section=section, revision=result["config"]["revision"],
+    )
+    return result
+
+
+@app.post("/api/v1/admin/config/{section}/reset")
+def reset_admin_config(section: str, request: Request) -> dict:
+    user = _require_permission(request, "config:manage")
+    try:
+        admin_config.reset_section(section, updated_by=user.get("username", ""))
+    except admin_config.ConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = admin_config.describe()
+    _audit_event(
+        request, user, "admin_config_reset",
+        section=section, revision=result["config"]["revision"],
+    )
+    return result
+
+
 class RecordIn(BaseModel):
     task_no: str = ""
     report_no: str = ""
@@ -509,7 +546,12 @@ def index() -> FileResponse:
 @app.get("/api/v1/rules")
 def list_rules(request: Request) -> dict:
     _require_permission(request, "rules:read")
-    return {"rules": [{"id": rid, "title": title, "description": desc} for rid, title, desc in RULES]}
+    rules = rules_catalog(admin_config.report_config())
+    return {
+        "rules": rules,
+        "enabled": sum(1 for rule in rules if rule["enabled"]),
+        "total": len(rules),
+    }
 
 
 @app.post("/api/v1/reports/audit")
@@ -527,7 +569,7 @@ async def audit_report_file(request: Request, file: UploadFile = File(...)) -> d
             tmp_path = tmp.name
         parsed = parse_docx(tmp_path)
         parsed.file_name = file.filename
-        result = audit_report(parsed)
+        result = audit_report(parsed, admin_config.report_config())
         _audit_event(
             request, user, "report_audited", file_name=file.filename,
             fail=result.get("summary", {}).get("fail", 0),
@@ -558,7 +600,7 @@ async def audit_report_markdown(request: Request, file: UploadFile = File(...)) 
             tmp_path = tmp.name
         parsed = parse_docx(tmp_path)
         parsed.file_name = file.filename
-        result = audit_report(parsed)
+        result = audit_report(parsed, admin_config.report_config())
         _audit_event(request, user, "report_audited_markdown", file_name=file.filename)
         return PlainTextResponse(
             report_writer.audit_markdown(result, {"file_name": file.filename}),
@@ -590,7 +632,7 @@ def validate_record_batch(payload: RecordsRequest, request: Request) -> dict:
         )
         for item in payload.records
     ]
-    result = validate_records(records)
+    result = validate_records(records, admin_config.report_config())
     _audit_event(request, user, "records_validated", records=len(records))
     return result
 
@@ -685,6 +727,7 @@ async def parse_standard_file(
             pdf_bytes=data,
             page_confidence=page_confidence,
             ocr=ocr_meta,
+            rule_config=admin_config.standard_config(),
         )
         if ocr_warning:
             parsed.setdefault("warnings", []).append(ocr_warning)
@@ -748,29 +791,37 @@ def export_standard(standard_id: str, request: Request) -> FileResponse:
         raise HTTPException(status_code=409, detail="no items to export")
     meta = record["meta"]
     summary_rows = [["检验依据", "检验标准名称", "实检项目"]] + [
-        [meta.get("standard_no", ""), meta.get("name", ""), item["name"]]
+        [meta.get("standard_no", ""), meta.get("name", ""), item.get("name", "")]
         for item in record["items"]
     ]
+    fields = [
+        field
+        for field in admin_config.standard_config()["fields"]
+        if field.get("export")
+    ]
+    if not fields:
+        fields = [
+            {"key": "name", "label": "实检项目"},
+            {"key": "clause", "label": "技术要求条款"},
+            {"key": "requirement", "label": "技术要求/判定要求"},
+            {"key": "method_clause", "label": "试验方法条款"},
+            {"key": "method", "label": "试验方法（具体方法）"},
+        ]
+    field_widths = {
+        "name": 32,
+        "clause": 12,
+        "requirement": 60,
+        "method_clause": 12,
+        "method": 60,
+        "group": 20,
+        "page": 10,
+        "method_page": 10,
+    }
     detail_rows = [
-        [
-            "检验依据",
-            "检验标准名称",
-            "实检项目",
-            "技术要求条款",
-            "技术要求/判定要求",
-            "试验方法条款",
-            "试验方法（具体方法）",
-        ]
+        ["检验依据", "检验标准名称"] + [field["label"] for field in fields]
     ] + [
-        [
-            meta.get("standard_no", ""),
-            meta.get("name", ""),
-            item["name"],
-            item["clause"],
-            item["requirement"],
-            item["method_clause"],
-            item["method"],
-        ]
+        [meta.get("standard_no", ""), meta.get("name", "")]
+        + [item.get(field["key"], "") for field in fields]
         for item in record["items"]
     ]
     path = standard_store.export_path(standard_id)
@@ -778,7 +829,11 @@ def export_standard(standard_id: str, request: Request) -> FileResponse:
         path,
         [
             ("实检项目", summary_rows, [16, 28, 32]),
-            ("试验方法明细", detail_rows, [16, 28, 32, 12, 60, 12, 60]),
+            (
+                "试验方法明细",
+                detail_rows,
+                [16, 28] + [field_widths.get(field["key"], 16) for field in fields],
+            ),
         ],
     )
     filename = standard_store.safe_filename(
@@ -875,7 +930,9 @@ async def parse_quote_file(request: Request, file: UploadFile = File(...)) -> di
     data = await file.read()
     _quote_upload_bytes(data)
     try:
-        return quote_service.parse_quote_bytes(data, filename).to_dict()
+        return quote_service.parse_quote_bytes(
+            data, filename, rule_config=admin_config.quote_config()
+        ).to_dict()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - API boundary
@@ -903,7 +960,10 @@ async def generate_quote(
     data = await file.read()
     _quote_upload_bytes(data)
     try:
-        result = quote_service.parse_quote_bytes(data, filename)
+        quote_cfg = admin_config.quote_config()
+        result = quote_service.parse_quote_bytes(
+            data, filename, rule_config=quote_cfg
+        )
 
         quote_id = "q_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
         directory = QUOTE_DIR / quote_id
@@ -925,7 +985,9 @@ async def generate_quote(
             ),
             encoding="utf-8",
         )
-        crm_path = quote_service.write_crm_xlsx(directory / "CRM报价草稿.xlsx", result)
+        crm_path = quote_service.write_crm_xlsx(
+            directory / "CRM报价草稿.xlsx", result, quote_cfg["crm_columns"]
+        )
         files = {"crm": f"{ROOT_PATH}/api/v1/quotes/{quote_id}/crm.xlsx"}
 
         template_bytes = await template.read() if template is not None else b""
