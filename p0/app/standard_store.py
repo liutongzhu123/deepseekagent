@@ -9,6 +9,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import weknora
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("P0_STANDARD_DIR", ROOT / "data" / "standards"))
 
@@ -196,12 +198,44 @@ def publish(standard_id: str) -> dict:
             "chunks": chunks,
             "published_at": _now(),
         }
+        # WeKnora is the single knowledge base.  The local kb.json remains as a
+        # deterministic audit/fallback copy, but the business Q&A path reads
+        # from WeKnora and every publication must reach it.
+        weknora_result = None
+        if weknora.configured():
+            try:
+                weknora_result = weknora.publish_standard(record, chunks)
+            except weknora.WeKnoraError as exc:
+                if weknora.required():
+                    raise weknora.WeKnoraError(f"发布到 WeKnora 失败：{exc}") from exc
+                kb["weknora_error"] = str(exc)
+            else:
+                kb["weknora"] = weknora_result
+                record["weknora"] = weknora_result
+        elif weknora.required():
+            raise ValueError("WeKnora 是唯一知识底座，但服务端尚未配置 WeKnora 连接")
         _write_json(_dir(standard_id) / "kb.json", kb)
         record["published"] = True
         record["published_at"] = kb["published_at"]
         record["updated_at"] = kb["published_at"]
         _write_json(_dir(standard_id) / "result.json", record)
-        return {"published": True, "chunks": len(chunks), "published_at": kb["published_at"]}
+        return {
+            "published": True,
+            "chunks": len(chunks),
+            "published_at": kb["published_at"],
+            "weknora": weknora_result,
+        }
+
+
+def published_knowledge_ids(standard_id: str | None = None) -> list[str]:
+    """WeKnora knowledge IDs for the published standard(s)."""
+    ids: list[str] = []
+    for kb in published_kbs(standard_id):
+        knowledge_id = (kb.get("weknora") or {}).get("knowledge_id")
+        if knowledge_id:
+            ids.append(knowledge_id)
+    return ids
+
 
 
 def published_kbs(standard_id: str | None = None) -> list[dict]:

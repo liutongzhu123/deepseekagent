@@ -3,15 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>中汽零部件 P0 · 智能审核与标准解析</title>
+  <base href="./">
+  <title>中汽零部件 P0 · 智能审核与报价</title>
   <style>
     :root { --ink:#1f2933; --muted:#5f6b7a; --line:#d9e2e8; --blue:#0f4c81; --blue-2:#1769aa; --bg:#f6f8fa; --green:#0f766e; --amber:#b45309; --red:#b42318; }
     * { box-sizing:border-box; }
     body { margin:0; font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; color:var(--ink); background:var(--bg); }
-    header { background:#0f4c81; color:#fff; padding:16px 24px; }
+    header { background:#0f4c81; color:#fff; padding:16px 24px 0; }
+    .topline { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
     header h1 { margin:0; font-size:19px; }
     header p { margin:4px 0 0; opacity:.82; font-size:12px; }
-    nav { display:flex; gap:4px; margin-top:12px; }
+    .userbox { display:flex; align-items:center; gap:10px; font-size:12px; color:rgba(255,255,255,.9); }
+    .userbox b { font-weight:600; }
+    .userbox button { background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.28); color:#fff; padding:5px 10px; border-radius:4px; font-size:12px; cursor:pointer; }
+    nav { display:flex; gap:4px; margin-top:12px; flex-wrap:wrap; }
     nav button { background:rgba(255,255,255,.12); color:#fff; border:0; border-radius:4px 4px 0 0; padding:7px 16px; cursor:pointer; font-size:13px; }
     nav button.active { background:var(--bg); color:var(--blue); font-weight:600; }
     main { max-width:1180px; margin:20px auto 48px; padding:0 16px; display:grid; gap:16px; }
@@ -25,7 +30,7 @@
     input[type=text], textarea, select { border:1px solid var(--line); border-radius:4px; padding:7px 8px; font:inherit; background:#fff; }
     input[type=text] { width:100%; }
     textarea { width:100%; min-height:90px; font:12px/1.55 ui-monospace,Consolas,monospace; }
-    pre { background:#0f172a; color:#e2e8f0; padding:14px; border-radius:6px; overflow:auto; max-height:420px; font-size:12px; }
+    pre { background:#0f172a; color:#e2e8f0; padding:14px; border-radius:6px; overflow:auto; max-height:420px; font-size:12px; white-space:pre-wrap; }
     .muted { color:var(--muted); font-size:12px; }
     .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; margin-left:6px; }
@@ -49,16 +54,28 @@
     .answer { background:#f7fbff; border:1px solid #cfe0f3; border-radius:6px; padding:12px; white-space:pre-wrap; font-size:13px; }
     .citation { border-left:3px solid var(--blue-2); padding:6px 10px; margin:8px 0; background:#fff; font-size:12px; }
     .warnings { margin:8px 0 0; padding-left:18px; color:var(--amber); font-size:12px; }
-    @media (max-width:860px) { .grid2 { grid-template-columns:1fr; } }
+    .notice { background:#f7fbff; border:1px dashed #cfe0f3; border-radius:6px; padding:10px 12px; color:var(--muted); font-size:12px; }
+    .quote-result { display:grid; gap:12px; }
+    .quote-result .money { font-size:22px; color:var(--blue); font-weight:700; }
+    @media (max-width:860px) { .grid2 { grid-template-columns:1fr; } .topline { flex-direction:column; } }
   </style>
 </head>
 <body>
 <header>
-  <h1>中汽零部件 P0 · 智能审核与标准解析</h1>
-  <p>报告审核（第一增量）· 标准解析（第二增量）· 规则/条款均带证据与页码</p>
+  <div class="topline">
+    <div>
+      <h1>中汽零部件 P0 · 智能审核与报价</h1>
+      <p>报告审核 · 标准解析 · 报价助手 · WeKnora 知识问答 · 全部操作带证据与审计</p>
+    </div>
+    <div class="userbox" id="userBox">
+      <span style="color:rgba(255,255,255,.7)">正在确认登录状态…</span>
+    </div>
+  </div>
   <nav>
     <button data-tab="report" id="tabReport">报告审核</button>
     <button data-tab="standards" id="tabStandards">标准解析</button>
+    <button data-tab="quote" id="tabQuote">报价助手</button>
+    <button data-tab="knowledge" id="tabKnowledge">知识问答</button>
   </nav>
 </header>
 <main>
@@ -94,7 +111,7 @@
   <section id="panel-standards" class="hidden">
     <section class="card">
       <h2>上传标准 PDF 并解析</h2>
-      <p class="muted">数字版 PDF：自动识别「技术要求 / 试验方法」章节、检验项目表、条款与页码；扫描件需 OCR（本增量未启用）。</p>
+      <p class="muted">数字版 PDF：自动识别「技术要求 / 试验方法」章节、检验项目表、条款与页码；扫描件默认启用本地 OCR。</p>
       <input id="stdFile" type="file" accept=".pdf">
       <div class="row">
         <button id="parseBtn">解析标准</button>
@@ -111,23 +128,25 @@
         </div>
         <div class="row">
           <button class="secondary" id="exportBtn" disabled>导出 Excel</button>
-          <button class="secondary" id="publishBtn" disabled>发布到知识库</button>
+          <button class="secondary" id="publishBtn" disabled>发布到 WeKnora</button>
         </div>
       </div>
       <div id="metaLine" class="muted" style="margin-top:6px">尚未选择标准。</div>
       <div class="stats" id="stats"></div>
 
       <div class="grid2">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>#</th><th>条款</th><th>实检项目</th><th>方法条款</th><th>页码</th><th>状态</th></tr></thead>
-            <tbody id="itemsBody"><tr><td colspan="6" class="muted">解析后在此查看 44 项清单。</td></tr></tbody>
-          </table>
+        <div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>条款</th><th>实检项目</th><th>方法条款</th><th>页码</th><th>状态</th></tr></thead>
+              <tbody id="itemsBody"></tbody>
+            </table>
+          </div>
         </div>
-        <aside class="card" style="box-shadow:none">
-          <h3 style="margin-top:0">复核编辑</h3>
-          <div id="editor" class="muted">点击左侧一行开始复核。</div>
+        <aside>
+          <div id="editor" class="notice">点击左侧一行开始复核。</div>
           <div id="editorFields" class="hidden">
+            <h3>复核修改</h3>
             <label class="muted">实检项目</label>
             <input type="text" id="editName">
             <label class="muted" style="display:block;margin-top:8px">技术要求 / 判定要求</label>
@@ -143,16 +162,46 @@
         </aside>
       </div>
     </section>
+  </section>
 
+  <!-- 报价助手 -->
+  <section id="panel-quote" class="hidden">
     <section class="card">
-      <h2>知识库问答（带引用）</h2>
-      <p class="muted">对已发布标准做条款检索；回答只引用原文，找不到时明确说未找到，不编造。</p>
+      <h2>DVP / 测试大纲 → CRM 报价草稿与销售报价表</h2>
+      <p class="muted">价格、数量、单位只从输入读取；生成后对 9 个金额单元格和 5 条算术关系自检，不一致直接报错。</p>
+      <label class="muted">DVP / 测试大纲（.xlsx）</label>
+      <input id="quoteFile" type="file" accept=".xlsx,.xlsm">
+      <label class="muted">销售报价表模板（可选，.xlsx）</label>
+      <input id="quoteTemplate" type="file" accept=".xlsx">
+      <div class="row" style="margin-top:8px">
+        <button id="quoteBtn">生成报价草稿</button>
+        <span class="muted" id="quoteStatus"></span>
+      </div>
+      <div id="quoteResult" class="quote-result" style="margin-top:14px"></div>
+      <pre id="quotePreview" class="hidden"></pre>
+    </section>
+  </section>
+
+  <!-- 知识问答 -->
+  <section id="panel-knowledge" class="hidden">
+    <section class="card">
+      <h2>WeKnora 知识问答（带标准 / 条款 / 页码引用）</h2>
+      <p class="muted">检索走 WeKnora 唯一知识底座；库外标准、库外条款或相关度不足时明确拒答，不生成无依据答案。</p>
       <div class="row">
+        <select id="kbStdSelect" style="min-width:360px"><option value="">全部已发布标准</option></select>
+        <span id="kbStatus" class="muted"></span>
+      </div>
+      <div class="row" style="margin-top:10px">
         <input type="text" id="question" style="flex:1;min-width:320px" value="EPB 制动钳 5.3.11 的驻车基本性能要求是什么？">
         <button id="askBtn">提问</button>
       </div>
       <div id="answerBox" class="answer hidden" style="margin-top:12px"></div>
       <div id="citations"></div>
+      <div id="retrievalMeta" class="muted" style="margin-top:8px"></div>
+    </section>
+    <section class="card">
+      <h2>知识底座状态</h2>
+      <div id="kbHealth" class="notice">正在检查 WeKnora 连接…</div>
     </section>
   </section>
 </main>
@@ -166,18 +215,39 @@ async function jsonFetch(url, options) {
   const res = await fetch(url, options);
   let data = null;
   try { data = await res.json(); } catch (e) { data = {detail: String(e)}; }
+  if (res.status === 401) { window.location.replace('login'); throw new Error('登录状态已失效'); }
   if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
   return data;
 }
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmt(n) { return (n === null || n === undefined) ? '-' : n; }
 
 function switchTab(name) {
-  $('panel-report').classList.toggle('hidden', name !== 'report');
-  $('panel-standards').classList.toggle('hidden', name !== 'standards');
-  $('tabReport').classList.toggle('active', name === 'report');
-  $('tabStandards').classList.toggle('active', name === 'standards');
+  for (const [tab, panel] of [['report','panel-report'],['standards','panel-standards'],['quote','panel-quote'],['knowledge','panel-knowledge']]) {
+    $(panel).classList.toggle('hidden', tab !== name);
+    $('tab' + tab[0].toUpperCase() + tab.slice(1)).classList.toggle('active', tab === name);
+  }
+  if (name === 'knowledge') loadKbHealth();
 }
 $('tabReport').addEventListener('click', () => switchTab('report'));
 $('tabStandards').addEventListener('click', () => switchTab('standards'));
+$('tabQuote').addEventListener('click', () => switchTab('quote'));
+$('tabKnowledge').addEventListener('click', () => switchTab('knowledge'));
+
+/* ---------- auth ---------- */
+async function loadMe() {
+  try {
+    const data = await jsonFetch('api/v1/auth/me');
+    const u = data.user;
+    $('userBox').innerHTML = `<span><b>${escapeHtml(u.display_name || u.username)}</b> · ${escapeHtml(u.role)}</span><button id="logoutBtn">退出</button>`;
+    $('logoutBtn').addEventListener('click', async () => {
+      try { await jsonFetch('api/v1/auth/logout', {method:'POST'}); } catch (e) {}
+      window.location.replace('login');
+    });
+  } catch (e) {
+    $('userBox').innerHTML = '<span>未登录</span>';
+  }
+}
 
 /* ---------- 报告审核 ---------- */
 $('audit').addEventListener('click', async () => {
@@ -186,7 +256,7 @@ $('audit').addEventListener('click', async () => {
   $('status').textContent = '解析中…'; $('audit').disabled = true;
   try {
     const fd = new FormData(); fd.append('file', f);
-    const data = await jsonFetch('/api/v1/reports/audit', {method:'POST', body:fd});
+    const data = await jsonFetch('api/v1/reports/audit', {method:'POST', body:fd});
     $('reportOut').textContent = JSON.stringify(data, null, 2);
     $('status').innerHTML = `完成：<span class="badge fail">${data.summary.fail} 失败</span><span class="badge pass">${data.summary.pass} 通过</span>`;
   } catch (e) { $('reportOut').textContent = '审核失败：' + e.message; $('status').textContent = '失败'; }
@@ -196,31 +266,30 @@ $('validate').addEventListener('click', async () => {
   $('recStatus').textContent = '校验中…';
   try {
     const body = JSON.parse($('records').value);
-    const data = await jsonFetch('/api/v1/records/validate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const data = await jsonFetch('api/v1/records/validate', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
     $('recordOut').textContent = JSON.stringify(data, null, 2);
     $('recStatus').textContent = '完成';
   } catch (e) { $('recordOut').textContent = '校验失败：' + e.message; $('recStatus').textContent = '失败'; }
 });
-jsonFetch('/api/v1/rules').then(d => { $('rulesOut').textContent = JSON.stringify(d, null, 2); }).catch(() => {});
+jsonFetch('api/v1/rules').then(d => { $('rulesOut').textContent = JSON.stringify(d, null, 2); }).catch(() => {});
 
 /* ---------- 标准解析 ---------- */
-function fmt(n) { return (n === null || n === undefined) ? '-' : n; }
-
 async function loadStandards(selectId) {
-  const data = await jsonFetch('/api/v1/standards');
+  const data = await jsonFetch('api/v1/standards');
   const standards = data.standards || [];
   const select = $('stdSelect');
+  const kbSelect = $('kbStdSelect');
   select.innerHTML = '';
+  kbSelect.innerHTML = '<option value="">全部已发布标准</option>';
   if (!standards.length) {
     select.innerHTML = '<option value="">暂无已解析标准，请先上传 PDF</option>';
     $('exportBtn').disabled = true; $('publishBtn').disabled = true;
     return;
   }
   for (const s of standards) {
-    const opt = document.createElement('option');
-    opt.value = s.id;
-    opt.textContent = `${s.standard_no || s.name} · ${s.items} 项${s.published ? ' · 已发布' : ''}`;
-    select.appendChild(opt);
+    const label = `${s.standard_no || s.name} · ${s.items} 项${s.published ? ' · 已发布' : ''}`;
+    const opt = document.createElement('option'); opt.value = s.id; opt.textContent = label; select.appendChild(opt);
+    if (s.published) { const opt2 = document.createElement('option'); opt2.value = s.id; opt2.textContent = label; kbSelect.appendChild(opt2); }
   }
   const wanted = selectId || params.get('std');
   if (wanted && standards.some(s => s.id === wanted)) select.value = wanted;
@@ -230,10 +299,12 @@ $('stdSelect').addEventListener('change', (e) => loadStandard(e.target.value));
 
 async function loadStandard(id) {
   if (!id) return;
-  current = await jsonFetch('/api/v1/standards/' + encodeURIComponent(id));
+  current = await jsonFetch('api/v1/standards/' + encodeURIComponent(id));
   selectedIndex = -1;
   const m = current.meta, s = current.summary;
-  $('metaLine').innerHTML = `<b>${escapeHtml(m.standard_no || '')}</b> ${escapeHtml(m.name || '')} · ${m.pages} 页 · 解析 ${s.parse_ms} ms · 修订 v${current.revision}${current.published ? '<span class="badge pass">已发布</span>' : '<span class="badge warn">未发布</span>'}`;
+  const weknoraBadge = (current.weknora && current.weknora.knowledge_id)
+    ? `<span class="badge pass">WeKnora 已发布</span>` : '';
+  $('metaLine').innerHTML = `<b>${escapeHtml(m.standard_no || '')}</b> ${escapeHtml(m.name || '')} · ${m.pages} 页 · 解析 ${s.parse_ms} ms · 修订 v${current.revision}${current.published ? '<span class="badge pass">已发布</span>' : '<span class="badge warn">未发布</span>'}${weknoraBadge}`;
   $('stats').innerHTML = [
     ['items','实检项目'], ['clauses_traced','条款可溯源'], ['items_with_requirement','有技术要求'], ['items_with_method','有试验方法'], ['reviewed_items','已复核']
   ].map(([k,label]) => `<div class="stat"><b>${fmt(s[k])}</b><span>${label}</span></div>`).join('');
@@ -242,7 +313,7 @@ async function loadStandard(id) {
   renderTable();
   $('exportBtn').disabled = !current.items.length;
   $('publishBtn').disabled = !current.items.length || current.published;
-  $('publishBtn').textContent = current.published ? '已发布' : '发布到知识库';
+  $('publishBtn').textContent = current.published ? '已发布到 WeKnora' : '发布到 WeKnora';
   $('editor').classList.remove('hidden');
   $('editorFields').classList.add('hidden');
   $('editor').textContent = '点击左侧一行开始复核。';
@@ -265,7 +336,6 @@ function renderTable() {
     </tr>`).join('');
   body.querySelectorAll('tr[data-i]').forEach(tr => tr.addEventListener('click', () => selectItem(Number(tr.dataset.i))));
 }
-function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 function selectItem(i) {
   selectedIndex = i;
@@ -287,7 +357,7 @@ $('parseBtn').addEventListener('click', async () => {
   $('parseStatus').textContent = '解析中，大文件约需数秒…'; $('parseBtn').disabled = true;
   try {
     const fd = new FormData(); fd.append('file', f);
-    const data = await jsonFetch('/api/v1/standards/parse', {method:'POST', body:fd});
+    const data = await jsonFetch('api/v1/standards/parse', {method:'POST', body:fd});
     $('parseStatus').innerHTML = `解析完成：<span class="badge pass">${data.summary.items} 项</span><span class="badge info">${data.summary.clauses_traced} 条款可溯源</span>`;
     await loadStandards(data.id);
   } catch (e) { $('parseStatus').textContent = '解析失败：' + e.message; }
@@ -299,9 +369,9 @@ $('saveBtn').addEventListener('click', async () => {
   const it = current.items[selectedIndex];
   $('saveStatus').textContent = '保存中…';
   try {
-    const data = await jsonFetch('/api/v1/standards/' + encodeURIComponent(current.id), {
+    const data = await jsonFetch('api/v1/standards/' + encodeURIComponent(current.id), {
       method:'PATCH', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({reviewer:'复核人（P0 演示）', items:[{clause:it.clause, name:$('editName').value, requirement:$('editReq').value, method:$('editMethod').value}]})
+      body: JSON.stringify({reviewer:'复核人', items:[{clause:it.clause, name:$('editName').value, requirement:$('editReq').value, method:$('editMethod').value}]})
     });
     current = data; selectedIndex = -1;
     $('saveStatus').textContent = '已保存（修订 v' + data.revision + '）';
@@ -310,48 +380,105 @@ $('saveBtn').addEventListener('click', async () => {
 });
 
 $('exportBtn').addEventListener('click', () => {
-  if (current) window.location = '/api/v1/standards/' + encodeURIComponent(current.id) + '/export.xlsx';
+  if (current) window.location = 'api/v1/standards/' + encodeURIComponent(current.id) + '/export.xlsx';
 });
 
 $('publishBtn').addEventListener('click', async () => {
   if (!current) return;
   $('publishBtn').disabled = true;
+  $('publishBtn').textContent = '正在写入 WeKnora…';
   try {
-    const data = await jsonFetch('/api/v1/standards/' + encodeURIComponent(current.id) + '/publish', {method:'POST'});
-    $('publishBtn').textContent = '已发布';
+    const data = await jsonFetch('api/v1/standards/' + encodeURIComponent(current.id) + '/publish', {method:'POST'});
+    const kn = data.weknora || {};
+    const status = kn.parse_status && kn.parse_status !== 'completed' ? `（索引状态：${kn.parse_status}）` : '';
     await loadStandard(current.id);
-    alert(`已发布 ${data.chunks} 个知识片段，可开始带引用问答。`);
-  } catch (e) { $('publishBtn').disabled = false; alert('发布失败：' + e.message); }
+    alert(`已发布 ${data.chunks} 个知识片段到 WeKnora${status}。`);
+  } catch (e) { $('publishBtn').disabled = false; $('publishBtn').textContent = '发布到 WeKnora'; alert('发布失败：' + e.message); }
 });
+
+/* ---------- 报价助手 ---------- */
+$('quoteBtn').addEventListener('click', async () => {
+  const f = $('quoteFile').files[0];
+  if (!f) { $('quoteStatus').textContent = '请选择 DVP / 测试大纲'; return; }
+  const t = $('quoteTemplate').files[0];
+  const fd = new FormData(); fd.append('file', f); if (t) fd.append('template', t);
+  $('quoteBtn').disabled = true; $('quoteStatus').textContent = '生成中…';
+  $('quoteResult').innerHTML = ''; $('quotePreview').classList.add('hidden');
+  try {
+    const data = await jsonFetch('api/v1/quotes/generate', {method:'POST', body:fd});
+    const s = data.summary || {};
+    const v = data.sales_quote_verification;
+    const verify = v ? (v.ok ? '<span class="badge pass">自检通过</span>' : '<span class="badge fail">自检失败</span>') : '<span class="badge warn">未提供销售报价表模板</span>';
+    $('quoteStatus').textContent = '完成';
+    $('quoteResult').innerHTML = `
+      <div class="row"><span class="money">${fmt(s.final_price ?? '')}</span><span class="muted">元（最终价格）</span>${verify}</div>
+      <div class="stats">
+        <div class="stat"><b>${fmt(s.lines)}</b><span>明细行</span></div>
+        <div class="stat"><b>${fmt(s.subtotal)}</b><span>小计</span></div>
+        <div class="stat"><b>${fmt(s.product_amount)}</b><span>产品金额</span></div>
+        <div class="stat"><b>${fmt(s.service_amount)}</b><span>服务金额</span></div>
+        <div class="stat"><b>${fmt(s.total_with_tax)}</b><span>税价合计</span></div>
+      </div>
+      <div class="row">
+        <button class="secondary" onclick="location='api/v1/quotes/${encodeURIComponent(data.quote_id)}/crm.xlsx'">下载 CRM 报价草稿</button>
+        ${data.files && data.files.sales_quote ? `<button class="secondary" onclick="location='api/v1/quotes/${encodeURIComponent(data.quote_id)}/sales.xlsx'">下载销售报价表</button>` : ''}
+      </div>`;
+    $('quotePreview').classList.remove('hidden');
+    $('quotePreview').textContent = JSON.stringify(data.preview || s, null, 2);
+  } catch (e) { $('quoteStatus').textContent = '失败：' + e.message; }
+  finally { $('quoteBtn').disabled = false; }
+});
+
+/* ---------- 知识问答 ---------- */
+async function loadKbHealth() {
+  try {
+    const data = await jsonFetch('api/v1/system/status');
+    const w = data.weknora || {};
+    $('kbHealth').innerHTML = w.configured
+      ? `WeKnora 已配置 · 知识库 <code>${escapeHtml(w.kb_id)}</code> · 业务问答强制走唯一知识底座`
+      : '<span class="badge fail">WeKnora 未配置</span> 发布与问答不可用';
+    $('kbStatus').innerHTML = w.configured ? '<span class="badge pass">WeKnora</span>' : '<span class="badge fail">未配置</span>';
+  } catch (e) {
+    $('kbHealth').textContent = '无法读取系统状态：' + e.message;
+  }
+}
 
 $('askBtn').addEventListener('click', async () => {
   const question = $('question').value.trim();
   if (!question) return;
   $('askBtn').disabled = true;
   $('answerBox').classList.remove('hidden');
-  $('answerBox').textContent = '检索中…';
+  $('answerBox').textContent = '正在检索 WeKnora…';
   $('citations').innerHTML = '';
+  $('retrievalMeta').textContent = '';
+  const standardId = $('kbStdSelect').value || null;
   try {
-    const data = await jsonFetch('/api/v1/standards/ask', {
+    const data = await jsonFetch('api/v1/standards/ask', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({question, standard_id: current ? current.id : null})
+      body: JSON.stringify({question, standard_id: standardId})
     });
     $('answerBox').textContent = data.answer;
     $('citations').innerHTML = (data.citations || []).map(c => `
-      <div class="citation"><b>${escapeHtml(c.standard_no)}</b> 条款 ${escapeHtml(c.clause)} · 第 ${c.page} 页 · ${escapeHtml(c.kind_label)}
-      <div class="muted">${escapeHtml(c.quote)}</div></div>`).join('');
-  } catch (e) { $('answerBox').textContent = '提问失败：' + e.message; }
-  finally { $('askBtn').disabled = false; }
+      <div class="citation"><b>${escapeHtml(c.standard_no || c.standard_name || '')}</b> 条款 ${escapeHtml(c.clause || '-')} · 第 ${escapeHtml(c.page ?? '-')} 页 · ${escapeHtml(c.kind_label || '')}
+      <span class="badge info">${escapeHtml(c.source || 'local')}</span>
+      <div class="muted">${escapeHtml(c.quote || '')}</div></div>`).join('');
+    const r = data.retrieval || {};
+    $('retrievalMeta').textContent = `检索：${r.mode || '-'}${r.top_score !== undefined && r.top_score !== null ? ' · 相关度 ' + Number(r.top_score).toFixed(3) : ''}${r.kb_id ? ' · KB ' + r.kb_id : ''}`;
+  } catch (e) {
+    $('answerBox').textContent = '提问失败：' + e.message;
+  } finally {
+    $('askBtn').disabled = false;
+  }
 });
 
 /* ---------- boot ---------- */
-const initialTab = params.get('tab') === 'standards' ? 'standards' : 'report';
+loadMe();
+const initialTab = ['standards','quote','knowledge'].includes(params.get('tab')) ? params.get('tab') : 'report';
 switchTab(initialTab);
-if (initialTab === 'standards') {
-  loadStandards().then(() => {
-    const asked = params.get('ask');
-    if (asked) { $('question').value = asked; $('askBtn').click(); }
-  }).catch(e => { $('parseStatus').textContent = '加载失败：' + e.message; });
+loadStandards().catch(e => { $('parseStatus').textContent = '加载失败：' + e.message; });
+if (initialTab === 'knowledge' && params.get('ask')) {
+  $('question').value = params.get('ask');
+  $('askBtn').click();
 }
 </script>
 </body>

@@ -12,14 +12,15 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import quote as quote_service
+from . import auth
 from . import ocr as ocr_service
-from . import report_writer, standard_qa, standard_store
+from . import quote as quote_service
+from . import report_writer, standard_qa, standard_store, weknora
 from .docx_parser import parse_docx
 from .pdf_text import extract_pages
 from .rules import RULES, RecordInput, audit_report, validate_records
@@ -31,13 +32,215 @@ STATIC_DIR = ROOT / "static"
 QUOTE_DIR = Path(os.getenv("P0_QUOTE_DIR", ROOT / "data" / "quotes"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "20")) * 1024 * 1024
 MAX_STANDARD_BYTES = int(os.getenv("MAX_STANDARD_MB", "40")) * 1024 * 1024
+ROOT_PATH = os.getenv("P0_ROOT_PATH", "").rstrip("/")
+COOKIE_SECURE = os.getenv(
+    "P0_COOKIE_SECURE", "1" if os.getenv("P0_ENV") == "production" else "0"
+) not in {"0", "false", "off"}
+PUBLIC_PATHS = {"/health", "/login", "/favicon.ico"}
+PUBLIC_PREFIXES = ("/static/login",)
+AUTH_DISABLED = os.getenv("P0_AUTH_DISABLED", "0").lower() in {"1", "true", "yes"}
+
+AUTH_BOOTSTRAP = auth.bootstrap()
 
 app = FastAPI(
     title="中汽零部件 P0 API",
-    version="0.4.0",
-    description="Deterministic report review, standard parsing, quote draft and cited Q&A.",
+    version="0.5.0",
+    root_path=ROOT_PATH,
+    description="Report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# ---------------------------------------------------------------------------
+# Authentication, session and audit
+# ---------------------------------------------------------------------------
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"
+    display_name: str = ""
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+def _is_public(path: str) -> bool:
+    return path in PUBLIC_PATHS or path == "/api/v1/auth/login" or path.startswith(PUBLIC_PREFIXES)
+
+
+def _login_redirect(request: Request) -> RedirectResponse:
+    target = (ROOT_PATH or "") + "/login"
+    next_path = request.url.path
+    if not next_path.startswith("/api/"):
+        target += "?next=" + next_path
+    return RedirectResponse(target, status_code=303)
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if _is_public(path):
+        return await call_next(request)
+    if AUTH_DISABLED:
+        request.state.user = {"username": "test", "role": "admin", "display_name": "test", "active": True}
+        return await call_next(request)
+    token = request.cookies.get(auth.COOKIE_NAME, "")
+    user = auth.read_session(token) if token else None
+    if user is None:
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "请先登录"}, status_code=401)
+        return _login_redirect(request)
+    request.state.user = user
+    started = __import__("time").perf_counter()
+    response = await call_next(request)
+    if path.startswith("/api/"):
+        auth.audit(
+            {
+                "user": user["username"],
+                "role": user["role"],
+                "method": request.method,
+                "path": path,
+                "status": response.status_code,
+                "ms": round((__import__("time").perf_counter() - started) * 1000, 1),
+                "ip": _client_ip(request),
+            }
+        )
+    return response
+
+
+def _require_user(request: Request) -> dict:
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+
+def _require_admin(request: Request) -> dict:
+    user = _require_user(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
+
+
+@app.get("/login")
+def login_page(request: Request):
+    token = request.cookies.get(auth.COOKIE_NAME, "")
+    if token and auth.read_session(token):
+        return RedirectResponse((ROOT_PATH or "") + "/", status_code=303)
+    return FileResponse(STATIC_DIR / "login.html", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/v1/auth/login")
+def login(payload: LoginRequest, request: Request) -> JSONResponse:
+    username = (payload.username or "").strip()
+    ip = _client_ip(request)
+    key = f"{ip}|{username.lower()}"
+    if auth.throttled(key):
+        auth.audit({"user": username, "method": "POST", "path": "/api/v1/auth/login",
+                    "status": 429, "ip": ip, "event": "login_throttled"})
+        raise HTTPException(status_code=429, detail="登录尝试过多，请 5 分钟后再试")
+    user = auth.authenticate(username, payload.password or "")
+    if user is None:
+        auth.record_attempt(key)
+        auth.audit({"user": username, "method": "POST", "path": "/api/v1/auth/login",
+                    "status": 401, "ip": ip, "event": "login_failed"})
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    token = auth.create_session(user)
+    response = JSONResponse({"user": user})
+    response.set_cookie(
+        auth.COOKIE_NAME,
+        token,
+        max_age=auth.SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=COOKIE_SECURE,
+        path=ROOT_PATH or "/",
+    )
+    auth.audit({"user": username, "role": user["role"], "method": "POST",
+                "path": "/api/v1/auth/login", "status": 200, "ip": ip,
+                "event": "login_success"})
+    return response
+
+
+@app.post("/api/v1/auth/logout")
+def logout(request: Request) -> JSONResponse:
+    user = _require_user(request)
+    auth.audit({"user": user["username"], "role": user["role"], "method": "POST",
+                "path": "/api/v1/auth/logout", "status": 200, "ip": _client_ip(request)})
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(auth.COOKIE_NAME, path=ROOT_PATH or "/")
+    return response
+
+
+@app.get("/api/v1/auth/me")
+def me(request: Request) -> dict:
+    return {"user": _require_user(request)}
+
+
+@app.get("/api/v1/auth/users")
+def list_users(request: Request) -> dict:
+    _require_admin(request)
+    return {"users": [auth.public_user(user) for user in auth.load_users()]}
+
+
+@app.post("/api/v1/auth/users", status_code=201)
+def add_user(payload: CreateUserRequest, request: Request) -> dict:
+    _require_admin(request)
+    try:
+        user = auth.create_user(
+            payload.username,
+            payload.password,
+            role=payload.role,
+            display_name=payload.display_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"user": user}
+
+
+@app.post("/api/v1/auth/password")
+def change_password(payload: ChangePasswordRequest, request: Request) -> dict:
+    user = _require_user(request)
+    if auth.authenticate(user["username"], payload.old_password or "") is None:
+        raise HTTPException(status_code=400, detail="原密码错误")
+    try:
+        auth.update_password(user["username"], payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/api/v1/audit/recent")
+def audit_recent(request: Request, limit: int = 50) -> dict:
+    _require_admin(request)
+    return {"events": auth.recent_audit(limit)}
+
+
+@app.get("/api/v1/system/status")
+def system_status() -> dict:
+    return {
+        "version": app.version,
+        "auth": {"enabled": True, "users": len(auth.load_users())},
+        "weknora": {
+            "configured": weknora.configured(),
+            "required": weknora.required(),
+            "kb_id": (weknora.config_from_env().kb_id if weknora.config_from_env() else ""),
+        },
+    }
 
 
 class RecordIn(BaseModel):
@@ -80,8 +283,10 @@ class AskRequest(BaseModel):
 def health() -> dict:
     return {
         "status": "ok",
-        "service": "p0-report-review+standard-parsing",
+        "service": "p0-report-review+standard-parsing+quote+weknora-qa",
         "version": app.version,
+        "auth": "enabled",
+        "weknora": "configured" if weknora.configured() else "missing",
     }
 
 
@@ -300,6 +505,8 @@ def publish_standard(standard_id: str) -> dict:
         return standard_store.publish(standard_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
+    except weknora.WeKnoraError as exc:
+        raise HTTPException(status_code=502, detail=f"WeKnora 发布失败：{exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -319,6 +526,8 @@ def ask_standard(payload: AskRequest) -> dict:
         )
     except standard_qa.VectorUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except weknora.WeKnoraError as exc:
+        raise HTTPException(status_code=502, detail=f"WeKnora 检索失败：{exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -368,7 +577,7 @@ async def generate_quote(
         directory = QUOTE_DIR / quote_id
         directory.mkdir(parents=True, exist_ok=True)
         crm_path = quote_service.write_crm_xlsx(directory / "CRM报价草稿.xlsx", result)
-        files = {"crm": f"/api/v1/quotes/{quote_id}/crm.xlsx"}
+        files = {"crm": f"{ROOT_PATH}/api/v1/quotes/{quote_id}/crm.xlsx"}
 
         template_bytes = await template.read() if template is not None else b""
         if template_bytes:
@@ -388,7 +597,7 @@ async def generate_quote(
                 },
             )
             sales_verification = quote_service.verify_sales_quote(sales_out, result)
-            files["sales_quote"] = f"/api/v1/quotes/{quote_id}/sales.xlsx"
+            files["sales_quote"] = f"{ROOT_PATH}/api/v1/quotes/{quote_id}/sales.xlsx"
         return {
             "quote_id": quote_id,
             "summary": result.summary(),
