@@ -44,7 +44,7 @@ docker compose up -d --build
 ```
 
 依赖包括 `pypdf`（PDF 文本层）、`pdfplumber`（合并表格回退）、`openpyxl`（DVP/报价表读写）、
-`pypdfium2` + `rapidocr_onnxruntime`（扫描件本地 OCR，免费、离线）。
+`xlrd`（旧版 `.xls` 报价文件）、`Pillow`（图片读取）、`pypdfium2` + `rapidocr_onnxruntime`（扫描件/图片本地 OCR，免费、离线）。
 若服务器 pip 镜像不可用，可把 wheel 解压到 `p0/vendor/`（已在 `.gitignore`），服务会自动优先加载 `pypdf`。
 
 向量检索使用 Ollama 的 `bge-m3`，默认 `P0_EMBEDDING_URL=http://127.0.0.1:11434`；
@@ -125,13 +125,26 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 
 ### 报价助手
 
-- `POST /api/v1/quotes/parse`（multipart `file`，.xlsx DVP/测试大纲）→ 结构化明细与汇总
-- `POST /api/v1/quotes/generate`（multipart `file` + 可选 `template` + 表单 `project`）→ 生成 CRM 草稿并写入 `meta.json` 项目标签；提供 `销售报价表.xlsx` 模板时同时生成已填报价表并执行自检
+- `POST /api/v1/quotes/parse`（multipart `file`）→ 结构化明细、解析方式与汇总
+- `POST /api/v1/quotes/generate`（multipart `file` + 可选 `template` + 表单 `project`）→ 生成 CRM 草稿并写入 `meta.json` 项目标签；提供 `销售报价表.xlsx` 模板且全部明细含单价时同时生成已填报价表并执行自检
 - `GET /api/v1/quotes/{id}/crm.xlsx` → CRM 报价草稿
 - `GET /api/v1/quotes/{id}/sales.xlsx` → 已填「销售报价表」（含「报价明细」「计算口径」sheet）
 
-解析规则：识别 `试验项目 + 单价/数量/单位` 表头；单价/数量/单位只从输入读取；
-单位按字典映射（席位→席位/次、袋子→次等）；折扣由销售政策参数传入（默认 60%），不由模型推断。
+支持的报价输入（真实客户材料，20 MB 上限）：
+
+| 格式 | 解析方式 | 说明 |
+|---|---|---|
+| `.xlsx` / `.xlsm` / `.xls` | Excel 表格 | DVP 表头 `试验项目 + 单价/数量/单位`（含章节内重复表头）、报价单表头 `样品名称/检验标准/检验项目/单价/数量/单位`、测试大纲 `试验项目/测试标准/数量` |
+| `.pdf` | PDF 文本表格；无文本层时本地 OCR | 报价单/测试大纲/扫描件；扫描件最多 OCR 前 3 页 |
+| `.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` | 本地 OCR（RapidOCR） | 图片询价、手机截图；返回 OCR 置信度与复核提示 |
+
+解析规则：单价、数量、单位只从输入读取；单位按字典映射（席位→席位/次、袋子→次等）；
+折扣由销售政策参数传入（默认 60%），不由模型推断。图片/扫描件的行来自本地 OCR，
+只做表格定位与文本抽取，不生成价格。
+
+缺少单价时（客户测试大纲、图片询价）：明细照常解析，`needs_price=true`，
+CRM 草稿的「含税单价」留空并标注「待补单价」，**不生成**含金额的销售报价表；
+API 返回 `sales_quote_skipped_reason`。这保证报价金额不会由模型或默认值臆造。
 
 金额闭环：`C7/C8/C9/C10/C11/C12/C13/C14/C15` 写入实际数值（产品金额/服务金额/税价合计/最终价格为核心四项），
 模板原公式保留在「计算口径」sheet；`verify_sales_quote()` 重新打开文件逐项断言 9 个金额单元格和 5 条算术关系，
@@ -187,6 +200,10 @@ python3 scripts/run_report_demo.py --reports-dir <报告目录> --out-dir <输�
 # 报价助手：DVP → CRM 草稿 + 销售报价表
 python3 scripts/run_quote_demo.py --dvp <DVP.xlsx> --crm-gold <真实CRM.xlsx> \
   --sales-template <销售报价表.xlsx> --out-dir <输出目录>
+
+# 报价助手：真实案例多格式自测（Excel / PDF / 图片）
+python3 scripts/run_quote_multiformat_demo.py --files <DVP.xlsx> <报价单.pdf> <询价.png> \
+  --out-dir <本地输出目录>   # 输出含客户项目名，勿提交仓库
 
 # 知识问答：重建索引 + 5 个问答样例
 python3 scripts/run_kb_demo.py --standards-dir <标准目录> --store-dir data/standards \

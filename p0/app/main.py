@@ -849,29 +849,37 @@ def ask_standard(payload: AskRequest, request: Request) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Increment 3: quote assistant (DVP -> CRM draft + 销售报价表)
+# Quote assistant: Excel / PDF / image input -> CRM draft + 销售报价表
 # ---------------------------------------------------------------------------
+def _quote_upload_bytes(data: bytes) -> None:
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file exceeds {MAX_UPLOAD_BYTES // 1024 // 1024} MB",
+        )
+
+
+def _quote_input_name(file: UploadFile) -> str:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail=quote_service.SUPPORTED_INPUT_HINT)
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in quote_service.SUPPORTED_SUFFIXES:
+        raise HTTPException(status_code=400, detail=quote_service.SUPPORTED_INPUT_HINT)
+    return file.filename
+
+
 @app.post("/api/v1/quotes/parse")
 async def parse_quote_file(request: Request, file: UploadFile = File(...)) -> dict:
     _require_permission(request, "quote:parse")
-    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(status_code=400, detail="only .xlsx DVP/test-plan files are supported")
+    filename = _quote_input_name(file)
     data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"file exceeds {MAX_UPLOAD_BYTES // 1024 // 1024} MB")
-    tmp_path: str | None = None
+    _quote_upload_bytes(data)
     try:
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
-        return quote_service.parse_dvp(tmp_path, source_name=file.filename).to_dict()
+        return quote_service.parse_quote_bytes(data, filename).to_dict()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - API boundary
-        raise HTTPException(status_code=422, detail=f"failed to parse DVP: {exc}") from exc
-    finally:
-        if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=f"failed to parse quote input: {exc}") from exc
 
 
 @app.post("/api/v1/quotes/generate")
@@ -888,16 +896,14 @@ async def generate_quote(
             status_code=400,
             detail="受限账号必须填写有权限的项目标识",
         )
-    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(status_code=400, detail="only .xlsx DVP/test-plan files are supported")
+    filename = _quote_input_name(file)
+    if template is not None and template.filename:
+        if Path(template.filename).suffix.lower() not in {".xlsx", ".xlsm"}:
+            raise HTTPException(status_code=400, detail="销售报价表模板只支持 .xlsx / .xlsm")
     data = await file.read()
-    tmp_path: str | None = None
-    template_path: str | None = None
+    _quote_upload_bytes(data)
     try:
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
-        result = quote_service.parse_dvp(tmp_path, source_name=file.filename)
+        result = quote_service.parse_quote_bytes(data, filename)
 
         quote_id = "q_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
         directory = QUOTE_DIR / quote_id
@@ -909,7 +915,10 @@ async def generate_quote(
                     "project": project,
                     "created_by": user["username"],
                     "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "source_name": file.filename,
+                    "source_name": filename,
+                    "parse_method": result.parse_method,
+                    "lines": len(result.lines),
+                    "priced_lines": result.priced_lines,
                 },
                 ensure_ascii=False,
                 indent=1,
@@ -920,20 +929,30 @@ async def generate_quote(
         files = {"crm": f"{ROOT_PATH}/api/v1/quotes/{quote_id}/crm.xlsx"}
 
         template_bytes = await template.read() if template is not None else b""
+        template_path: str | None = None
         if template_bytes:
             template_name = template.filename or "sales-template.xlsx"
             template_path = str(directory / template_name)
             Path(template_path).write_bytes(template_bytes)
         configured = os.getenv("P0_SALES_QUOTE_TEMPLATE", "")
         sales_verification = None
-        if template_path or configured:
+        sales_skipped_reason = ""
+        template_source = template_path or configured
+        if not template_source:
+            sales_skipped_reason = "未提供销售报价表模板，只生成 CRM 草稿"
+        elif not result.all_priced:
+            sales_skipped_reason = (
+                f"{result.unpriced_lines} 行缺少单价，未生成销售报价表；"
+                "请在 CRM 草稿中补充单价后重试"
+            )
+        else:
             sales_out = quote_service.fill_sales_quote(
-                template_path or configured,
+                template_source,
                 result,
                 directory / "销售报价表-生成.xlsx",
                 {
-                    "project_name": f"{result.sample_name} DVP 试验报价",
-                    "contract": f"{result.sample_name} DVP（闭口合同）",
+                    "project_name": f"{result.sample_name} 试验报价",
+                    "contract": f"{result.sample_name}（闭口合同）",
                 },
             )
             sales_verification = quote_service.verify_sales_quote(sales_out, result)
@@ -946,20 +965,21 @@ async def generate_quote(
             "quote_id": quote_id,
             "project": project,
             "summary": result.summary(),
+            "parse_meta": result.parse_meta,
             "preview": quote_service.sales_quote_preview(result),
             "files": files,
             "crm_file": str(crm_path),
             "sales_quote_verification": sales_verification,
+            "sales_quote_skipped_reason": sales_skipped_reason,
         }
+    except HTTPException:
+        raise
     except quote_service.QuoteSelfCheckError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - API boundary
         raise HTTPException(status_code=422, detail=f"failed to generate quote: {exc}") from exc
-    finally:
-        if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
 
 
 _QUOTE_ID = re.compile(r"^q_[0-9]{14}_[0-9a-f]{6}$")

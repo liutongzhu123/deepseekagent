@@ -6,6 +6,9 @@ httpx==0.28.1
 pypdf==6.21.4
 pdfplumber==0.11.10
 openpyxl==3.1.5
+# Quote input formats: legacy .xls workbooks and image (OCR) inquiries
+xlrd==2.0.1
+Pillow==13.0.0
 # P1 scanned-standard OCR (free, local; no cloud OCR)
 pypdfium2==5.14.0
 rapidocr_onnxruntime==1.4.4
