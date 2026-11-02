@@ -15,7 +15,7 @@
 | 身份 / RBAC / 项目授权 / 全量审计 + 管理台 | 已合并（PR #7，0.6.0） | `docs/p1-s1-identity/README.md` |
 | 工作台可视化与可操作性（五个页签） | 已合并（PR #8） | `docs/p1-ui-polish/README.md` |
 | 标准章节标题放宽、单章节候选项目交人工复核 | 已合并（PR #9） | `docs/loose-heading-match/README.md` |
-| 全量测试（P1-S1 合并口径） | 46 passed / 2 skipped；PR #9 另加 3 个解析回归用例 | PR #7 / #9 |
+| 全量测试 | P1-S1 合并口径 46 passed / 2 skipped；PR #9 另加 3 个解析回归用例（主线合并后未重跑全量） | PR #7 / #9 |
 
 ### 1.1 还没解决的关键缺口
 
