@@ -6,6 +6,9 @@ Scope (P0 Sprint 2, first slice):
     as the authoritative item -> method mapping;
   * otherwise the method-section leaf clauses are matched to the
     requirements-section headings by Chinese name similarity;
+  * headings may be pure Chinese and use a near-synonym section name; a
+    standard with only one of the two sections yields review-only candidate
+    items instead of zero results;
   * every item keeps its clause numbers and source pages so a reviewer can
     trace it back to the PDF.
 
