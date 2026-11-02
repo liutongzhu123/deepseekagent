@@ -144,6 +144,7 @@ HTTP 自动跳 HTTPS。
 - 业务 API 与登录事件：`/opt/cq-ai-p0/data/audit/audit.jsonl`（JSONL，按行追加）；
 - 用户与密码哈希：`data/auth/users.json`（0600）；会话密钥：`data/auth/session_secret`；
 - 解析原件、复核结果、导出、报价：`data/standards/`、`data/quotes/`；
+- 管理端规则配置：`data/config/rules.json`（0600，随每日快照一起备份）；
 - 以上均含客户保密材料，禁止复制到仓库或外发。
 
 ## CI 与数据备份（P1-0.5）
