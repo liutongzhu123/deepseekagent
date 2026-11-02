@@ -4,8 +4,11 @@
 Usage (run on the server, from /opt/cq-ai-p0):
 
     .venv/bin/python scripts/manage_users.py list
-    .venv/bin/python scripts/manage_users.py add <user> <role>
+    .venv/bin/python scripts/manage_users.py add <user> <role> [department] [projects]
     .venv/bin/python scripts/manage_users.py reset <user>
+
+``role`` is one of admin / reviewer / sales / viewer; ``projects`` is a
+comma-separated grant list (omit it for an unrestricted account).
 
 Passwords are read from stdin (getpass), never from a command-line argument.
 """
@@ -30,17 +33,29 @@ def main(argv: list[str]) -> int:
             print(f"{user.get('username')}\t{user.get('role')}\t{user.get('display_name', '')}")
         return 0
     if command == "add":
-        if len(argv) != 4:
-            print("usage: manage_users.py add <user> <admin|reviewer|viewer>", file=sys.stderr)
+        if len(argv) not in (4, 5, 6):
+            print(
+                "usage: manage_users.py add <user> <admin|reviewer|sales|viewer> "
+                "[department] [projects]",
+                file=sys.stderr,
+            )
             return 2
         username, role = argv[2], argv[3]
-        password = getpass.getpass("新密码（至少 8 位）: ")
+        department = argv[4] if len(argv) >= 5 else ""
+        projects = argv[5].split(",") if len(argv) >= 6 else []
+        password = getpass.getpass("新密码（至少 10 位，字母/数字/符号至少两类）: ")
         confirm = getpass.getpass("再输入一次: ")
         if password != confirm:
             print("两次密码不一致", file=sys.stderr)
             return 1
         try:
-            auth.create_user(username, password, role=role)
+            auth.create_user(
+                username,
+                password,
+                role=role,
+                department=department,
+                projects=projects,
+            )
         except ValueError as exc:
             print(f"创建失败：{exc}", file=sys.stderr)
             return 1
@@ -51,7 +66,7 @@ def main(argv: list[str]) -> int:
             print("usage: manage_users.py reset <user>", file=sys.stderr)
             return 2
         username = argv[2]
-        password = getpass.getpass("新密码（至少 8 位）: ")
+        password = getpass.getpass("新密码（至少 10 位，字母/数字/符号至少两类）: ")
         confirm = getpass.getpass("再输入一次: ")
         if password != confirm:
             print("两次密码不一致", file=sys.stderr)

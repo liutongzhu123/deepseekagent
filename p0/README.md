@@ -9,7 +9,7 @@ P0 的四个可运行切片：
 
 P0 受控上线（0.5）：
 
-- **登录与审计**——账号密码登录、8 小时签名会话、角色（admin/reviewer/viewer）、登录与业务 API 审计；
+- **登录与审计**——账号密码登录、8 小时签名会话、角色（admin/reviewer/sales/viewer）、登录与业务 API 审计；
 - **HTTPS**——同域名 `/p0/` 反向代理到本机 8090；登录、四条链路与下载均走 HTTPS；
 - **WeKnora 唯一知识底座**——标准发布写入 WeKnora 专用知识库，问答只从 WeKnora 检索，引用可回溯；
 - **四条链路**——报告审核、标准解析、报价助手、知识问答均有可操作 UI 与 API。
@@ -19,6 +19,14 @@ P1 前三项增量（2026-11-02 已合并）：
 - **报价闭环**——产品金额/服务金额/税价合计/最终价格写入「销售报价表-生成.xlsx」实际单元格；生成后逐项自检，表内数字与计算不一致直接报错。
 - **向量检索**——本地 `bge-m3` 向量检索作为离线/调试路径；生产问答已切到 WeKnora 唯一知识底座（0.5），保留关键词基线做前后对比。
 - **扫描件 OCR**——`rapidocr_onnxruntime` + `pypdfium2` 本地 OCR，解析「试验方法和性能要求」合并章节，输出字段级置信度与人工复核清单。
+
+P1-S1 第一个增量（0.6.0，身份 / 权限 / 审计）：
+
+- **RBAC**——admin / reviewer / sales / viewer 四角色，统一权限矩阵，所有业务 API 显式校验；
+- **账号安全**——密码策略（≥10 位、至少两类字符）、连续 5 次失败锁定 15 分钟、管理员启停/改角色/重置密码、SSO（OIDC）配置预留位；
+- **项目隔离**——标准与报价可打项目标签；受限账号只能访问授权项目的数据，列表/详情/下载/发布/问答都做行级校验；
+- **全量审计**——请求级审计 + 登录/用户/复核/发布/报价/导出等语义事件；管理员可按用户/事件/状态/时间查询并导出 CSV，支持保留期清理；
+- **管理台**——管理员在「权限与审计」页签管理用户、角色、项目授权和审计查询。
 
 ## 运行
 
@@ -50,15 +58,33 @@ WeKnora 服务器上 Ollama 只在容器网络内时，可设为容器地址（�
 管理员可用接口或 `scripts/manage_users.py` 创建账号：
 
 ```bash
-.venv/bin/python scripts/manage_users.py add <user> <admin|reviewer|viewer>
+.venv/bin/python scripts/manage_users.py add <user> <admin|reviewer|sales|viewer>
 .venv/bin/python scripts/manage_users.py reset <user>
 ```
 
-- `POST /api/v1/auth/login`（JSON `username/password`，成功后设置 Cookie）
+角色与主要权限：
+
+| 角色 | 报告审核 | 标准解析/复核/发布 | 报价 | 知识问答 | 用户/审计 |
+|---|---|---|---|---|---|
+| admin | ✓ | ✓ | ✓ | ✓ | ✓ |
+| reviewer | ✓ | ✓ | - | ✓ | - |
+| sales | - | 只读 | ✓ | ✓ | - |
+| viewer | - | 只读 | - | ✓ | - |
+
+项目受限账号：`projects` 为空表示不限制项目；填写项目列表后，只能访问打了对应项目标签的标准/报价（以及自己创建但尚未打标签的记录）。受限账号新建标准/报价时必须填写有权限的项目。历史数据可由管理员调用 `PATCH /api/v1/standards/{id}/project` 补打项目标签。
+
+认证与审计接口：
+
+- `POST /api/v1/auth/login`（JSON `username/password`，成功后设置 Cookie；423 = 账号锁定）
 - `POST /api/v1/auth/logout`
 - `GET  /api/v1/auth/me`
+- `GET  /api/v1/auth/providers`（本地账号 + OIDC 预留状态，公开）
 - `GET/POST /api/v1/auth/users`（管理员）
+- `PATCH /api/v1/auth/users/{username}`（管理员：角色/启停/姓名/部门/项目授权）
+- `POST /api/v1/auth/users/{username}/reset-password`（管理员；不传密码时生成一次性临时密码）
 - `POST /api/v1/auth/password`（本人改密）
+- `GET  /api/v1/audit/events?user=&event=&status=&date_from=&date_to=&limit=&offset=`（管理员）
+- `GET  /api/v1/audit/export.csv?...`（管理员）
 - `GET  /api/v1/audit/recent`（管理员，最近审计事件）
 - `GET  /api/v1/system/status`（登录后，版本/WeKnora 配置状态）
 
@@ -79,7 +105,8 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 
 ### 标准解析
 
-- `POST /api/v1/standards/parse`（multipart `file`，PDF；查询参数 `enable_ocr=true`）→ 解析结果 JSON
+- `POST /api/v1/standards/parse`（multipart `file`，PDF；表单 `project` 项目标签，`enable_ocr` 控制 OCR）→ 解析结果 JSON
+- `PATCH /api/v1/standards/{id}/project`（管理员，`{"project":"P-A"}`，给历史标准补项目标签）
 - `GET /api/v1/standards` → 已解析标准列表
 - `GET /api/v1/standards/{id}` → 完整结果（含 `review_history`）
 - `PATCH /api/v1/standards/{id}` → 复核修改（按 `clause` 更新 `name/requirement/method`）
@@ -97,7 +124,7 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 ### 报价助手
 
 - `POST /api/v1/quotes/parse`（multipart `file`，.xlsx DVP/测试大纲）→ 结构化明细与汇总
-- `POST /api/v1/quotes/generate`（multipart `file` + 可选 `template`）→ 生成 CRM 草稿；提供 `销售报价表.xlsx` 模板时同时生成已填报价表并执行自检
+- `POST /api/v1/quotes/generate`（multipart `file` + 可选 `template` + 表单 `project`）→ 生成 CRM 草稿并写入 `meta.json` 项目标签；提供 `销售报价表.xlsx` 模板时同时生成已填报价表并执行自检
 - `GET /api/v1/quotes/{id}/crm.xlsx` → CRM 报价草稿
 - `GET /api/v1/quotes/{id}/sales.xlsx` → 已填「销售报价表」（含「报价明细」「计算口径」sheet）
 
@@ -186,11 +213,13 @@ data/standards/kb_index.json     重建后的合并索引
 data/standards/kb_vectors.json   本地 bge-m3 向量缓存（仅调试）
 data/auth/users.json             用户与密码哈希（0600）
 data/auth/session_secret         会话签名密钥（0600）
-data/audit/audit.jsonl           登录与业务 API 审计
-data/quotes/<id>/                CRM 草稿与销售报价表
+data/audit/audit.jsonl           登录、业务 API 与语义事件审计（P0_AUDIT_RETENTION_DAYS 保留期）
+data/quotes/<id>/                CRM 草稿、销售报价表与 meta.json（项目/创建人）
 ```
 
 可用 `P0_STANDARD_DIR`、`P0_QUOTE_DIR`、`P0_SALES_QUOTE_TEMPLATE`、`MAX_STANDARD_MB` 调整目录/模板/上限；
+`P0_AUDIT_RETENTION_DAYS`（默认 180）、`P0_SESSION_TTL`（默认 8 小时）控制审计保留与会话时长；
+`P0_OIDC_ISSUER` / `P0_OIDC_CLIENT_ID` 仅作为 SSO 预留配置，当前登录仍走本地账号；
 OCR 可用 `P0_OCR_ENABLED=0` 关闭，`P0_OCR_DPI`（默认 220）、`P0_OCR_MAX_PAGES` 控制速度；
 本地向量检索（仅调试）可用 `P0_EMBEDDING_URL`、`P0_EMBEDDING_MODEL`、`P0_VECTOR_MIN_SCORE`、
 `P0_VECTOR_TOP_K`、`P0_VECTOR_CACHE` 调整。
@@ -214,3 +243,7 @@ pytest -q
 - 报价助手不做 CRM 写回、审批流、客户侧自动报价；折扣不自动推断；
 - 向量检索依赖 Ollama `bge-m3`；阈值 0.60 是在当前 2 份标准/129 片段上校准的，扩库后需复测；条款号/标准号守卫不替代语义评测；
 - 保密标准只做本地规则解析与本地 OCR，不调用外部大模型/公网 OCR。
+- P1-S1 的用户库与审计仍是 JSON/JSONL 文件（尚未迁 PostgreSQL），审计查询会全量扫描文件，数据量上来后需换 DB/索引；
+- 项目隔离目前到「项目」粒度；部门/客户级授权要等 CRM 字段契约确认后接入，OIDC/SSO 只预留了配置与状态接口，未实现登录跳转；
+- 管理员重置密码后返回一次性临时密码，需要人工安全传递；尚未强制首次登录改密；
+- 项目隔离覆盖标准与报价；报告审核不落库，暂不做行级隔离。

@@ -5,15 +5,22 @@ review workbenches can call them without coupling to parser internals.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -36,17 +43,17 @@ ROOT_PATH = os.getenv("P0_ROOT_PATH", "").rstrip("/")
 COOKIE_SECURE = os.getenv(
     "P0_COOKIE_SECURE", "1" if os.getenv("P0_ENV") == "production" else "0"
 ) not in {"0", "false", "off"}
-PUBLIC_PATHS = {"/health", "/login", "/favicon.ico"}
+PUBLIC_PATHS = {"/health", "/login", "/favicon.ico", "/api/v1/auth/providers"}
 PUBLIC_PREFIXES = ("/static/login",)
 AUTH_DISABLED = os.getenv("P0_AUTH_DISABLED", "0").lower() in {"1", "true", "yes"}
 
 AUTH_BOOTSTRAP = auth.bootstrap()
 
 app = FastAPI(
-    title="中汽零部件 P0 API",
-    version="0.5.0",
+    title="中汽零部件 P1 API",
+    version="0.6.0",
     root_path=ROOT_PATH,
-    description="Report review, standard parsing, quote draft and WeKnora-cited Q&A.",
+    description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -64,6 +71,20 @@ class CreateUserRequest(BaseModel):
     password: str
     role: str = "viewer"
     display_name: str = ""
+    department: str = ""
+    projects: list[str] = Field(default_factory=list)
+
+
+class UpdateUserRequest(BaseModel):
+    role: str | None = None
+    active: bool | None = None
+    display_name: str | None = None
+    department: str | None = None
+    projects: list[str] | None = None
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str = ""
 
 
 class ChangePasswordRequest(BaseModel):
@@ -114,6 +135,7 @@ async def auth_middleware(request: Request, call_next):
                 "role": user["role"],
                 "method": request.method,
                 "path": path,
+                "action": getattr(request.state, "action", ""),
                 "status": response.status_code,
                 "ms": round((__import__("time").perf_counter() - started) * 1000, 1),
                 "ip": _client_ip(request),
@@ -136,12 +158,57 @@ def _require_admin(request: Request) -> dict:
     return user
 
 
+def _require_permission(request: Request, action: str) -> dict:
+    user = _require_user(request)
+    if not auth.has_permission(user, action):
+        raise HTTPException(status_code=403, detail=f"需要权限：{action}")
+    request.state.action = action
+    return user
+
+
+def _audit_event(request: Request, user: dict, event: str, **extra) -> None:
+    auth.audit(
+        {
+            "user": user.get("username", ""),
+            "role": user.get("role", ""),
+            "event": event,
+            "ip": _client_ip(request),
+            **extra,
+        }
+    )
+
+
+def _record_project(meta: dict) -> tuple[str, str]:
+    return (meta or {}).get("project", ""), (meta or {}).get("created_by", "")
+
+
+def _assert_project_access(user: dict, meta: dict) -> None:
+    project, created_by = _record_project(meta)
+    if not auth.can_access_project(user, project, created_by):
+        raise HTTPException(status_code=403, detail="无权访问该项目的数据")
+
+
+def _visible_kbs(user: dict, standard_id: str | None = None) -> list[dict]:
+    return [
+        kb
+        for kb in standard_store.published_kbs(standard_id)
+        if auth.can_access_project(
+            user, kb.get("project", ""), kb.get("created_by", "")
+        )
+    ]
+
+
 @app.get("/login")
 def login_page(request: Request):
     token = request.cookies.get(auth.COOKIE_NAME, "")
     if token and auth.read_session(token):
         return RedirectResponse((ROOT_PATH or "") + "/", status_code=303)
     return FileResponse(STATIC_DIR / "login.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/v1/auth/providers")
+def auth_providers() -> dict:
+    return auth.provider_status()
 
 
 @app.post("/api/v1/auth/login")
@@ -153,7 +220,16 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
         auth.audit({"user": username, "method": "POST", "path": "/api/v1/auth/login",
                     "status": 429, "ip": ip, "event": "login_throttled"})
         raise HTTPException(status_code=429, detail="登录尝试过多，请 5 分钟后再试")
-    user = auth.authenticate(username, payload.password or "")
+    try:
+        user = auth.authenticate(username, payload.password or "")
+    except auth.AccountLocked as exc:
+        minutes = max(1, (exc.seconds + 59) // 60)
+        auth.audit({"user": username, "method": "POST", "path": "/api/v1/auth/login",
+                    "status": 423, "ip": ip, "event": "login_locked"})
+        raise HTTPException(
+            status_code=423,
+            detail=f"账号已锁定，请 {minutes} 分钟后再试或联系管理员重置",
+        ) from exc
     if user is None:
         auth.record_attempt(key)
         auth.audit({"user": username, "method": "POST", "path": "/api/v1/auth/login",
@@ -179,8 +255,7 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
 @app.post("/api/v1/auth/logout")
 def logout(request: Request) -> JSONResponse:
     user = _require_user(request)
-    auth.audit({"user": user["username"], "role": user["role"], "method": "POST",
-                "path": "/api/v1/auth/logout", "status": 200, "ip": _client_ip(request)})
+    _audit_event(request, user, "logout")
     response = JSONResponse({"ok": True})
     response.delete_cookie(auth.COOKIE_NAME, path=ROOT_PATH or "/")
     return response
@@ -193,48 +268,181 @@ def me(request: Request) -> dict:
 
 @app.get("/api/v1/auth/users")
 def list_users(request: Request) -> dict:
-    _require_admin(request)
+    _require_permission(request, "user:manage")
     return {"users": [auth.public_user(user) for user in auth.load_users()]}
 
 
 @app.post("/api/v1/auth/users", status_code=201)
 def add_user(payload: CreateUserRequest, request: Request) -> dict:
-    _require_admin(request)
+    actor = _require_permission(request, "user:manage")
     try:
         user = auth.create_user(
             payload.username,
             payload.password,
             role=payload.role,
             display_name=payload.display_name,
+            department=payload.department,
+            projects=payload.projects,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _audit_event(request, actor, "user_created", target=user["username"], new_role=user["role"])
     return {"user": user}
+
+
+@app.patch("/api/v1/auth/users/{username}")
+def update_user(username: str, payload: UpdateUserRequest, request: Request) -> dict:
+    actor = _require_permission(request, "user:manage")
+    if username.lower() == actor["username"].lower():
+        if payload.active is False:
+            raise HTTPException(status_code=409, detail="不能停用当前登录的管理员")
+        if payload.role is not None and payload.role != "admin":
+            raise HTTPException(status_code=409, detail="不能降低当前登录管理员的角色")
+    try:
+        user = auth.update_user(
+            username,
+            role=payload.role,
+            active=payload.active,
+            display_name=payload.display_name,
+            department=payload.department,
+            projects=payload.projects,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="用户不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _audit_event(
+        request,
+        actor,
+        "user_updated",
+        target=user["username"],
+        new_role=user["role"],
+        active=user["active"],
+        projects=user["projects"],
+    )
+    return {"user": user}
+
+
+@app.post("/api/v1/auth/users/{username}/reset-password")
+def reset_user_password(
+    username: str, payload: ResetPasswordRequest, request: Request, response: Response
+) -> dict:
+    actor = _require_permission(request, "user:manage")
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        result = auth.reset_password(username, payload.new_password or None)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="用户不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _audit_event(
+        request, actor, "user_password_reset", target=result["username"],
+        generated=result["generated"],
+    )
+    return result
 
 
 @app.post("/api/v1/auth/password")
 def change_password(payload: ChangePasswordRequest, request: Request) -> dict:
     user = _require_user(request)
-    if auth.authenticate(user["username"], payload.old_password or "") is None:
+    raw_user = auth.find_user(user["username"])
+    if raw_user is None or not auth.verify_password(
+        payload.old_password or "", raw_user.get("password_hash", "")
+    ):
         raise HTTPException(status_code=400, detail="原密码错误")
     try:
         auth.update_password(user["username"], payload.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _audit_event(request, user, "password_changed")
     return {"ok": True}
+
+
+def _audit_filters(
+    user: str,
+    role: str,
+    event: str,
+    method: str,
+    path: str,
+    status: int | None,
+    date_from: str,
+    date_to: str,
+) -> dict:
+    return {
+        "user": user,
+        "role": role,
+        "event": event,
+        "method": method,
+        "path": path,
+        "status": status,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+
+
+@app.get("/api/v1/audit/events")
+def audit_events(
+    request: Request,
+    user: str = "",
+    role: str = "",
+    event: str = "",
+    method: str = "",
+    path: str = "",
+    status: int | None = None,
+    date_from: str = "",
+    date_to: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    _require_permission(request, "audit:read")
+    return auth.query_audit(
+        **_audit_filters(user, role, event, method, path, status, date_from, date_to),
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/v1/audit/export.csv")
+def audit_export(
+    request: Request,
+    user: str = "",
+    role: str = "",
+    event: str = "",
+    method: str = "",
+    path: str = "",
+    status: int | None = None,
+    date_from: str = "",
+    date_to: str = "",
+) -> Response:
+    actor = _require_permission(request, "audit:export")
+    events = auth.filter_audit(
+        **_audit_filters(user, role, event, method, path, status, date_from, date_to)
+    )
+    _audit_event(request, actor, "audit_exported", rows=len(events))
+    return Response(
+        content=auth.audit_csv(events),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=audit.csv"},
+    )
 
 
 @app.get("/api/v1/audit/recent")
 def audit_recent(request: Request, limit: int = 50) -> dict:
-    _require_admin(request)
+    _require_permission(request, "audit:read")
     return {"events": auth.recent_audit(limit)}
 
 
 @app.get("/api/v1/system/status")
-def system_status() -> dict:
+def system_status(request: Request) -> dict:
+    _require_permission(request, "system:status")
     return {
         "version": app.version,
-        "auth": {"enabled": True, "users": len(auth.load_users())},
+        "auth": {
+            "enabled": True,
+            "users": len(auth.load_users()),
+            "roles": list(auth.ROLES),
+            "providers": auth.provider_status(),
+        },
         "weknora": {
             "configured": weknora.configured(),
             "required": weknora.required(),
@@ -299,36 +507,14 @@ def index() -> FileResponse:
 # Increment 1: report review
 # ---------------------------------------------------------------------------
 @app.get("/api/v1/rules")
-def list_rules() -> dict:
+def list_rules(request: Request) -> dict:
+    _require_permission(request, "rules:read")
     return {"rules": [{"id": rid, "title": title, "description": desc} for rid, title, desc in RULES]}
 
 
 @app.post("/api/v1/reports/audit")
-async def audit_report_file(file: UploadFile = File(...)) -> dict:
-    if not file.filename or not file.filename.lower().endswith(".docx"):
-        raise HTTPException(status_code=400, detail="only .docx reports are supported in this slice")
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"file exceeds {MAX_UPLOAD_BYTES // 1024 // 1024} MB")
-    tmp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
-        parsed = parse_docx(tmp_path)
-        parsed.file_name = file.filename
-        return audit_report(parsed)
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001 - API boundary
-        raise HTTPException(status_code=422, detail=f"failed to parse report: {exc}") from exc
-    finally:
-        if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
-
-
-@app.post("/api/v1/reports/audit.md")
-async def audit_report_markdown(file: UploadFile = File(...)) -> PlainTextResponse:
+async def audit_report_file(request: Request, file: UploadFile = File(...)) -> dict:
+    user = _require_permission(request, "report:audit")
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="only .docx reports are supported in this slice")
     data = await file.read()
@@ -342,6 +528,38 @@ async def audit_report_markdown(file: UploadFile = File(...)) -> PlainTextRespon
         parsed = parse_docx(tmp_path)
         parsed.file_name = file.filename
         result = audit_report(parsed)
+        _audit_event(
+            request, user, "report_audited", file_name=file.filename,
+            fail=result.get("summary", {}).get("fail", 0),
+            pass_count=result.get("summary", {}).get("pass", 0),
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - API boundary
+        raise HTTPException(status_code=422, detail=f"failed to parse report: {exc}") from exc
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+@app.post("/api/v1/reports/audit.md")
+async def audit_report_markdown(request: Request, file: UploadFile = File(...)) -> PlainTextResponse:
+    user = _require_permission(request, "report:audit")
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="only .docx reports are supported in this slice")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"file exceeds {MAX_UPLOAD_BYTES // 1024 // 1024} MB")
+    tmp_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+        parsed = parse_docx(tmp_path)
+        parsed.file_name = file.filename
+        result = audit_report(parsed)
+        _audit_event(request, user, "report_audited_markdown", file_name=file.filename)
         return PlainTextResponse(
             report_writer.audit_markdown(result, {"file_name": file.filename}),
             media_type="text/markdown; charset=utf-8",
@@ -356,7 +574,8 @@ async def audit_report_markdown(file: UploadFile = File(...)) -> PlainTextRespon
 
 
 @app.post("/api/v1/records/validate")
-def validate_record_batch(payload: RecordsRequest) -> dict:
+def validate_record_batch(payload: RecordsRequest, request: Request) -> dict:
+    user = _require_permission(request, "report:audit")
     records = [
         RecordInput(
             task_no=item.task_no,
@@ -371,21 +590,71 @@ def validate_record_batch(payload: RecordsRequest) -> dict:
         )
         for item in payload.records
     ]
-    return validate_records(records)
+    result = validate_records(records)
+    _audit_event(request, user, "records_validated", records=len(records))
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Increment 2: standard parsing
 # ---------------------------------------------------------------------------
+class AssignProjectRequest(BaseModel):
+    project: str
+    created_by: str | None = None
+
+
+@app.patch("/api/v1/standards/{standard_id}/project")
+def assign_standard_project(
+    standard_id: str, payload: AssignProjectRequest, request: Request
+) -> dict:
+    """Tag a legacy standard with a project (P1 migration helper)."""
+    user = _require_permission(request, "standard:project")
+    try:
+        record = standard_store.load(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    project = (payload.project or "").strip()
+    try:
+        updated = standard_store.set_project(
+            standard_id, project, created_by=payload.created_by
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    _audit_event(
+        request, user, "standard_project_assigned", standard_id=standard_id,
+        project=project, previous=record.get("meta", {}).get("project", ""),
+    )
+    return updated
+
+
 @app.get("/api/v1/standards")
-def list_standards() -> dict:
-    return {"standards": standard_store.list_standards()}
+def list_standards(request: Request) -> dict:
+    user = _require_permission(request, "standard:read")
+    return {
+        "standards": [
+            record
+            for record in standard_store.list_standards()
+            if auth.can_access_project(
+                user, record.get("project", ""), record.get("created_by", "")
+            )
+        ]
+    }
 
 
 @app.post("/api/v1/standards/parse")
 async def parse_standard_file(
-    file: UploadFile = File(...), enable_ocr: bool = True
+    request: Request,
+    file: UploadFile = File(...),
+    enable_ocr: bool = True,
+    project: str = Form(""),
 ) -> dict:
+    user = _require_permission(request, "standard:parse")
+    project = (project or "").strip()
+    if not auth.can_create_in_project(user, project):
+        raise HTTPException(
+            status_code=400,
+            detail="受限账号必须填写有权限的项目标识",
+        )
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="only .pdf standards are supported in this slice")
     data = await file.read()
@@ -423,35 +692,58 @@ async def parse_standard_file(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - API boundary
         raise HTTPException(status_code=422, detail=f"failed to parse standard: {exc}") from exc
-    return standard_store.create(parsed, data, file.filename)
+    record = standard_store.create(
+        parsed, data, file.filename, project=project, created_by=user["username"]
+    )
+    _audit_event(
+        request, user, "standard_parsed", standard_id=record["id"],
+        project=project, items=record.get("summary", {}).get("items", 0),
+    )
+    return record
 
 
 @app.get("/api/v1/standards/{standard_id}")
-def get_standard(standard_id: str) -> dict:
+def get_standard(standard_id: str, request: Request) -> dict:
+    user = _require_permission(request, "standard:read")
     try:
-        return standard_store.load(standard_id)
+        record = standard_store.load(standard_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
+    return record
 
 
 @app.patch("/api/v1/standards/{standard_id}")
-def review_standard(standard_id: str, payload: ReviewRequest) -> dict:
+def review_standard(standard_id: str, payload: ReviewRequest, request: Request) -> dict:
+    user = _require_permission(request, "standard:review")
     try:
-        return standard_store.update_review(
+        record = standard_store.load(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
+    try:
+        result = standard_store.update_review(
             standard_id,
             [item.model_dump() for item in payload.items],
             reviewer=payload.reviewer,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
+    _audit_event(
+        request, user, "standard_reviewed", standard_id=standard_id,
+        revision=result.get("revision", 0), changes=len(payload.items),
+    )
+    return result
 
 
 @app.get("/api/v1/standards/{standard_id}/export.xlsx")
-def export_standard(standard_id: str) -> FileResponse:
+def export_standard(standard_id: str, request: Request) -> FileResponse:
+    user = _require_permission(request, "standard:export")
     try:
         record = standard_store.load(standard_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
     if not record["items"]:
         raise HTTPException(status_code=409, detail="no items to export")
     meta = record["meta"]
@@ -492,6 +784,7 @@ def export_standard(standard_id: str) -> FileResponse:
     filename = standard_store.safe_filename(
         f"{meta.get('standard_no') or meta.get('name', 'standard')}-解析.xlsx"
     )
+    _audit_event(request, user, "standard_exported", standard_id=standard_id)
     return FileResponse(
         path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -500,24 +793,42 @@ def export_standard(standard_id: str) -> FileResponse:
 
 
 @app.post("/api/v1/standards/{standard_id}/publish")
-def publish_standard(standard_id: str) -> dict:
+def publish_standard(standard_id: str, request: Request) -> dict:
+    user = _require_permission(request, "standard:publish")
     try:
-        return standard_store.publish(standard_id)
+        record = standard_store.load(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
+    try:
+        result = standard_store.publish(standard_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
     except weknora.WeKnoraError as exc:
         raise HTTPException(status_code=502, detail=f"WeKnora 发布失败：{exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _audit_event(
+        request, user, "standard_published", standard_id=standard_id,
+        chunks=result.get("chunks", 0),
+    )
+    return result
 
 
 @app.post("/api/v1/standards/ask")
-def ask_standard(payload: AskRequest) -> dict:
-    kbs = standard_store.published_kbs(payload.standard_id)
+def ask_standard(payload: AskRequest, request: Request) -> dict:
+    user = _require_permission(request, "standard:ask")
+    if payload.standard_id:
+        try:
+            record = standard_store.load(payload.standard_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="standard not found") from exc
+        _assert_project_access(user, record.get("meta", {}))
+    kbs = _visible_kbs(user, payload.standard_id)
     if payload.standard_id and not kbs:
         raise HTTPException(status_code=409, detail="该标准尚未发布到知识库")
     try:
-        return standard_qa.answer(
+        answer = standard_qa.answer(
             payload.question,
             kbs,
             mode=payload.mode,
@@ -530,13 +841,19 @@ def ask_standard(payload: AskRequest) -> dict:
         raise HTTPException(status_code=502, detail=f"WeKnora 检索失败：{exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _audit_event(
+        request, user, "standard_asked", standard_id=payload.standard_id,
+        mode=(answer.get("retrieval") or {}).get("mode", ""),
+    )
+    return answer
 
 
 # ---------------------------------------------------------------------------
 # Increment 3: quote assistant (DVP -> CRM draft + 销售报价表)
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/quotes/parse")
-async def parse_quote_file(file: UploadFile = File(...)) -> dict:
+async def parse_quote_file(request: Request, file: UploadFile = File(...)) -> dict:
+    _require_permission(request, "quote:parse")
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="only .xlsx DVP/test-plan files are supported")
     data = await file.read()
@@ -559,9 +876,18 @@ async def parse_quote_file(file: UploadFile = File(...)) -> dict:
 
 @app.post("/api/v1/quotes/generate")
 async def generate_quote(
+    request: Request,
     file: UploadFile = File(...),
     template: UploadFile | None = File(None),
+    project: str = Form(""),
 ) -> dict:
+    user = _require_permission(request, "quote:generate")
+    project = (project or "").strip()
+    if not auth.can_create_in_project(user, project):
+        raise HTTPException(
+            status_code=400,
+            detail="受限账号必须填写有权限的项目标识",
+        )
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="only .xlsx DVP/test-plan files are supported")
     data = await file.read()
@@ -576,6 +902,20 @@ async def generate_quote(
         quote_id = "q_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
         directory = QUOTE_DIR / quote_id
         directory.mkdir(parents=True, exist_ok=True)
+        (directory / "meta.json").write_text(
+            json.dumps(
+                {
+                    "quote_id": quote_id,
+                    "project": project,
+                    "created_by": user["username"],
+                    "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "source_name": file.filename,
+                },
+                ensure_ascii=False,
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
         crm_path = quote_service.write_crm_xlsx(directory / "CRM报价草稿.xlsx", result)
         files = {"crm": f"{ROOT_PATH}/api/v1/quotes/{quote_id}/crm.xlsx"}
 
@@ -598,8 +938,13 @@ async def generate_quote(
             )
             sales_verification = quote_service.verify_sales_quote(sales_out, result)
             files["sales_quote"] = f"{ROOT_PATH}/api/v1/quotes/{quote_id}/sales.xlsx"
+        _audit_event(
+            request, user, "quote_generated", quote_id=quote_id,
+            project=project, lines=result.summary().get("lines", 0),
+        )
         return {
             "quote_id": quote_id,
+            "project": project,
             "summary": result.summary(),
             "preview": quote_service.sales_quote_preview(result),
             "files": files,
@@ -620,28 +965,45 @@ async def generate_quote(
 _QUOTE_ID = re.compile(r"^q_[0-9]{14}_[0-9a-f]{6}$")
 
 
-def _quote_file(quote_id: str, name: str) -> Path:
+def _quote_meta(quote_id: str) -> dict:
     if not _QUOTE_ID.fullmatch(quote_id):
         raise HTTPException(status_code=404, detail="quote not found")
+    path = QUOTE_DIR / quote_id / "meta.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _quote_file(quote_id: str, name: str, request: Request) -> Path:
+    user = _require_permission(request, "quote:download")
+    if not _QUOTE_ID.fullmatch(quote_id):
+        raise HTTPException(status_code=404, detail="quote not found")
+    meta = _quote_meta(quote_id)
+    _assert_project_access(user, meta)
     path = QUOTE_DIR / quote_id / name
     if not path.exists():
         raise HTTPException(status_code=404, detail="quote file not found")
+    _audit_event(request, user, "quote_downloaded", quote_id=quote_id, file_name=name)
     return path
 
 
 @app.get("/api/v1/quotes/{quote_id}/crm.xlsx")
-def download_crm(quote_id: str) -> FileResponse:
+def download_crm(quote_id: str, request: Request) -> FileResponse:
     return FileResponse(
-        _quote_file(quote_id, "CRM报价草稿.xlsx"),
+        _quote_file(quote_id, "CRM报价草稿.xlsx", request),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename="CRM报价草稿.xlsx",
     )
 
 
 @app.get("/api/v1/quotes/{quote_id}/sales.xlsx")
-def download_sales_quote(quote_id: str) -> FileResponse:
+def download_sales_quote(quote_id: str, request: Request) -> FileResponse:
     return FileResponse(
-        _quote_file(quote_id, "销售报价表-生成.xlsx"),
+        _quote_file(quote_id, "销售报价表-生成.xlsx", request),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename="销售报价表-生成.xlsx",
     )
@@ -651,13 +1013,20 @@ def download_sales_quote(quote_id: str) -> FileResponse:
 # Increment 4: knowledge base rebuild + cited Q&A
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/kb/rebuild")
-def rebuild_kb() -> dict:
+def rebuild_kb(request: Request) -> dict:
+    user = _require_permission(request, "kb:rebuild")
     index = standard_store.rebuild_index()
+    _audit_event(
+        request, user, "kb_rebuilt",
+        standard_count=index.get("standard_count", 0),
+        chunk_count=index.get("chunk_count", 0),
+    )
     return {key: index[key] for key in ("built_at", "standard_count", "chunk_count")} | {
         "standards": index.get("standards", [])
     }
 
 
 @app.get("/api/v1/kb/stats")
-def kb_stats() -> dict:
+def kb_stats(request: Request) -> dict:
+    _require_permission(request, "kb:stats")
     return standard_store.index_stats()

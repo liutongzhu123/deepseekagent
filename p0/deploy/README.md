@@ -1,4 +1,4 @@
-# 部署说明（P0 受控上线 0.5）
+# 部署说明（P0 受控上线 0.5 + P1-S1 身份/权限/审计 0.6）
 
 当前 P0 服务器（`<P0_HOST>`，真实地址只在工单/服务器本地）使用 **venv + systemd** 运行：
 `/opt/cq-ai-p0`，服务名 `cq-p0-api`，监听 `127.0.0.1:8090`。
@@ -19,7 +19,7 @@ P0_ROOT_PATH=/p0
 P0_COOKIE_SECURE=1
 P0_DATA_DIR=/opt/cq-ai-p0/data
 P0_ADMIN_USER=admin
-P0_ADMIN_PASSWORD=<首次启动的管理员密码>
+P0_ADMIN_PASSWORD=<首次启动的管理员密码；至少 10 位且字母/数字/符号至少两类>
 P0_SESSION_SECRET=<随机 48+ 字节>
 P0_WEKNORA_BASE_URL=http://127.0.0.1:8081
 P0_WEKNORA_API_KEY=<WeKnora tenant API key>
@@ -29,6 +29,7 @@ P0_WEKNORA_MIN_SCORE=0.35
 P0_WEKNORA_TOP_K=6
 P0_WEKNORA_RERANK=0
 P0_OCR_ENABLED=1
+P0_AUDIT_RETENTION_DAYS=180
 MAX_UPLOAD_MB=20
 MAX_STANDARD_MB=200
 ```
@@ -99,11 +100,13 @@ curl -s -b /tmp/p0.cookies -H 'Content-Type: application/json' \
 ```bash
 cd /opt/cq-ai-p0
 .venv/bin/python scripts/manage_users.py list
-.venv/bin/python scripts/manage_users.py add <user> <admin|reviewer|viewer>
+.venv/bin/python scripts/manage_users.py add <user> <admin|reviewer|sales|viewer>
 .venv/bin/python scripts/manage_users.py reset <user>
 ```
 
-密码只通过交互式 `getpass` 输入，不接受命令行参数。
+密码只通过交互式 `getpass` 输入，不接受命令行参数；新密码至少 10 位且包含字母/数字/符号中的至少两类。
+账号连续 5 次登录失败会锁定 15 分钟，管理员可在 `权限与审计` 页签或重置密码接口解锁。
+`projects` 为空的账号不限制项目；填写项目列表后只能访问对应项目标签的标准/报价。
 
 ## 标准发布与 WeKnora
 

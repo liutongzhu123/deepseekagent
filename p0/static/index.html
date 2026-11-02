@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="./">
-  <title>中汽零部件 P0 · 智能审核与报价</title>
+  <title>中汽零部件 P1 · 智能审核与报价</title>
   <style>
     :root { --ink:#1f2933; --muted:#5f6b7a; --line:#d9e2e8; --blue:#0f4c81; --blue-2:#1769aa; --bg:#f6f8fa; --green:#0f766e; --amber:#b45309; --red:#b42318; }
     * { box-sizing:border-box; }
@@ -57,15 +57,21 @@
     .notice { background:#f7fbff; border:1px dashed #cfe0f3; border-radius:6px; padding:10px 12px; color:var(--muted); font-size:12px; }
     .quote-result { display:grid; gap:12px; }
     .quote-result .money { font-size:22px; color:var(--blue); font-weight:700; }
-    @media (max-width:860px) { .grid2 { grid-template-columns:1fr; } .topline { flex-direction:column; } }
+    .admin-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; align-items:center; }
+    .admin-grid input, .admin-grid select { min-width:0; }
+    .admin-grid .span-2 { grid-column:span 2; }
+    .admin-grid .span-3 { grid-column:span 3; }
+    td.actions { white-space:nowrap; }
+    td.actions button { padding:4px 8px; font-size:11px; margin-right:4px; }
+    @media (max-width:860px) { .grid2 { grid-template-columns:1fr; } .topline { flex-direction:column; } .admin-grid { grid-template-columns:1fr; } .admin-grid .span-2, .admin-grid .span-3 { grid-column:span 1; } }
   </style>
 </head>
 <body>
 <header>
   <div class="topline">
     <div>
-      <h1>中汽零部件 P0 · 智能审核与报价</h1>
-      <p>报告审核 · 标准解析 · 报价助手 · WeKnora 知识问答 · 全部操作带证据与审计</p>
+      <h1>中汽零部件 P1 · 智能审核与报价</h1>
+      <p>多用户 RBAC · 项目授权 · 全量审计 · 报告审核 / 标准解析 / 报价助手 / 知识问答</p>
     </div>
     <div class="userbox" id="userBox">
       <span style="color:rgba(255,255,255,.7)">正在确认登录状态…</span>
@@ -76,6 +82,7 @@
     <button data-tab="standards" id="tabStandards">标准解析</button>
     <button data-tab="quote" id="tabQuote">报价助手</button>
     <button data-tab="knowledge" id="tabKnowledge">知识问答</button>
+    <button data-tab="admin" id="tabAdmin" class="hidden">权限与审计</button>
   </nav>
 </header>
 <main>
@@ -113,7 +120,8 @@
       <h2>上传标准 PDF 并解析</h2>
       <p class="muted">数字版 PDF：自动识别「技术要求 / 试验方法」章节、检验项目表、条款与页码；扫描件默认启用本地 OCR。</p>
       <input id="stdFile" type="file" accept=".pdf">
-      <div class="row">
+      <input type="text" id="stdProject" placeholder="项目标识（受限账号必填；留空表示不限定项目）">
+      <div class="row" style="margin-top:8px">
         <button id="parseBtn">解析标准</button>
         <span class="muted" id="parseStatus"></span>
       </div>
@@ -173,6 +181,7 @@
       <input id="quoteFile" type="file" accept=".xlsx,.xlsm">
       <label class="muted">销售报价表模板（可选，.xlsx）</label>
       <input id="quoteTemplate" type="file" accept=".xlsx">
+      <input type="text" id="quoteProject" placeholder="项目标识（受限账号必填；留空表示不限定项目）">
       <div class="row" style="margin-top:8px">
         <button id="quoteBtn">生成报价草稿</button>
         <span class="muted" id="quoteStatus"></span>
@@ -204,12 +213,71 @@
       <div id="kbHealth" class="notice">正在检查 WeKnora 连接…</div>
     </section>
   </section>
+
+  <!-- 权限与审计（管理员） -->
+  <section id="panel-admin" class="hidden">
+    <section class="card">
+      <h2>用户与角色</h2>
+      <p class="muted">admin 全部权限；reviewer 报告审核 / 标准复核与发布；sales 报价与问答；viewer 只读。项目授权只影响已打项目标签的标准和报价；留空表示不限制项目。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>用户名</th><th>姓名</th><th>角色</th><th>部门</th><th>项目授权</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="userBody"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <h3>新增用户</h3>
+      <div class="admin-grid">
+        <input id="nuUsername" type="text" placeholder="用户名">
+        <input id="nuName" type="text" placeholder="姓名（可选）">
+        <input id="nuPassword" type="password" placeholder="初始密码（≥10 位，至少两类字符）">
+        <select id="nuRole">
+          <option value="viewer">viewer · 只读</option>
+          <option value="reviewer">reviewer · 复核人</option>
+          <option value="sales">sales · 销售</option>
+          <option value="admin">admin · 管理员</option>
+        </select>
+        <input id="nuDept" type="text" placeholder="部门（可选）">
+        <input id="nuProjects" type="text" placeholder="项目授权，逗号分隔（留空=不限制）">
+        <button id="nuCreate" class="span-3" style="justify-self:start">创建用户</button>
+      </div>
+      <div class="muted" id="nuStatus" style="margin-top:8px"></div>
+    </section>
+
+    <section class="card">
+      <h2>审计查询</h2>
+      <div class="row">
+        <input id="auUser" type="text" placeholder="用户" style="width:130px">
+        <input id="auEvent" type="text" placeholder="事件（如 login_success）" style="width:220px">
+        <select id="auStatus">
+          <option value="">全部状态</option>
+          <option value="200">200</option>
+          <option value="201">201</option>
+          <option value="400">400</option>
+          <option value="401">401</option>
+          <option value="403">403</option>
+          <option value="423">423</option>
+          <option value="500">500</option>
+        </select>
+        <input id="auLimit" type="text" value="50" style="width:70px">
+        <button id="auQuery">查询</button>
+        <button id="auExport" class="secondary">导出 CSV</button>
+      </div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead><tr><th>时间</th><th>用户</th><th>角色</th><th>事件</th><th>方法</th><th>动作 / 路径</th><th>状态</th><th>耗时 ms</th><th>IP</th></tr></thead>
+          <tbody id="auditBody"><tr><td colspan="9" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="muted" id="auditMeta" style="margin-top:8px"></div>
+    </section>
+  </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 let current = null;
 let selectedIndex = -1;
+let me = null;
 
 async function jsonFetch(url, options) {
   const res = await fetch(url, options);
@@ -223,23 +291,28 @@ function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&
 function fmt(n) { return (n === null || n === undefined) ? '-' : n; }
 
 function switchTab(name) {
-  for (const [tab, panel] of [['report','panel-report'],['standards','panel-standards'],['quote','panel-quote'],['knowledge','panel-knowledge']]) {
+  if (name === 'admin' && (!me || me.role !== 'admin')) name = 'report';
+  for (const [tab, panel] of [['report','panel-report'],['standards','panel-standards'],['quote','panel-quote'],['knowledge','panel-knowledge'],['admin','panel-admin']]) {
     $(panel).classList.toggle('hidden', tab !== name);
     $('tab' + tab[0].toUpperCase() + tab.slice(1)).classList.toggle('active', tab === name);
   }
   if (name === 'knowledge') loadKbHealth();
+  if (name === 'admin') loadAdmin().catch(e => { $('nuStatus').textContent = '加载失败：' + e.message; });
 }
 $('tabReport').addEventListener('click', () => switchTab('report'));
 $('tabStandards').addEventListener('click', () => switchTab('standards'));
 $('tabQuote').addEventListener('click', () => switchTab('quote'));
 $('tabKnowledge').addEventListener('click', () => switchTab('knowledge'));
+$('tabAdmin').addEventListener('click', () => switchTab('admin'));
 
 /* ---------- auth ---------- */
 async function loadMe() {
   try {
     const data = await jsonFetch('api/v1/auth/me');
     const u = data.user;
-    $('userBox').innerHTML = `<span><b>${escapeHtml(u.display_name || u.username)}</b> · ${escapeHtml(u.role)}</span><button id="logoutBtn">退出</button>`;
+    me = u;
+    $('tabAdmin').classList.toggle('hidden', u.role !== 'admin');
+    $('userBox').innerHTML = `<span><b>${escapeHtml(u.display_name || u.username)}</b> · ${escapeHtml(ROLE_NAMES[u.role] || u.role)}${u.department ? ' · ' + escapeHtml(u.department) : ''}</span><button id="logoutBtn">退出</button>`;
     $('logoutBtn').addEventListener('click', async () => {
       try { await jsonFetch('api/v1/auth/logout', {method:'POST'}); } catch (e) {}
       window.location.replace('login');
@@ -357,6 +430,7 @@ $('parseBtn').addEventListener('click', async () => {
   $('parseStatus').textContent = '解析中，大文件约需数秒…'; $('parseBtn').disabled = true;
   try {
     const fd = new FormData(); fd.append('file', f);
+    if ($('stdProject').value.trim()) fd.append('project', $('stdProject').value.trim());
     const data = await jsonFetch('api/v1/standards/parse', {method:'POST', body:fd});
     $('parseStatus').innerHTML = `解析完成：<span class="badge pass">${data.summary.items} 项</span><span class="badge info">${data.summary.clauses_traced} 条款可溯源</span>`;
     await loadStandards(data.id);
@@ -402,6 +476,7 @@ $('quoteBtn').addEventListener('click', async () => {
   if (!f) { $('quoteStatus').textContent = '请选择 DVP / 测试大纲'; return; }
   const t = $('quoteTemplate').files[0];
   const fd = new FormData(); fd.append('file', f); if (t) fd.append('template', t);
+  if ($('quoteProject').value.trim()) fd.append('project', $('quoteProject').value.trim());
   $('quoteBtn').disabled = true; $('quoteStatus').textContent = '生成中…';
   $('quoteResult').innerHTML = ''; $('quotePreview').classList.add('hidden');
   try {
@@ -471,10 +546,145 @@ $('askBtn').addEventListener('click', async () => {
   }
 });
 
+
+/* ---------- 权限与审计（管理员） ---------- */
+const ROLE_NAMES = {admin:'管理员', reviewer:'复核人', sales:'销售', viewer:'只读'};
+
+async function loadAdmin() {
+  const data = await jsonFetch('api/v1/auth/users');
+  const users = data.users || [];
+  $('userBody').innerHTML = users.map(u => {
+    const options = ['admin','reviewer','sales','viewer'].map(r =>
+      `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE_NAMES[r]}</option>`).join('');
+    const status = u.active ? '<span class="badge pass">启用</span>' : '<span class="badge fail">停用</span>';
+    const projects = (u.projects || []).join('、') || '不限制';
+    return `<tr>
+      <td><b>${escapeHtml(u.username)}</b>${u.restricted ? '<span class="badge warn">项目受限</span>' : ''}</td>
+      <td>${escapeHtml(u.display_name || '')}</td>
+      <td><select class="roleSel" data-user="${escapeHtml(u.username)}">${options}</select></td>
+      <td>${escapeHtml(u.department || '-')}</td>
+      <td>${escapeHtml(projects)}</td>
+      <td>${status}${u.locked ? '<span class="badge fail">锁定</span>' : ''}</td>
+      <td class="actions">
+        <button class="secondary" data-act="toggle" data-user="${escapeHtml(u.username)}" data-active="${u.active ? '1' : '0'}">${u.active ? '停用' : '启用'}</button>
+        <button class="secondary" data-act="projects" data-user="${escapeHtml(u.username)}" data-projects="${escapeHtml((u.projects || []).join(','))}">项目</button>
+        <button class="secondary" data-act="reset" data-user="${escapeHtml(u.username)}">重置密码</button>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted">暂无用户</td></tr>';
+  await loadAudit();
+}
+
+$('userBody').addEventListener('change', async (event) => {
+  const select = event.target.closest('select.roleSel');
+  if (!select) return;
+  try {
+    await jsonFetch('api/v1/auth/users/' + encodeURIComponent(select.dataset.user), {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({role: select.value}),
+    });
+    await loadAdmin();
+    $('nuStatus').textContent = `已更新 ${select.dataset.user} 的角色`;
+  } catch (e) {
+    $('nuStatus').textContent = '更新角色失败：' + e.message;
+  }
+});
+
+$('userBody').addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-act]');
+  if (!button) return;
+  const username = button.dataset.user;
+  try {
+    if (button.dataset.act === 'toggle') {
+      await jsonFetch('api/v1/auth/users/' + encodeURIComponent(username), {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({active: button.dataset.active !== '1'}),
+      });
+      await loadAdmin();
+      $('nuStatus').textContent = `已${button.dataset.active === '1' ? '停用' : '启用'} ${username}`;
+    } else if (button.dataset.act === 'projects') {
+      const current = button.dataset.projects || '';
+      const value = prompt(`设置 ${username} 的项目授权（逗号分隔；留空=不限制，* = 全部）`, current);
+      if (value === null) return;
+      await jsonFetch('api/v1/auth/users/' + encodeURIComponent(username), {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({projects: value.split(/[,，\s]+/).filter(Boolean)}),
+      });
+      await loadAdmin();
+      $('nuStatus').textContent = `已更新 ${username} 的项目授权`;
+    } else if (button.dataset.act === 'reset') {
+      if (!confirm(`重置 ${username} 的密码？`)) return;
+      const data = await jsonFetch('api/v1/auth/users/' + encodeURIComponent(username) + '/reset-password', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}',
+      });
+      alert(`临时密码（只显示一次）：\n${data.password}\n请让 ${username} 登录后立即修改。`);
+      await loadAdmin();
+    }
+  } catch (e) {
+    $('nuStatus').textContent = '操作失败：' + e.message;
+  }
+});
+
+$('nuCreate').addEventListener('click', async () => {
+  const username = $('nuUsername').value.trim();
+  const password = $('nuPassword').value;
+  if (!username || !password) { $('nuStatus').textContent = '请填写用户名和初始密码'; return; }
+  $('nuStatus').textContent = '创建中…';
+  try {
+    const data = await jsonFetch('api/v1/auth/users', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        username, password,
+        role: $('nuRole').value,
+        display_name: $('nuName').value.trim(),
+        department: $('nuDept').value.trim(),
+        projects: $('nuProjects').value.split(/[,，\s]+/).filter(Boolean),
+      }),
+    });
+    $('nuStatus').textContent = `已创建 ${data.user.username}（${ROLE_NAMES[data.user.role] || data.user.role}）`;
+    $('nuUsername').value = ''; $('nuPassword').value = ''; $('nuName').value = '';
+    $('nuDept').value = ''; $('nuProjects').value = '';
+    await loadAdmin();
+  } catch (e) {
+    $('nuStatus').textContent = '创建失败：' + e.message;
+  }
+});
+
+function auditParams() {
+  const params = new URLSearchParams();
+  if ($('auUser').value.trim()) params.set('user', $('auUser').value.trim());
+  if ($('auEvent').value.trim()) params.set('event', $('auEvent').value.trim());
+  if ($('auStatus').value) params.set('status', $('auStatus').value);
+  params.set('limit', $('auLimit').value.trim() || '50');
+  return params;
+}
+
+async function loadAudit() {
+  const data = await jsonFetch('api/v1/audit/events?' + auditParams().toString());
+  const events = data.events || [];
+  $('auditBody').innerHTML = events.map(e => `<tr>
+    <td>${escapeHtml(String(e.at || '').replace('T', ' ').slice(0, 19))}</td>
+    <td>${escapeHtml(e.user || '')}</td>
+    <td>${escapeHtml(e.role || '')}</td>
+    <td>${escapeHtml(e.event || '')}</td>
+    <td>${escapeHtml(e.method || '')}</td>
+    <td title="${escapeHtml(e.path || '')}">${escapeHtml(e.action || e.path || '')}</td>
+    <td>${escapeHtml(e.status ?? '')}</td>
+    <td>${escapeHtml(e.ms ?? '')}</td>
+    <td>${escapeHtml(e.ip || '')}</td>
+  </tr>`).join('') || '<tr><td colspan="9" class="muted">没有匹配的审计记录</td></tr>';
+  $('auditMeta').textContent = `共 ${data.total} 条，按时间倒序显示 ${events.length} 条。保留期由服务端 P0_AUDIT_RETENTION_DAYS 控制。`;
+}
+
+$('auQuery').addEventListener('click', () => loadAudit().catch(e => { $('auditMeta').textContent = '查询失败：' + e.message; }));
+$('auExport').addEventListener('click', () => {
+  window.location = 'api/v1/audit/export.csv?' + auditParams().toString();
+});
+
 /* ---------- boot ---------- */
-loadMe();
-const initialTab = ['standards','quote','knowledge'].includes(params.get('tab')) ? params.get('tab') : 'report';
-switchTab(initialTab);
+const wantedTab = params.get('tab');
+const initialTab = ['standards','quote','knowledge','admin'].includes(wantedTab) ? wantedTab : 'report';
+loadMe().finally(() => switchTab(initialTab));
 loadStandards().catch(e => { $('parseStatus').textContent = '加载失败：' + e.message; });
 if (initialTab === 'knowledge' && params.get('ask')) {
   $('question').value = params.get('ask');
