@@ -7,5 +7,7 @@ services:
       - "127.0.0.1:8090:8090"
     volumes:
       - ./data:/data:ro
+      - ./data/standards:/app/data/standards
     environment:
       MAX_UPLOAD_MB: "20"
+      MAX_STANDARD_MB: "40"
