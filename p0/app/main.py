@@ -52,7 +52,7 @@ AUTH_BOOTSTRAP = auth.bootstrap()
 
 app = FastAPI(
     title="中汽零部件 P1 API",
-    version="0.7.1",
+    version="0.7.2",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
