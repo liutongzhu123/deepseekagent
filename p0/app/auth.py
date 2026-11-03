@@ -5,7 +5,7 @@ P1-S1 turns the P0 login gate into a multi-user identity base:
 * four roles (admin / reviewer / sales / viewer) behind one permission matrix;
 * account policy, per-account lockout, admin reset and activation control;
 * project grants on users, used by the API layer for row-level isolation;
-* an OIDC/SSO configuration seam (status only; local login stays the default);
+* an optional OIDC/SSO login (default off; local login always stays available);
 * append-only JSONL audit with filtering, CSV export and retention pruning.
 
 The JSON store remains the default.  Setting ``P0_STORE=postgres`` swaps users
@@ -273,6 +273,19 @@ def find_user(username: str) -> dict | None:
     return None
 
 
+def find_user_by_identity(identifier: str) -> dict | None:
+    """Match an OIDC username/email to an existing account (no auto-create)."""
+    key = (identifier or "").strip().lower()
+    if not key:
+        return None
+    for user in load_users():
+        if user.get("username", "").lower() == key:
+            return user
+        if str(user.get("email", "")).strip().lower() == key:
+            return user
+    return None
+
+
 def create_user(
     username: str,
     password: str,
@@ -490,11 +503,14 @@ def provider_status() -> dict:
     """Describe available identity providers without exposing secrets."""
     issuer = os.getenv("P0_OIDC_ISSUER", "").strip()
     client_id = os.getenv("P0_OIDC_CLIENT_ID", "").strip()
+    configured = bool(issuer and client_id)
+    enabled = configured and os.getenv("P0_OIDC_ENABLED", "1").lower() not in {"0", "false", "off", "no"}
     return {
         "providers": [{"id": "local", "label": "账号密码", "enabled": True}],
         "oidc": {
-            "configured": bool(issuer and client_id),
-            "status": "reserved",
+            "configured": configured,
+            "enabled": enabled,
+            "status": "configured" if configured else "reserved",
             "issuer_configured": bool(issuer),
         },
     }
@@ -503,6 +519,11 @@ def provider_status() -> dict:
 # ---------------------------------------------------------------------------
 # Session tokens
 # ---------------------------------------------------------------------------
+def state_secret() -> bytes:
+    """Secret used by the OIDC state cookie (same key as sessions)."""
+    return _session_secret()
+
+
 def _session_secret() -> bytes:
     global _SECRET
     if _SECRET is not None:
