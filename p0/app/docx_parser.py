@@ -55,6 +55,7 @@ class ReportData:
     limit: float | None = None
     judgment: str = ""
     device_valid: str = ""
+    devices: list[dict] = field(default_factory=list)
     page_totals: list[int] = field(default_factory=list)
     page_numbers: list[int] = field(default_factory=list)
     notices: int = 0
@@ -279,6 +280,7 @@ def parse_docx(path: str | Path) -> ReportData:
     result_table = _find_result_table(tables)
     scores, reported_mean, limit, judgment = _parse_result_rows(result_table) if result_table else ([], None, None, "")
 
+    devices: list[dict] = []
     device_valid = ""
     for table in tables:
         if not table:
@@ -286,11 +288,25 @@ def parse_docx(path: str | Path) -> ReportData:
         header = [cell.text.strip() for cell in table[0]]
         if "溯源有效期" not in header:
             continue
-        idx = header.index("溯源有效期")
+        index = {name: position for position, name in enumerate(header)}
+
+        def cell_value(row: list[Cell], name: str) -> str:
+            position = index.get(name)
+            if position is None or position >= len(row):
+                return ""
+            return row[position].text.strip()
+
         for row in table[1:]:
-            if idx < len(row) and row[idx].text.strip():
-                device_valid = row[idx].text.strip()
-                break
+            item = {
+                "device_id": cell_value(row, "设备编号"),
+                "device_name": cell_value(row, "设备名称"),
+                "device_model": cell_value(row, "设备型号"),
+                "valid_until": cell_value(row, "溯源有效期"),
+            }
+            if any(item.values()):
+                devices.append(item)
+        if devices:
+            device_valid = devices[0]["valid_until"]
         break
 
     page_totals = [int(m.group(1)) for m in re.finditer(r"共\s*(\d+)\s*页", body_text)]
@@ -345,6 +361,7 @@ def parse_docx(path: str | Path) -> ReportData:
         limit=limit,
         judgment=judgment,
         device_valid=device_valid,
+        devices=devices,
         page_totals=page_totals,
         page_numbers=page_numbers,
         notices=notices,

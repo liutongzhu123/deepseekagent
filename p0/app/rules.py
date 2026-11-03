@@ -514,12 +514,58 @@ def _crosscheck_record(data: ReportData, inputs: object) -> Finding:
     return _pass("X03", "报告—原始记录一致", "报告与原始记录关键字段一致", f"记录={record.get('record_no', '')}")
 
 
+def _crosscheck_equipment(data: ReportData, inputs: object) -> Finding:
+    devices = data.devices or []
+    if not devices:
+        return _skip("X04", "设备台账校验", "报告中未识别到设备信息")
+    problems: list[str] = []
+    missing = 0
+    missing_ids: list[str] = []
+    compared = 0
+    test_end = parse_date(data.test_end) or parse_date(data.test_start)
+    for item in devices:
+        device_id = (item.get("device_id") or "").strip()
+        if not device_id:
+            missing += 1
+            missing_ids.append("(无编号)")
+            continue
+        rows = inputs.find("equipment", "device_id", device_id)  # type: ignore[attr-defined]
+        if not rows:
+            missing += 1
+            missing_ids.append(device_id)
+            continue
+        equipment = rows[0]
+        compared += 1
+        valid_until = parse_date(equipment.get("valid_until", ""))
+        if valid_until and test_end and valid_until < test_end:
+            problems.append(f"{device_id}: 台账有效期 {valid_until} 早于检验日期 {test_end}")
+        status = (equipment.get("status") or "").strip()
+        if any(word in status for word in ("停用", "维修", "检修", "报废", "待机")):
+            problems.append(f"{device_id}: 台账状态={status}")
+    if problems:
+        return _fail(
+            "X04", "设备台账校验", f"设备台账存在 {len(problems)} 处问题",
+            "; ".join(problems), "high", "核对设备台账有效期与状态，或更换设备",
+        )
+    if compared == 0:
+        return _skip("X04", "设备台账校验", "未找到与报告设备编号匹配的台账记录")
+    if missing:
+        return Finding(
+            "X04", "设备台账校验", "warn", "medium",
+            f"{compared} 台设备已核对，{missing} 台无匹配台账",
+            "、".join(missing_ids),
+            "补充设备台账或确认设备编号",
+        )
+    return _pass("X04", "设备台账校验", f"{compared} 台设备台账有效期/状态正常", "")
+
+
 def crosscheck_report(data: ReportData, inputs: object) -> list[Finding]:
     """Data-driven checks appended only when a local inbox is configured."""
     return [
         _crosscheck_task_order(data, inputs),
         _crosscheck_sample(data, inputs),
         _crosscheck_record(data, inputs),
+        _crosscheck_equipment(data, inputs),
     ]
 
 

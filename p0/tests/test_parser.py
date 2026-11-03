@@ -20,6 +20,8 @@ def test_parse_real_ots_report():
     assert data.reported_mean is None
     assert data.limit == 3.3
     assert data.notices == 8
+    assert [item["device_id"] for item in data.devices] == ["NJ.18.8.2431", "NJ.18.91.662"]
+    assert data.devices[1]["device_name"] == "袋式法环境舱"
     assert data.embedded_images == 0
     assert data.external_images > 0
     assert data.highlights > 0
