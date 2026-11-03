@@ -327,7 +327,27 @@ def r07_pages(data: ReportData) -> Finding:
             "medium",
             "检查分页/页码域，补齐缺页或删除多余页",
         )
-    return _pass("R07", "页码完整", f"页码 1..{total} 连续")
+    toc_problems: list[str] = []
+    last_page = 0
+    for entry in data.toc_entries:
+        page = int(entry.get("page") or 0)
+        title = entry.get("title") or ""
+        if page < 1 or page > total:
+            toc_problems.append(f"「{title}」页码 {page} 超出 1..{total}")
+        if page < last_page:
+            toc_problems.append(f"「{title}」页码 {page} 小于前一条 {last_page}")
+        last_page = max(last_page, page)
+    if toc_problems:
+        return _fail(
+            "R07",
+            "页码完整",
+            "目录页码与正文不一致",
+            "; ".join(toc_problems[:5]),
+            "medium",
+            "核对目录页码与正文实际页码，更新目录域",
+        )
+    suffix = f"；目录 {len(data.toc_entries)} 条页码在 1..{total} 内" if data.toc_entries else ""
+    return _pass("R07", "页码完整", f"页码 1..{total} 连续{suffix}")
 
 
 def r08_notes(data: ReportData, expected_notices: int = DEFAULT_EXPECTED_NOTICES) -> Finding:
