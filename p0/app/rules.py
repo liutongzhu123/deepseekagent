@@ -7,7 +7,7 @@ show traceability instead of a black-box score.
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Iterable
 
@@ -23,6 +23,7 @@ class Finding:
     message: str
     evidence: str = ""
     suggestion: str = ""
+    location: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -598,6 +599,34 @@ def crosscheck_report(data: ReportData, inputs: object) -> list[Finding]:
     ]
 
 
+_LOCATIONS = {
+    "R01": {"page": 1, "section": "页眉", "cell": "报告编号"},
+    "R02": {"page": 0, "section": "检验结果表", "cell": "检验均值"},
+    "R03": {"page": 1, "section": "摘要页/样品情况表", "cell": "样品名称/数量/编号"},
+    "R04": {"page": 1, "section": "日期栏", "cell": "生产/抽样/送样/检验/批准日期"},
+    "R05": {"page": 0, "section": "设备信息表", "cell": "溯源有效期"},
+    "R06": {"page": 0, "section": "检验结果表", "cell": "符合性判定"},
+    "R07": {"page": 1, "section": "目录/页脚", "cell": "页码"},
+    "R08": {"page": 0, "section": "注意事项", "cell": "条数"},
+    "R09": {"page": 1, "section": "全文", "cell": "高亮/红色字体"},
+    "R10": {"page": 0, "section": "签名栏", "cell": "批准/审核/主检/印章"},
+    "R11": {"page": 1, "section": "检验依据", "cell": "模板"},
+}
+
+
+def _location_for(rule_id: str, data: ReportData) -> dict:
+    location = dict(_LOCATIONS.get(rule_id, {"page": 1, "section": "全文", "cell": ""}))
+    total = max(data.page_totals) if data.page_totals else 0
+    if rule_id in {"R02", "R06"}:
+        location["page"] = next(
+            (entry["page"] for entry in data.toc_entries if "检验结果" in entry.get("title", "")),
+            3,
+        )
+    elif rule_id in {"R05", "R08", "R10"}:
+        location["page"] = total or 1
+    return location
+
+
 def audit_report(data: ReportData, config: dict | None = None, inputs: object | None = None) -> dict:
     """Run the enabled report rules with the configured thresholds/severity.
 
@@ -613,7 +642,9 @@ def audit_report(data: ReportData, config: dict | None = None, inputs: object | 
             finding = r08_notes(data, expected_notices)
         else:
             finding = globals()[function_name](data)
-        findings.append(_apply_rule_meta(finding, meta.get(rule_id)))
+        finding = _apply_rule_meta(finding, meta.get(rule_id))
+        finding.location = _location_for(rule_id, data)
+        findings.append(finding)
     if inputs is not None:
         findings.extend(crosscheck_report(data, inputs))
     return {

@@ -75,3 +75,25 @@ def test_record_validation():
     assert "REC-01" in ids  # B mean mismatch
     assert "REC-02" in ids  # B eval before test
     assert "REC-03" in ids  # B judgment mismatch
+
+
+def test_all_findings_have_structured_location():
+    result = audit_report(data())
+
+    assert len(result["findings"]) == 11
+    for finding in result["findings"]:
+        location = finding["location"]
+        assert location["page"] >= 1
+        assert location["section"]
+        assert "cell" in location
+
+
+def test_fail_findings_have_actionable_location():
+    result = audit_report(data())
+    by_id = {item["rule_id"]: item for item in result["findings"]}
+
+    for rule_id in ("R02", "R04", "R09", "R10"):
+        assert by_id[rule_id]["status"] == "fail"
+        assert by_id[rule_id]["location"]["cell"]
+    assert by_id["R02"]["location"]["section"] == "检验结果表"
+    assert by_id["R10"]["location"]["page"] == 5

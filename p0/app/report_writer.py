@@ -18,6 +18,14 @@ def _cell(value: object) -> str:
     return text.replace("|", "\\|").replace("\n", "<br>")
 
 
+def _location_text(location: object) -> str:
+    if not isinstance(location, dict) or not location:
+        return "未定位"
+    page = location.get("page")
+    parts = [f"p{page}" if page else "", str(location.get("section") or ""), str(location.get("cell") or "")]
+    return " / ".join(part for part in parts if part)
+
+
 def audit_markdown(result: dict, meta: dict | None = None, decisions: dict[str, str] | None = None) -> str:
     """Return a Markdown audit report for one parsed .docx report."""
     meta = meta or {}
@@ -54,13 +62,14 @@ def audit_markdown(result: dict, meta: dict | None = None, decisions: dict[str, 
         "",
         "## 2. 问题清单",
         "",
-        "| 规则 | 检查项 | 状态 | 严重级 | 问题 | 证据 | 建议 |",
-        "|---|---|---|---|---|---|---|",
+        "| 规则 | 定位 | 检查项 | 状态 | 严重级 | 问题 | 证据 | 建议 |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for finding in findings:
         lines.append(
-            "| {rule} | {title} | {status} | {severity} | {message} | {evidence} | {suggestion} |".format(
+            "| {rule} | {location} | {title} | {status} | {severity} | {message} | {evidence} | {suggestion} |".format(
                 rule=_cell(finding.get("rule_id")),
+                location=_cell(_location_text(finding.get("location"))),
                 title=_cell(finding.get("title")),
                 status=STATUS_LABEL.get(finding.get("status"), finding.get("status")),
                 severity=SEVERITY_LABEL.get(finding.get("severity"), finding.get("severity")),
