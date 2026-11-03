@@ -179,3 +179,21 @@ def file_names(quote_id: str) -> list[str]:
 def files_for(quote_id: str) -> dict[str, bytes]:
     _check_id(quote_id)
     return {name: read_file(quote_id, name) for name in file_names(quote_id)}
+
+
+def list_quotes() -> list[dict]:
+    """Generated quote metadata from PostgreSQL, newest first."""
+    db.ensure_schema()
+    with db.engine().connect() as conn:
+        rows = conn.execute(
+            select(db.quotes.c.data, db.quotes.c.created_at).order_by(
+                db.quotes.c.created_at.desc()
+            )
+        ).all()
+    out: list[dict] = []
+    for data, created_at in rows:
+        meta = dict(data or {})
+        if created_at and not meta.get("created_at"):
+            meta["created_at"] = created_at.astimezone(timezone.utc).isoformat(timespec="seconds")
+        out.append(meta)
+    return out

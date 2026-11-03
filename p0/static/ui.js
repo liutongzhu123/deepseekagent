@@ -93,6 +93,8 @@ const state = {
   reports: [],
   reportsTotal: 0,
   currentReport: null,
+  quotes: [],
+  quotesTotal: 0,
   adminView: 'users',
   userRoleFilter: null,
   projectUser: null,
@@ -226,6 +228,7 @@ function applyRoleUi() {
   ['editName', 'editReq', 'editMethod'].forEach((id) => { $(id).disabled = !canReview; });
   $('quoteUploadCard').classList.toggle('hidden', !canQuote);
   $('quoteResultCard').classList.toggle('hidden', !canQuote);
+  $('quoteHistoryCard').classList.toggle('hidden', !canQuote);
   $('quoteRoleNotice').classList.toggle('hidden', canQuote);
   if (!canQuote) {
     $('quoteRoleNotice').innerHTML = `${ic('lock')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，没有报价权限；报价需要销售或管理员权限。</span>`;
@@ -361,6 +364,7 @@ function switchTab(name) {
   }
   if (name === 'report' || name === 'standards' || name === 'quote') loadModuleConfig();
   if (name === 'report' && can('report:read')) loadReports().catch(showError);
+  if (name === 'quote' && can('quote:generate')) loadQuotes().catch(showError);
   if (name === 'admin') {
     loadAdmin().catch(showError);
     switchAdminView(state.adminView || 'users');
@@ -679,6 +683,44 @@ async function loadReport(reportId) {
   });
   $('reportStatus').textContent = `已打开历史记录 ${record.id}`;
   renderReportHistory();
+}
+function renderQuoteHistory() {
+  const box = $('quoteHistory');
+  $('quoteHistoryCount').textContent = state.quotesTotal;
+  if (!state.quotes.length) {
+    box.innerHTML = `<div class="empty compact"><b>还没有报价记录</b><p>生成一次报价后，这里会保留 CRM 草稿与销售报价表的下载入口。</p></div>`;
+    return;
+  }
+  box.innerHTML = state.quotes.map((quote) => {
+    const summary = quote.summary || {};
+    const crm = quote.crm || {};
+    const lines = quote.lines ?? summary.lines ?? 0;
+    const priced = quote.priced_lines ?? summary.priced_lines ?? 0;
+    const sales = Boolean(quote.has_sales_quote);
+    const salesPill = sales
+      ? `<span class="pill ${quote.verification_ok ? 'success' : 'warn'}">${quote.verification_ok ? '销售表·自检通过' : '销售表'}</span>`
+      : '<span class="pill warn">仅 CRM 草稿</span>';
+    const crmPill = crm.enabled
+      ? `<span class="pill ${crm.reconciled ? 'success' : 'warn'}">对账 ${escapeHtml(crm.matched ?? 0)}/${escapeHtml(lines)}</span>`
+      : '';
+    return `<div class="quote-history-item">
+      <div class="quote-history-main">
+        <span class="cell-main">${escapeHtml(quote.source_name || '未命名报价')}</span>
+        <span class="cell-sub">${escapeHtml(formatTime(quote.created_at))} · ${escapeHtml(quote.created_by || '—')}${quote.project ? ` · 项目 ${escapeHtml(quote.project)}` : ''} · ${escapeHtml(lines)} 行 / ${escapeHtml(priced)} 有价${quote.parse_method ? ` · ${escapeHtml(quote.parse_method)}` : ''}</span>
+      </div>
+      <div class="quote-history-pills">
+        ${crmPill}${salesPill}
+        <button type="button" class="btn btn-secondary btn-sm" data-quote-download="${escapeHtml(quote.quote_id)}" data-kind="crm">下载 CRM</button>
+        ${sales ? `<button type="button" class="btn btn-secondary btn-sm" data-quote-download="${escapeHtml(quote.quote_id)}" data-kind="sales">下载销售表</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+async function loadQuotes() {
+  const data = await jsonFetch('api/v1/quotes?limit=20');
+  state.quotes = data.quotes || [];
+  state.quotesTotal = data.total ?? state.quotes.length;
+  renderQuoteHistory();
 }
 function renderRecords(data) {
   const findings = data.findings || [];
@@ -1887,6 +1929,7 @@ function bindEvents() {
       renderQuote(data);
       $('quoteStatus').textContent = '完成';
       toast(data.summary && data.summary.unpriced_lines ? '已生成 CRM 草稿，含待补单价行' : '报价已生成', data.summary && data.summary.unpriced_lines ? 'info' : undefined);
+      if (can('quote:generate')) await loadQuotes();
     } catch (error) {
       $('quoteStatus').textContent = '生成失败';
       showError(error);
@@ -1899,6 +1942,12 @@ function bindEvents() {
     if (!button) return;
     const kind = button.dataset.kind === 'crm' ? 'crm' : 'sales';
     window.location = `api/v1/quotes/${encodeURIComponent(button.dataset.download)}/${kind}.xlsx`;
+  });
+  $('quoteHistory').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-quote-download]');
+    if (!button) return;
+    const kind = button.dataset.kind === 'crm' ? 'crm' : 'sales';
+    window.location = `api/v1/quotes/${encodeURIComponent(button.dataset.quoteDownload)}/${kind}.xlsx`;
   });
 
   $('askBtn').addEventListener('click', askQuestion);

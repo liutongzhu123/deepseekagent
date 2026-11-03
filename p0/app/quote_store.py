@@ -60,3 +60,22 @@ def read_file(quote_id: str, name: str, base_dir: Path | None = None) -> bytes:
     if not path.exists():
         raise KeyError(name)
     return path.read_bytes()
+
+
+def list_quotes(base_dir: Path | None = None) -> list[dict]:
+    """Generated quote metadata, newest first (file mode scans meta.json)."""
+    if store.config.postgres_enabled():
+        return store.quotes.list_quotes()
+    root = base_dir or QUOTE_DIR
+    if not root.exists():
+        return []
+    rows: list[dict] = []
+    for path in root.glob("*/meta.json"):
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(meta, dict) and meta.get("quote_id"):
+            rows.append(meta)
+    rows.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
+    return rows

@@ -68,7 +68,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="中汽零部件 P1 API",
-    version="0.8.1",
+    version="0.8.2",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -1631,6 +1631,22 @@ async def generate_quote(
             sales_verification = quote_service.verify_sales_quote(sales_out, result)
             stored_files["销售报价表-生成.xlsx"] = Path(sales_out).read_bytes()
             files["sales_quote"] = f"{ROOT_PATH}/api/v1/quotes/{quote_id}/sales.xlsx"
+        meta.update(
+            {
+                "summary": result.summary(),
+                "all_priced": bool(result.all_priced),
+                "has_sales_quote": bool(sales_verification),
+                "verification_ok": bool(sales_verification and sales_verification.get("ok")),
+                "sales_skipped_reason": sales_skipped_reason,
+                "crm": {
+                    "mode": reconciliation.get("mode", "off"),
+                    "reconciled": bool(reconciliation.get("reconciled")),
+                    "matched": int(reconciliation.get("matched", 0) or 0),
+                    "missing": len(reconciliation.get("missing") or []),
+                    "price_mismatch": len(reconciliation.get("price_mismatch") or []),
+                },
+            }
+        )
         quote_store.create(meta, stored_files, base_dir=QUOTE_DIR)
         _audit_event(
             request, user, "quote_generated", quote_id=quote_id,
@@ -1695,6 +1711,33 @@ def download_crm(quote_id: str, request: Request) -> Response:
 @app.get("/api/v1/quotes/{quote_id}/sales.xlsx")
 def download_sales_quote(quote_id: str, request: Request) -> Response:
     return _quote_download(quote_id, "销售报价表-生成.xlsx", request, "销售报价表-生成.xlsx")
+
+
+@app.get("/api/v1/quotes")
+def list_quote_history(
+    request: Request, limit: int = 20, offset: int = 0, q: str = ""
+) -> dict:
+    user = _require_permission(request, "quote:download")
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    query = (q or "").strip().lower()
+    rows = [
+        row
+        for row in quote_store.list_quotes(base_dir=QUOTE_DIR)
+        if auth.can_access_project(user, row.get("project", ""), row.get("created_by", ""))
+    ]
+    if query:
+        rows = [
+            row
+            for row in rows
+            if query in f"{row.get('source_name', '')} {row.get('project', '')}".lower()
+        ]
+    return {
+        "quotes": rows[offset:offset + limit],
+        "total": len(rows),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 # ---------------------------------------------------------------------------
