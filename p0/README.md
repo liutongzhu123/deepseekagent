@@ -75,6 +75,14 @@ P1 工作台 UAT 增量（0.7.3，P1-4）：
 - **样例缺口**——人工金标准、20–30 份报告、部分定价规则仍需客户确认；
 - 运行方式与结果见 [`docs/p1-uat/README.md`](../docs/p1-uat/README.md)。
 
+P1 CRM 只读适配增量（0.7.3，P1-5）：
+
+- **Excel/CSV 适配**——`P0_CRM_MODE=excel|csv` 读取本地 CRM 导出（项目/价格/资质/排期/任务单/样品），无标准 sheet 名时按价格清单回退；
+- **报价对账**——报价生成追加 `crm_reconciliation`（matched/missing/price_mismatch/price_available）；默认降级不阻断，`P0_CRM_REQUIRED=1` 可强制 409；
+- **只读端点**——`/api/v1/crm/status|projects|prices|qualifications|schedules|task-orders|samples`，`crm:read`（admin/reviewer/sales），viewer 403；
+- **API 预留**——`P0_CRM_MODE=api` 明确提示“尚未接入”，不静默伪造数据；
+- **本地样例**——CRM 批量导入模板 73 行价格与报价 73/73 对账；不相关 DVP 0/5 正常降级；运行手册见 [`docs/p1-crm-adapter/README.md`](../docs/p1-crm-adapter/README.md)。
+
 ## 运行
 
 ```bash
@@ -306,6 +314,8 @@ backups/                         本地数据快照（0600，已在 .gitignore �
 后台任务用 `P0_TASKS_ENABLED`、`P0_TASKS_CONCURRENCY`、`P0_TASKS_PARSE_ASYNC`、
 `P0_TASKS_PUBLISH_ASYNC`、`P0_TASKS_ASYNC_MIN_MB`、`P0_TASKS_LEASE_SECONDS` 调整，
 见 `docs/p1-async-tasks/README.md`；
+CRM 只读适配用 `P0_CRM_MODE`、`P0_CRM_PATH`、`P0_CRM_REQUIRED`（`api` 模式另有
+`P0_CRM_API_BASE_URL`/`P0_CRM_API_KEY` 预留），见 `docs/p1-crm-adapter/README.md`；
 `P0_CONFIG_PATH` 指定规则配置文件（默认 `data/config/rules.json`；文件不存在时使用默认规则）；
 `P0_AUDIT_RETENTION_DAYS`（默认 180）、`P0_SESSION_TTL`（默认 8 小时）控制审计保留与会话时长；
 `P0_OIDC_ISSUER` / `P0_OIDC_CLIENT_ID` 仅作为 SSO 预留配置，当前登录仍走本地账号；

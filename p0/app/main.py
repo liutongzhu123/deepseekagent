@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from . import admin_config
 from . import auth
 from . import quote as quote_service
-from . import quote_store, store, task_worker
+from . import crm, quote_store, store, task_worker
 from . import report_writer, standard_parse, standard_qa, standard_store, weknora
 from .store import tasks
 from .docx_parser import parse_docx
@@ -1137,6 +1137,9 @@ async def generate_quote(
         result = quote_service.parse_quote_bytes(
             data, filename, rule_config=quote_cfg
         )
+        reconciliation = crm.reconcile_quote(result)
+        if os.getenv("P0_CRM_REQUIRED", "0").lower() in {"1", "true", "yes"} and not reconciliation.get("reconciled"):
+            raise HTTPException(status_code=409, detail=f"CRM 对账未通过：{reconciliation}")
 
         quote_id = "q_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
         directory = QUOTE_DIR / quote_id
@@ -1193,6 +1196,7 @@ async def generate_quote(
         _audit_event(
             request, user, "quote_generated", quote_id=quote_id,
             project=project, lines=result.summary().get("lines", 0),
+            crm_reconciled=bool(reconciliation.get("reconciled")),
         )
         return {
             "quote_id": quote_id,
@@ -1204,6 +1208,7 @@ async def generate_quote(
             "crm_file": str(crm_path),
             "sales_quote_verification": sales_verification,
             "sales_quote_skipped_reason": sales_skipped_reason,
+            "crm_reconciliation": reconciliation,
         }
     except HTTPException:
         raise
@@ -1251,6 +1256,69 @@ def download_crm(quote_id: str, request: Request) -> Response:
 @app.get("/api/v1/quotes/{quote_id}/sales.xlsx")
 def download_sales_quote(quote_id: str, request: Request) -> Response:
     return _quote_download(quote_id, "销售报价表-生成.xlsx", request, "销售报价表-生成.xlsx")
+
+
+# ---------------------------------------------------------------------------
+# P1-5 CRM read-only adapter (Excel/CSV bridge; API seam reserved)
+# ---------------------------------------------------------------------------
+def _crm_snapshot():
+    try:
+        return crm.provider().snapshot()
+    except crm.CrmUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/crm/status")
+def crm_status(request: Request) -> dict:
+    _require_permission(request, "crm:read")
+    return crm.status()
+
+
+@app.get("/api/v1/crm/projects")
+def crm_projects(request: Request) -> dict:
+    _require_permission(request, "crm:read")
+    snapshot = _crm_snapshot()
+    return {"projects": crm.read_projects(snapshot), "counts": snapshot.counts()}
+
+
+@app.get("/api/v1/crm/prices")
+def crm_prices(request: Request, project: str = "", q: str = "", limit: int = 200) -> dict:
+    _require_permission(request, "crm:read")
+    snapshot = _crm_snapshot()
+    rows = crm.read_prices(snapshot, project=project, query=q)
+    return {"prices": rows[: max(1, min(int(limit), 1000))], "total": len(rows), "counts": snapshot.counts()}
+
+
+@app.get("/api/v1/crm/qualifications")
+def crm_qualifications(request: Request) -> dict:
+    _require_permission(request, "crm:read")
+    snapshot = _crm_snapshot()
+    return {"qualifications": crm.read_qualifications(snapshot), "counts": snapshot.counts()}
+
+
+@app.get("/api/v1/crm/schedules")
+def crm_schedules(request: Request) -> dict:
+    _require_permission(request, "crm:read")
+    snapshot = _crm_snapshot()
+    return {"schedules": crm.read_schedules(snapshot), "counts": snapshot.counts()}
+
+
+@app.get("/api/v1/crm/task-orders/{order_no}")
+def crm_task_order(order_no: str, request: Request) -> dict:
+    _require_permission(request, "crm:read")
+    item = crm.lookup_task_order(_crm_snapshot(), order_no)
+    if item is None:
+        raise HTTPException(status_code=404, detail="task order not found")
+    return item
+
+
+@app.get("/api/v1/crm/samples/{sample_no}")
+def crm_sample(sample_no: str, request: Request) -> dict:
+    _require_permission(request, "crm:read")
+    item = crm.lookup_sample(_crm_snapshot(), sample_no)
+    if item is None:
+        raise HTTPException(status_code=404, detail="sample not found")
+    return item
 
 
 # ---------------------------------------------------------------------------
