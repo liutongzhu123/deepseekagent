@@ -137,6 +137,11 @@ P1 知识问答反馈与引用跳转增量（0.8.3）：
 - **任务清理**——`scripts/prune_tasks.py --days 30 [--status ...] [--apply]` 只删除超期的已完成任务，`--apply` 写 `tasks_pruned` 审计；
 - 细节与限制见 [`docs/p1-ops-retention/README.md`](../docs/p1-ops-retention/README.md)。
 
+验收检查（0.8.3 收尾）：
+
+- **只读验收**——`scripts/acceptance_check.py` 登录后检查版本/身份/标准/报告/报价/审计/反馈/退出，输出 PASS/FAIL 与 Markdown 报告；
+- **Gate 2 清单**——P1 交付矩阵、自动化/人工验收项、已知阻塞见 [`docs/p1-acceptance/README.md`](../docs/p1-acceptance/README.md)。
+
 ## 运行
 
 ```bash
