@@ -36,6 +36,7 @@ class Cell:
 @dataclass
 class ReportData:
     file_name: str
+    source_format: str = "docx"
     cover_number: str = ""
     header_numbers: list[str] = field(default_factory=list)
     sample_name: str = ""
@@ -434,6 +435,7 @@ def parse_docx(path: str | Path) -> ReportData:
 
     return ReportData(
         file_name=path.name,
+        source_format="docx",
         cover_number=cover_number,
         header_numbers=body_numbers,
         sample_name=summary.get("样品名称", ""),
