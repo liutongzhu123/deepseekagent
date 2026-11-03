@@ -21,6 +21,14 @@ P0_DATA_DIR=/opt/cq-ai-p0/data
 P0_ADMIN_USER=admin
 P0_ADMIN_PASSWORD=<首次启动的管理员密码；至少 10 位且字母/数字/符号至少两类>
 P0_SESSION_SECRET=<随机 48+ 字节>
+# P1 SSO（OIDC，可选；未配置时只保留账号密码登录）
+# P0_OIDC_ISSUER=https://login.example.com
+# P0_OIDC_CLIENT_ID=<client id>
+# P0_OIDC_CLIENT_SECRET=<secret；public client 留空>
+# P0_OIDC_REDIRECT_URI=https://<DOMAIN>/p0/api/v1/auth/oidc/callback
+# P0_OIDC_SCOPES=openid profile email
+# P0_OIDC_TOKEN_AUTH=post
+# P0_OIDC_ENABLED=1
 P0_WEKNORA_BASE_URL=http://127.0.0.1:8081
 P0_WEKNORA_API_KEY=<WeKnora tenant API key>
 P0_WEKNORA_KB_ID=<P0 业务专用知识库 ID>

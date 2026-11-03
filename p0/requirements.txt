@@ -20,3 +20,5 @@ opencv-python==5.0.0.93
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
 minio==7.2.12
+# P1 SSO: RS256 ID token signature verification
+cryptography==50.0.2

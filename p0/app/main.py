@@ -34,7 +34,7 @@ from . import admin_config
 from . import auth
 from . import quote as quote_service
 from . import crm, monitoring, quote_store, store, task_worker
-from . import feedback_store, report_store, report_writer, standard_parse, standard_qa, standard_store, weknora
+from . import feedback_store, oidc, report_store, report_writer, standard_parse, standard_qa, standard_store, weknora
 from . import xlsx_writer
 from .store import tasks
 from .docx_parser import parse_docx
@@ -49,7 +49,10 @@ ROOT_PATH = os.getenv("P0_ROOT_PATH", "").rstrip("/")
 COOKIE_SECURE = os.getenv(
     "P0_COOKIE_SECURE", "1" if os.getenv("P0_ENV") == "production" else "0"
 ) not in {"0", "false", "off"}
-PUBLIC_PATHS = {"/health", "/metrics", "/login", "/favicon.ico", "/api/v1/auth/providers"}
+PUBLIC_PATHS = {
+    "/health", "/metrics", "/login", "/favicon.ico", "/api/v1/auth/providers",
+    "/api/v1/auth/oidc/start", "/api/v1/auth/oidc/callback",
+}
 PUBLIC_PREFIXES = ("/static/login",)
 AUTH_DISABLED = os.getenv("P0_AUTH_DISABLED", "0").lower() in {"1", "true", "yes"}
 
@@ -70,7 +73,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="中汽零部件 P1 API",
-    version="0.8.3",
+    version="0.8.4",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -268,7 +271,109 @@ def login_page(request: Request):
 
 @app.get("/api/v1/auth/providers")
 def auth_providers() -> dict:
-    return auth.provider_status()
+    data = auth.provider_status()
+    if data["oidc"].get("enabled"):
+        data["oidc"]["start_url"] = f"{ROOT_PATH}/api/v1/auth/oidc/start"
+    return data
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        auth.COOKIE_NAME,
+        token,
+        max_age=auth.SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=COOKIE_SECURE,
+        path=ROOT_PATH or "/",
+    )
+
+
+def _sso_failure(reason: str, detail: str = "") -> RedirectResponse:
+    auth.audit(
+        {
+            "user": "",
+            "role": "",
+            "event": "sso_login_failed",
+            "method": "GET",
+            "path": "/api/v1/auth/oidc/callback",
+            "status": 400,
+            "reason": reason,
+            "detail": detail[:200],
+        }
+    )
+    target = (ROOT_PATH or "") + "/login?sso_error=" + url_quote(reason)
+    response = RedirectResponse(target, status_code=303)
+    response.delete_cookie(oidc.STATE_COOKIE, path=ROOT_PATH or "/")
+    return response
+
+
+@app.get("/api/v1/auth/oidc/start")
+def oidc_start(request: Request, next: str = "/") -> Response:
+    config = oidc.config(oidc.redirect_uri(request))
+    if not config or not oidc.enabled():
+        raise HTTPException(status_code=404, detail="SSO 未配置")
+    try:
+        document = oidc.discovery(config)
+    except oidc.OidcError as exc:
+        raise HTTPException(status_code=502, detail=f"SSO 发现失败：{exc}") from exc
+    state = oidc.new_state(next)
+    response = RedirectResponse(oidc.authorize_url(config, document, state), status_code=303)
+    response.set_cookie(
+        oidc.STATE_COOKIE,
+        oidc.sign_state(state),
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=COOKIE_SECURE,
+        path=ROOT_PATH or "/",
+    )
+    return response
+
+
+@app.get("/api/v1/auth/oidc/callback")
+def oidc_callback(request: Request, code: str = "", state: str = "") -> Response:
+    config = oidc.config(oidc.redirect_uri(request))
+    if not config or not oidc.enabled():
+        return _sso_failure("not_configured")
+    payload = oidc.read_state(request.cookies.get(oidc.STATE_COOKIE, ""))
+    if not payload or not secrets.compare_digest(str(payload.get("s", "")), state or ""):
+        return _sso_failure("state")
+    if not code:
+        return _sso_failure("code")
+    try:
+        document = oidc.discovery(config)
+        tokens = oidc.exchange_code(config, document, code, payload["v"])
+        claims = oidc.validate_id_token(config, document, tokens["id_token"], payload["n"])
+        extra = {}
+        if not oidc.identity_values(claims):
+            extra = oidc.userinfo(config, document, tokens.get("access_token", ""))
+    except oidc.OidcError as exc:
+        return _sso_failure("token", str(exc))
+    user = None
+    for value in oidc.identity_values(claims, extra):
+        user = auth.find_user_by_identity(value)
+        if user:
+            break
+    if not user or not user.get("active", True):
+        return _sso_failure("account")
+    token = auth.create_session(user)
+    target = (ROOT_PATH or "") + oidc.safe_next(payload.get("next"))
+    response = RedirectResponse(target, status_code=303)
+    _set_session_cookie(response, token)
+    response.delete_cookie(oidc.STATE_COOKIE, path=ROOT_PATH or "/")
+    auth.audit(
+        {
+            "user": user["username"],
+            "role": user.get("role", ""),
+            "event": "sso_login_success",
+            "method": "GET",
+            "path": "/api/v1/auth/oidc/callback",
+            "status": 200,
+            "ip": _client_ip(request),
+        }
+    )
+    return response
 
 
 @app.post("/api/v1/auth/login")
@@ -297,15 +402,7 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = auth.create_session(user)
     response = JSONResponse({"user": user})
-    response.set_cookie(
-        auth.COOKIE_NAME,
-        token,
-        max_age=auth.SESSION_TTL_SECONDS,
-        httponly=True,
-        samesite="lax",
-        secure=COOKIE_SECURE,
-        path=ROOT_PATH or "/",
-    )
+    _set_session_cookie(response, token)
     auth.audit({"user": username, "role": user["role"], "method": "POST",
                 "path": "/api/v1/auth/login", "status": 200, "ip": ip,
                 "event": "login_success"})

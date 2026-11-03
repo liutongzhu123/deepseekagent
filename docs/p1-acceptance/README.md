@@ -1,18 +1,18 @@
 # P1 验收与 Gate 2 交付清单
 
-> 基线：`main` @ `f51a3c5`（0.8.3 + 发布工具），本目录随 PR #28（保留治理与验收检查）
-> 交付。用于回答三个问题：**P1 现在能验收到哪一步、还缺什么、下一步需要谁拍板**。
+> 基线：`main` @ PR #28 合并后（0.8.3 + 发布/保留/验收检查；SSO 在 0.8.4 接入）。
+> 本文回答三个问题：**P1 现在能验收到哪一步、还缺什么、下一步需要谁拍板**。
 > 不替代客户签署的验收单，也不把“接口 200”当成“业务已验证”。
 
 ## 1. 当前状态
 
 | 项 | 状态 | 依据 |
 | --- | --- | --- |
-| 应用版本 | 0.8.3（main，PR #23–#27 已合并；本 PR 为收尾） | `/health` / `app/main.py` |
+| 应用版本 | 0.8.4（SSO 增量；main 已含 PR #23–#28） | `/health` / `app/main.py` |
 | 生产环境 | 仍可能低于 main；本工单无服务器权限，未执行割接 | 本工单历次报告 |
-| 自动化测试 | 带临时 PostgreSQL `146 passed, 2 skipped` | `pytest -q`（本 PR CI） |
+| 自动化测试 | 带临时 PostgreSQL `166 passed, 2 skipped` | `pytest -q` |
 | 发布包/检查 | `release_kit.py` build/verify/check 可用 | `docs/p1-release/README.md` |
-| 账号/权限 | 四角色 + 项目隔离 + 审计；SSO 仅配置预留 | `docs/p1-s1-identity` |
+| 账号/权限 | 四角色 + 项目隔离 + 审计；OIDC 登录已实现（默认关闭，真实 IdP 待接） | `docs/p1-s1-identity`、`docs/p1-sso` |
 | 数据层 | PostgreSQL + 对象存储 + 迁移/回滚脚本（本地演练） | `docs/p1-data-layer` |
 | 异步任务 | OCR/解析/发布队列、重试/取消/恢复 | `docs/p1-async-tasks` |
 | 业务集成 | CRM Excel/CSV 只读 + 对账；真实 API 未接 | `docs/p1-crm-adapter` |
@@ -43,7 +43,8 @@
 | 报价历史与重新下载 | 0.8.2 / #25 | `docs/p1-quote-history` |
 | 问答反馈、引用跳转 | 0.8.3 / #26 | `docs/p1-qa-feedback` |
 | 版本化发布包与割接/回滚手册 | #27 | `docs/p1-release` |
-| 审计导出流式化、任务清理、验收检查 | 本 PR (#28) | `docs/p1-ops-retention`、本目录 |
+| 审计导出流式化、任务清理、验收检查 | #28 | `docs/p1-ops-retention`、本目录 |
+| 企业 SSO（OIDC）登录 | 0.8.4 / 本 PR | `docs/p1-sso` |
 
 ## 3. 自动化验收
 
@@ -78,7 +79,7 @@ P0_TEST_DATABASE_URL=postgresql+psycopg://postgres@127.0.0.1:55432/p0_test pytes
 | WeKnora 生产知识库未体检/清理 | 重复或失败记录可能影响问答 | 知识库管理员 |
 | 5 份标准金标准、20–30 份报告、2–3 个报价案例未齐 | 解析/审核/报价只能做结构验收 | 客户/业务专家 |
 | CRM/任务单/样品真实 API 未接 | 报价只能到草稿+Excel 对账 | 客户接口与字段契约 |
-| SSO 实际登录未接 | 仍用本地账号 | 客户 IdP/账号方案 |
+| SSO 已实现但未接真实 IdP | 登录页入口可用，生产登录仍用本地账号 | 客户 IdP/账号方案（注册回调地址并验收） |
 | 模型网关/多模型路由未做 | 当前问答走 WeKnora、无直连 LLM；做之前需定接入范围 | 项目负责人（是否本期需要） |
 | 报价审批前确认未做 | 销售报价下载前无审批流 | 业务负责人（是否本期需要） |
 
