@@ -45,6 +45,8 @@ const EVENT_LABELS = {
   standard_parsed: '解析标准',
   standard_reviewed: '复核标准',
   standard_published: '发布标准',
+  standard_unpublished: '下架标准',
+  standard_rolled_back: '回滚标准修订',
   standard_exported: '导出标准',
   standard_project_assigned: '标准项目授权',
   standard_asked: '知识问答',
@@ -70,6 +72,8 @@ const EVENT_OPTIONS = [
   ['records_validated', '记录校验'],
   ['standard_reviewed', '复核标准'],
   ['standard_published', '发布标准'],
+  ['standard_unpublished', '下架标准'],
+  ['standard_rolled_back', '回滚标准修订'],
   ['standard_exported', '导出标准'],
   ['standard_asked', '知识问答'],
   ['quote_generated', '生成报价'],
@@ -84,6 +88,7 @@ const state = {
   users: [],
   standards: [],
   current: null,
+  versions: [],
   selectedIndex: -1,
   reports: [],
   reportsTotal: 0,
@@ -216,6 +221,7 @@ function applyRoleUi() {
     $('stdRoleNotice').innerHTML = `${ic('eye')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，可查看与导出标准；解析、复核和发布需要复核人或管理员权限。</span>`;
   }
   $('publishBtn').classList.toggle('hidden', !canPublish);
+  $('unpublishBtn').classList.toggle('hidden', !canPublish);
   $('saveBtn').classList.toggle('hidden', !canReview);
   ['editName', 'editReq', 'editMethod'].forEach((id) => { $(id).disabled = !canReview; });
   $('quoteUploadCard').classList.toggle('hidden', !canQuote);
@@ -726,8 +732,19 @@ async function loadStandards(preferredId) {
 async function loadStandard(id, keepClause) {
   if (!id) return;
   $('publishTaskBox').classList.add('hidden');
-  const data = await jsonFetch(`api/v1/standards/${encodeURIComponent(id)}`);
+  const [data, versions] = await Promise.all([
+    jsonFetch(`api/v1/standards/${encodeURIComponent(id)}`),
+    jsonFetch(`api/v1/standards/${encodeURIComponent(id)}/versions`).catch(() => ({ versions: [] })),
+  ]);
   state.current = data;
+  state.versions = versions.versions || [];
+  const listed = state.standards.find((standard) => standard.id === data.id);
+  if (listed) {
+    listed.published = Boolean(data.published);
+    listed.revision = data.revision ?? 0;
+    listed.items = (data.summary || {}).items ?? listed.items;
+    listed.pages = (data.meta || {}).pages ?? listed.pages;
+  }
   state.selectedIndex = keepClause ? (data.items || []).findIndex((item) => item.clause === keepClause) : -1;
   renderStdDetail();
   renderStdList();
@@ -855,6 +872,33 @@ function selectItem(index) {
   renderReviewHistory(item.clause);
   if (window.innerWidth < 1024) $('editorFields').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
+function renderStdVersions() {
+  const strip = $('stdVersionStrip');
+  const list = $('stdVersionList');
+  const versions = state.versions || [];
+  if (!versions.length) {
+    strip.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+  strip.classList.remove('hidden');
+  list.innerHTML = versions.map((version) => {
+    const current = Boolean(version.current);
+    const canRollback = !current && version.rollbackable && can('standard:review');
+    const tail = current
+      ? '<span class="pill success">当前</span>'
+      : canRollback
+        ? `<button type="button" class="link-btn" data-rollback="${escapeHtml(version.version)}">回滚</button>`
+        : '<span class="muted">无快照</span>';
+    return `<span class="version-chip${current ? ' current' : ''}">
+      <b>r${escapeHtml(version.version)}</b>
+      <span>${escapeHtml(formatTime(version.created_at))}</span>
+      <span>${escapeHtml(version.reviewer || '—')}</span>
+      <span class="muted">${escapeHtml(version.items ?? 0)} 项</span>
+      ${tail}
+    </span>`;
+  }).join('');
+}
 function renderStdDetail() {
   const current = state.current;
   if (!current) return;
@@ -905,7 +949,14 @@ function renderStdDetail() {
   }).join('') || '<tr><td colspan="6" class="muted">没有抽取到项目</td></tr>';
   $('exportBtn').disabled = !items.length;
   $('publishBtn').disabled = !items.length || Boolean(current.published);
-  $('publishBtn').innerHTML = current.published ? `${ic('check')}已发布` : `${ic('upload')}发布到知识库`;
+  $('publishBtn').innerHTML = current.published
+    ? `${ic('check')}已发布`
+    : `${ic('upload')}${current.unpublished_at ? '重新发布' : '发布到知识库'}`;
+  $('unpublishBtn').classList.toggle(
+    'hidden',
+    !current.published || !can('standard:publish')
+  );
+  renderStdVersions();
   if (state.selectedIndex >= 0 && items[state.selectedIndex]) {
     selectItem(state.selectedIndex);
   } else {
@@ -1768,6 +1819,56 @@ function bindEvents() {
       showError(error);
     } finally {
       busy($('publishBtn'), false);
+    }
+  });
+  $('unpublishBtn').addEventListener('click', async () => {
+    if (!state.current || !state.current.published) return;
+    const standard = state.current;
+    const confirmed = await confirmDialog({
+      title: '从知识库下架？',
+      message: `将删除「${standard.meta.name || standard.meta.standard_no}」在知识库中的片段，问答不再引用；本地解析与复核记录保留，可重新发布。`,
+      confirmText: '下架',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    busy($('unpublishBtn'), true, '下架中…');
+    try {
+      const data = await jsonFetch(`api/v1/standards/${encodeURIComponent(standard.id)}/unpublish`, { method: 'POST' });
+      const removed = (data.removed_knowledge_ids || []).length;
+      toast(`已下架${removed ? `，删除 ${removed} 条知识库片段` : ''}`);
+      const clause = state.selectedIndex >= 0 ? standard.items[state.selectedIndex].clause : '';
+      await loadStandard(standard.id, clause);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy($('unpublishBtn'), false);
+    }
+  });
+  $('stdVersionList').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-rollback]');
+    if (!button || !state.current) return;
+    const standard = state.current;
+    const version = Number(button.dataset.rollback);
+    const confirmed = await confirmDialog({
+      title: `回滚到修订 r${version}？`,
+      message: '会以该修订的条款生成一个新的当前修订，复核历史保留；如已发布会先下架，回滚后需重新发布。',
+      confirmText: '回滚',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    busy(button, true, '回滚中…');
+    try {
+      const updated = await jsonFetch(`api/v1/standards/${encodeURIComponent(standard.id)}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version }),
+      });
+      toast(`已回滚到 r${version}，当前修订 r${updated.revision}${updated.published === false ? '；标准已下架，请复核后重新发布' : ''}`);
+      await loadStandard(standard.id);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy(button, false);
     }
   });
 

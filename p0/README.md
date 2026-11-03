@@ -101,6 +101,14 @@ P1 报告审核台增量（0.8.0，审核历史 + 批量 + 项目隔离）：
 - **存储**——文件模式写 `data/reports/<id>/`；`P0_STORE=postgres` 写 `report_audits` 表并把原文放对象存储；不迁移旧数据；
 - 运行手册与限制见 [`docs/p1-report-workbench/README.md`](../docs/p1-report-workbench/README.md)。
 
+P1 标准发布治理增量（0.8.1，下架 + 修订记录 + 回滚）：
+
+- **下架**——已发布标准可从知识库移除（WeKnora 知识条目 + 本地 kb），问答不再引用；复核记录保留，可重新发布；
+- **修订快照**——文件模式每次创建/复核写 `versions/<revision>.json`；PostgreSQL 复用 `standard_versions`；
+- **回滚**——把旧修订的条款恢复为新修订，保留复核历史；回滚前自动下架，回滚后需复核并重新发布；
+- **前端**——标准详情显示「下架」与「修订记录」条（修订号/时间/复核人/条款数，旧修订可回滚）；
+- 运行手册与限制见 [`docs/p1-standard-governance/README.md`](../docs/p1-standard-governance/README.md)。
+
 ## 运行
 
 ```bash

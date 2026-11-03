@@ -303,3 +303,46 @@ def test_report_audit_roundtrip(pg):
     assert rows[0]["summary"]["fail"] == 1
     assert (pg / "reports" / report_id / "source.docx").read_bytes() == b"fake-docx"
 
+
+
+def test_standard_versions_unpublish_and_rollback(pg):
+    record = standard_store.create(
+        {
+            "meta": {"standard_no": "Q/TEST 002-2026", "name": "治理演示标准", "pages": 1},
+            "summary": {"items": 1},
+            "items": [
+                {
+                    "clause": "5.1",
+                    "name": "外观",
+                    "requirement": "外观无缺陷",
+                    "method_clause": "6.1",
+                    "method": "目测",
+                    "page": 1,
+                    "method_page": 1,
+                }
+            ],
+            "warnings": [],
+        },
+        b"%PDF-1.4 demo",
+        "demo.pdf",
+        project="P1",
+        created_by="alice",
+    )
+    standard_store.update_review(
+        record["id"],
+        [{"clause": "5.1", "requirement": "回滚前的新要求", "method": "目测"}],
+        reviewer="bob",
+    )
+    versions = standard_store.list_versions(record["id"])
+    assert [item["version"] for item in versions] == [1, 0]
+    assert versions[0]["current"] is True
+
+    rolled = standard_store.rollback(record["id"], 0, "bob")
+    assert rolled["revision"] == 2
+    assert rolled["items"][0]["requirement"] == "外观无缺陷"
+
+    standard_store.publish(record["id"])
+    assert standard_store.load(record["id"])["published"] is True
+    standard_store.unpublish(record["id"], "bob")
+    assert standard_store.load(record["id"])["published"] is False
+    assert standard_store.published_kbs(record["id"]) == []

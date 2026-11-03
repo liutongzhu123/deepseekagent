@@ -42,6 +42,24 @@ def _write_json(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
+def _versions_dir(standard_id: str) -> Path:
+    return _dir(standard_id) / "versions"
+
+
+def _write_snapshot(record: dict) -> None:
+    """Keep a per-revision snapshot so a review can be rolled back later.
+
+    PostgreSQL already stores every revision in ``standard_versions``; this is
+    the file-mode equivalent and is a no-op there.
+    """
+    if store.config.postgres_enabled():
+        return
+    directory = _versions_dir(record["id"])
+    directory.mkdir(parents=True, exist_ok=True)
+    _write_json(directory / f"{int(record.get('revision', 0))}.json", record)
+
+
+
 def create(
     parsed: dict,
     source_bytes: bytes,
@@ -76,6 +94,7 @@ def create(
         directory.mkdir(parents=True)
         (directory / "source.pdf").write_bytes(source_bytes)
         _write_json(directory / "result.json", record)
+        _write_snapshot(record)
         return record
 
 
@@ -175,6 +194,7 @@ def update_review(standard_id: str, updates: list[dict], reviewer: str = "") -> 
                 store.standards.save(record)
             else:
                 _write_json(_dir(standard_id) / "result.json", record)
+                _write_snapshot(record)
         return record
 
 
@@ -310,6 +330,136 @@ def published_kbs(standard_id: str | None = None) -> list[dict]:
             except (OSError, json.JSONDecodeError):
                 continue
     return out
+
+
+def _version_summary(version: int, record: dict, current: int, rollbackable: bool) -> dict:
+    return {
+        "version": version,
+        "created_at": record.get("updated_at") or record.get("created_at", ""),
+        "reviewer": str(record.get("reviewer", "")),
+        "items": len(record.get("items") or []),
+        "current": version == current,
+        "rollbackable": rollbackable,
+    }
+
+
+def list_versions(standard_id: str) -> list[dict]:
+    """Revision list for the review panel; the current revision is always shown."""
+    if store.config.postgres_enabled():
+        return store.standards.list_versions(standard_id)
+    record = load(standard_id)
+    current = int(record.get("revision", 0) or 0)
+    versions: list[dict] = []
+    directory = _versions_dir(standard_id)
+    if directory.exists():
+        for path in directory.glob("*.json"):
+            try:
+                snapshot = json.loads(path.read_text(encoding="utf-8"))
+                version = int(snapshot.get("revision", path.stem))
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            versions.append(
+                _version_summary(version, snapshot, current, version != current)
+            )
+    if not any(item["version"] == current for item in versions):
+        versions.append(_version_summary(current, record, current, False))
+    versions.sort(key=lambda item: item["version"], reverse=True)
+    return versions
+
+
+def version_record(standard_id: str, version: int) -> dict:
+    if store.config.postgres_enabled():
+        return store.standards.version_record(standard_id, version)
+    path = _versions_dir(standard_id) / f"{int(version)}.json"
+    if not path.exists():
+        raise KeyError(f"{standard_id}@{version}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def unpublish(standard_id: str, actor: str = "") -> dict:
+    """Remove the standard from the knowledge base but keep the review trail.
+
+    The local ``kb`` document is deleted so Q&A can no longer cite it.  With
+    WeKnora configured the knowledge entry is deleted first; if that fails and
+    WeKnora is required, nothing local is changed and the caller sees an error.
+    """
+    with _LOCK:
+        record = load(standard_id)
+        knowledge_ids = [
+            (kb.get("weknora") or {}).get("knowledge_id")
+            for kb in published_kbs(standard_id)
+            if (kb.get("weknora") or {}).get("knowledge_id")
+        ]
+        removed: list[str] = []
+        weknora_error = ""
+        if knowledge_ids:
+            if not weknora.configured():
+                if weknora.required():
+                    raise weknora.WeKnoraError(
+                        "WeKnora 是唯一知识底座，但服务端尚未配置 WeKnora 连接"
+                    )
+                weknora_error = "WeKnora 未配置，远端知识条目未删除"
+            else:
+                for knowledge_id in knowledge_ids:
+                    try:
+                        weknora.delete_knowledge(knowledge_id)
+                    except weknora.WeKnoraError as exc:
+                        if weknora.required():
+                            raise
+                        weknora_error = str(exc)
+                    else:
+                        removed.append(knowledge_id)
+        record["published"] = False
+        record["published_at"] = ""
+        record["unpublished_at"] = _now()
+        record["unpublished_by"] = actor
+        record["updated_at"] = record["unpublished_at"]
+        record.pop("weknora", None)
+        if store.config.postgres_enabled():
+            store.standards.clear_kb(standard_id)
+            store.standards.save(record)
+        else:
+            (_dir(standard_id) / "kb.json").unlink(missing_ok=True)
+            _write_json(_dir(standard_id) / "result.json", record)
+        return {
+            "published": False,
+            "removed_knowledge_ids": removed,
+            "weknora_error": weknora_error,
+        }
+
+
+def rollback(standard_id: str, version: int, reviewer: str = "") -> dict:
+    """Restore the items of an earlier revision as a new revision."""
+    with _LOCK:
+        current = load(standard_id)
+        target = version_record(standard_id, version)
+        if int(version) >= int(current.get("revision", 0) or 0):
+            raise ValueError("只能回滚到更早的修订")
+        record = json.loads(json.dumps(current))
+        record["items"] = json.loads(json.dumps(target.get("items") or []))
+        record["revision"] = int(current.get("revision", 0) or 0) + 1
+        record["updated_at"] = _now()
+        record["reviewer"] = reviewer or str(current.get("reviewer", ""))
+        record.setdefault("review_history", []).append(
+            {
+                "at": record["updated_at"],
+                "reviewer": record["reviewer"],
+                "action": "rollback",
+                "from_version": int(version),
+                "to_revision": record["revision"],
+            }
+        )
+        record["summary"] = _recompute_summary(record)
+        record["published"] = False
+        record["published_at"] = ""
+        record.pop("weknora", None)
+        if store.config.postgres_enabled():
+            store.standards.save(record)
+        else:
+            _write_json(_dir(standard_id) / "result.json", record)
+            _write_snapshot(record)
+        return record
+
 
 
 def export_path(standard_id: str) -> Path:
