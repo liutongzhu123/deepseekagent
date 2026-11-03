@@ -23,6 +23,7 @@ const PERMISSIONS = {
   'standard:review': ['admin', 'reviewer'],
   'standard:publish': ['admin', 'reviewer'],
   'quote:generate': ['admin', 'sales'],
+  'feedback:read': ['admin'],
   'user:manage': ['admin'],
   'audit:read': ['admin'],
   'config:read': ['admin'],
@@ -46,6 +47,7 @@ const EVENT_LABELS = {
   standard_reviewed: '复核标准',
   standard_published: '发布标准',
   standard_unpublished: '下架标准',
+  standard_ask_feedback: '问答反馈',
   standard_rolled_back: '回滚标准修订',
   standard_exported: '导出标准',
   standard_project_assigned: '标准项目授权',
@@ -73,6 +75,7 @@ const EVENT_OPTIONS = [
   ['standard_reviewed', '复核标准'],
   ['standard_published', '发布标准'],
   ['standard_unpublished', '下架标准'],
+  ['standard_ask_feedback', '问答反馈'],
   ['standard_rolled_back', '回滚标准修订'],
   ['standard_exported', '导出标准'],
   ['standard_asked', '知识问答'],
@@ -95,6 +98,8 @@ const state = {
   currentReport: null,
   quotes: [],
   quotesTotal: 0,
+  lastAnswer: null,
+  feedback: null,
   adminView: 'users',
   userRoleFilter: null,
   projectUser: null,
@@ -361,6 +366,7 @@ function switchTab(name) {
   if (name === 'knowledge') {
     loadKbHealth();
     loadKbStandards();
+    if (can('feedback:read')) loadFeedbackStats().catch(() => {});
   }
   if (name === 'report' || name === 'standards' || name === 'quote') loadModuleConfig();
   if (name === 'report' && can('report:read')) loadReports().catch(showError);
@@ -1094,6 +1100,34 @@ async function loadKbHealth() {
     $('kbHealth').innerHTML = `<div class="banner danger">${ic('alert')}<span>无法读取系统状态：${escapeHtml(error.message)}</span></div>`;
   }
 }
+function renderFeedbackStats() {
+  const card = $('feedbackStatsCard');
+  const data = state.feedback;
+  if (!data) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  const totals = data.totals || {};
+  $('feedbackTotal').textContent = totals.total ?? 0;
+  $('feedbackStats').innerHTML = [
+    `<div class="feedback-stat"><span>有帮助</span><b>${escapeHtml(totals.helpful ?? 0)}</b></div>`,
+    `<div class="feedback-stat"><span>没帮助</span><b>${escapeHtml(totals.not_helpful ?? 0)}</b></div>`,
+  ].join('');
+  const reasons = data.reasons || [];
+  $('feedbackReasons').innerHTML = reasons.length
+    ? reasons.map((item) => `<span class="pill warn">${escapeHtml(item.reason)} ${escapeHtml(item.count)}</span>`).join('')
+    : '<span class="muted">还没有「没帮助」原因记录</span>';
+}
+async function loadFeedbackStats() {
+  if (!can('feedback:read')) return;
+  try {
+    state.feedback = await jsonFetch('api/v1/kb/feedback?limit=5');
+  } catch (error) {
+    state.feedback = null;
+  }
+  renderFeedbackStats();
+}
 async function loadKbStandards() {
   try {
     const data = await jsonFetch('api/v1/standards');
@@ -1115,14 +1149,20 @@ function renderAnswer(data) {
   $('answerBox').classList.toggle('refusal', !found);
   $('answerBox').textContent = data.answer || '未找到可核实依据。';
   $('copyAnswerBtn').classList.toggle('hidden', !found);
-  $('citations').innerHTML = (data.citations || []).map((citation, index) => `
-    <div class="citation">
+  $('citations').innerHTML = (data.citations || []).map((citation, index) => {
+    const jumpable = Boolean(citation.standard_id);
+    const tag = jumpable ? 'button' : 'div';
+    const attrs = jumpable
+      ? ` type="button" data-citation-standard="${escapeHtml(citation.standard_id)}" data-citation-clause="${escapeHtml(citation.clause || '')}"`
+      : '';
+    return `<${tag} class="citation"${attrs}>
       <span class="citation-no">${index + 1}</span>
       <div class="citation-body">
-        <div class="citation-head"><b>${escapeHtml(citation.standard_no || citation.standard_name || '')}</b><span>条款 ${escapeHtml(citation.clause || '—')}</span><span>第 ${escapeHtml(citation.page ?? '—')} 页</span><span class="pill neutral">${escapeHtml(citation.kind_label || '知识片段')}</span></div>
+        <div class="citation-head"><b>${escapeHtml(citation.standard_no || citation.standard_name || '')}</b><span>条款 ${escapeHtml(citation.clause || '—')}</span><span>第 ${escapeHtml(citation.page ?? '—')} 页</span><span class="pill neutral">${escapeHtml(citation.kind_label || '知识片段')}</span>${jumpable ? '<span class="citation-jump">查看条款 →</span>' : ''}</div>
         <div class="citation-quote">${escapeHtml(citation.quote || '')}</div>
       </div>
-    </div>`).join('');
+    </${tag}>`;
+  }).join('');
   const retrieval = data.retrieval || {};
   const mode = retrieval.mode || '';
   const modeLabel = mode === 'weknora' ? 'WeKnora 混合检索' : mode.indexOf('keyword') === 0 ? '本地关键词检索' : mode === 'local-fallback' ? '本地向量回退' : (mode || '检索');
@@ -1131,6 +1171,17 @@ function renderAnswer(data) {
   if (retrieval.kb_id) meta.push(`<span class="pill neutral">知识库 ${escapeHtml(retrieval.kb_id)}</span>`);
   if (retrieval.fallback_reason) meta.push(`<span class="pill warn">本地回退</span>`);
   $('retrievalMeta').innerHTML = meta.join('');
+  const feedback = $('answerFeedback');
+  if (!found) {
+    feedback.classList.add('hidden');
+    feedback.innerHTML = '';
+  } else {
+    feedback.classList.remove('hidden');
+    feedback.innerHTML = `<span>这个回答有帮助吗？</span>
+      <button type="button" class="btn btn-secondary btn-sm" data-answer-feedback="helpful">${ic('check')}有帮助</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-answer-feedback="not_helpful">${ic('alert')}没帮助</button>
+      <span class="muted" id="answerFeedbackStatus"></span>`;
+  }
 }
 async function askQuestion() {
   const question = $('question').value.trim();
@@ -1151,6 +1202,12 @@ async function askQuestion() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question, standard_id: $('kbStdSelect').value || null }),
     });
+    state.lastAnswer = {
+      question,
+      answer: data.answer || '',
+      retrieval_mode: (data.retrieval || {}).mode || '',
+      citations: data.citations || [],
+    };
     renderAnswer(data);
   } catch (error) {
     $('answerBox').classList.remove('loading');
@@ -1967,6 +2024,46 @@ function bindEvents() {
     } catch (error) {
       toast('复制失败，请手动选择文本', 'error');
     }
+  });
+  $('answerFeedback').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-answer-feedback]');
+    if (!button || !state.lastAnswer) return;
+    const rating = button.dataset.answerFeedback;
+    const answer = state.lastAnswer;
+    $$('#answerFeedback [data-answer-feedback]').forEach((item) => { item.disabled = true; });
+    try {
+      await jsonFetch('api/v1/standards/ask/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: answer.question,
+          answer: answer.answer,
+          rating,
+          standard_id: (answer.citations[0] || {}).standard_id || '',
+          clause: (answer.citations[0] || {}).clause || '',
+          retrieval_mode: answer.retrieval_mode,
+          citations: answer.citations.map((citation) => ({
+            standard_id: citation.standard_id || '',
+            clause: citation.clause || '',
+          })),
+        }),
+      });
+      $('answerFeedbackStatus').textContent = rating === 'helpful' ? '已记录：有帮助' : '已记录：没帮助';
+      toast('感谢反馈');
+      if (can('feedback:read')) loadFeedbackStats().catch(() => {});
+    } catch (error) {
+      $$('#answerFeedback [data-answer-feedback]').forEach((item) => { item.disabled = false; });
+      showError(error);
+    }
+  });
+  $('citations').addEventListener('click', (event) => {
+    const citation = event.target.closest('[data-citation-standard]');
+    if (!citation) return;
+    const standardId = citation.dataset.citationStandard;
+    switchTab('standards');
+    loadStandards(standardId)
+      .then(() => loadStandard(standardId, citation.dataset.citationClause || ''))
+      .catch(showError);
   });
 
   $('adminTabs').addEventListener('click', (event) => {

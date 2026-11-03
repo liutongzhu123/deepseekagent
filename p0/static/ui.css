@@ -781,6 +781,15 @@ pre {
 .citation-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
 .citation-head b { color: var(--ink); font-size: 12px; }
 .citation-quote { margin-top: 5px; color: var(--ink-2); font-size: 12px; line-height: 1.6; }
+button.citation { width: 100%; text-align: left; cursor: pointer; font: inherit; }
+button.citation:hover { border-color: #b2ddff; background: var(--brand-soft); }
+.citation-jump { margin-left: auto; color: var(--brand); font-size: 11px; }
+.answer-feedback { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 12px; }
+.feedback-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.feedback-stat { flex: 1; min-width: 78px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.feedback-stat span { display: block; color: var(--muted); font-size: 11px; }
+.feedback-stat b { display: block; margin-top: 2px; font-size: 18px; }
+.feedback-reasons { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
 .retrieval-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .kb-health { font-size: 12px; line-height: 1.65; }
 .kb-health .health-title { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; color: var(--ink-2); font-weight: 600; }

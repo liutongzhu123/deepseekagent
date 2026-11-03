@@ -63,7 +63,7 @@
       </div>
     </nav>
     <div class="side-foot">
-      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.8.2</span></div>
+      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.8.3</span></div>
       <div class="user-card" id="userBox">
         <span class="avatar">··</span>
         <div class="user-meta"><b>正在确认登录状态…</b><span>请稍候</span></div>
@@ -79,7 +79,7 @@
       </div>
       <div class="topbar-right">
         <span class="env-pill"><span class="dot"></span>内部受控环境</span>
-        <span class="version-pill">P1 · v0.8.2</span>
+        <span class="version-pill">P1 · v0.8.3</span>
       </div>
     </header>
     <main class="content">
@@ -412,12 +412,18 @@
               <div id="answerBox" class="answer hidden"></div>
               <div id="citations" class="citation-list"></div>
               <div id="retrievalMeta" class="retrieval-meta"></div>
+              <div id="answerFeedback" class="answer-feedback hidden"></div>
             </section>
           </div>
           <aside class="stack">
             <section class="card card-pad">
               <div class="card-head"><div><h2>知识底座</h2><p>发布与检索状态</p></div></div>
               <div id="kbHealth" class="kb-health"><div class="muted">正在检查知识底座连接…</div></div>
+            </section>
+            <section class="card card-pad hidden" id="feedbackStatsCard">
+              <div class="card-head"><div><h2>问答反馈</h2><p>最近答案的有帮助 / 没帮助汇总。</p></div><span class="pill info" id="feedbackTotal">0</span></div>
+              <div id="feedbackStats" class="feedback-stats"></div>
+              <div id="feedbackReasons" class="feedback-reasons"></div>
             </section>
             <section class="card card-pad">
               <div class="tip-icon"><svg class="icon" aria-hidden="true"><use href="#i-book"/></svg></div>

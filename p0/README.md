@@ -116,6 +116,14 @@ P1 报价历史增量（0.8.2，回看 + 重新下载）：
 - **前端**——报价页新增「报价历史」卡（文件、时间、生成人、项目、行数、状态、下载）；
 - 运行手册与限制见 [`docs/p1-quote-history/README.md`](../docs/p1-quote-history/README.md)。
 
+P1 知识问答反馈与引用跳转增量（0.8.3）：
+
+- **反馈**——答案下方「有帮助 / 没帮助」，写 `P0_FEEDBACK_DIR/qa.jsonl` 或 PostgreSQL `qa_feedback`；含问题/答案摘录/引用/检索方式；
+- **管理员汇总**——`GET /api/v1/kb/feedback`（`feedback:read`）返回有帮助/没帮助计数、没帮助原因与最近记录；
+- **引用跳转**——引用卡可点击，跳到标准解析并选中对应条款；
+- **前端**——答案反馈条、知识问答右栏「问答反馈」卡（管理员）；
+- 运行手册与限制见 [`docs/p1-qa-feedback/README.md`](../docs/p1-qa-feedback/README.md)。
+
 ## 运行
 
 ```bash
