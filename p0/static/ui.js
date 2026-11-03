@@ -369,7 +369,10 @@ function switchTab(name) {
     if (can('feedback:read')) loadFeedbackStats().catch(() => {});
   }
   if (name === 'report' || name === 'standards' || name === 'quote') loadModuleConfig();
-  if (name === 'report' && can('report:read')) loadReports().catch(showError);
+  if (name === 'report' && can('report:read')) {
+    loadReportInputs().catch(() => {});
+    loadReports().catch(showError);
+  }
   if (name === 'quote' && can('quote:generate')) loadQuotes().catch(showError);
   if (name === 'admin') {
     loadAdmin().catch(showError);
@@ -668,6 +671,39 @@ function renderReportHistory() {
       <span class="report-history-pills">${batch}${reportPills(report.summary || {})}</span>
     </button>`;
   }).join('');
+}
+async function loadReportInputs() {
+  const pill = $('reportInputsPill');
+  const body = $('reportInputsBody');
+  try {
+    const data = await jsonFetch('api/v1/reports/inputs/status');
+    if (!data.configured) {
+      pill.className = 'pill neutral';
+      pill.textContent = '未配置';
+      body.innerHTML = '<p class="muted">未设置 P0_REPORT_INPUTS_DIR；当前只运行报告内 R01–R11，X01–X04 跨文档检查停用。</p>';
+      return;
+    }
+    const counts = data.counts || {};
+    const errors = (data.errors || []).length;
+    const warnings = (data.warnings || []).length;
+    pill.className = `pill ${errors ? 'danger' : warnings ? 'warn' : 'success'}`;
+    pill.textContent = errors ? `有错误 ${errors}` : warnings ? `有警告 ${warnings}` : '数据就绪';
+    const facts = [
+      ['任务单', `${counts.task_orders ?? 0} 行`],
+      ['原始记录', `${counts.original_records ?? 0} 行`],
+      ['样品', `${counts.samples ?? 0} 行`],
+      ['设备台账', `${counts.equipment ?? 0} 行`],
+    ].map(([label, value]) => configFact(label, value)).join('');
+    const notes = [];
+    if (errors) notes.push(`错误：${errors} 项（${(data.errors || [])[0] || ''}）`);
+    if (warnings) notes.push(`警告：${warnings} 项（${(data.warnings || [])[0] || ''}）`);
+    if (!errors && !warnings) notes.push('四类数据已加载，审核将追加 X01–X04。');
+    body.innerHTML = `<div class="config-facts">${facts}</div><p class="muted mt-8">${notes.map((item) => escapeHtml(item)).join(' ')}</p>`;
+  } catch (error) {
+    pill.className = 'pill danger';
+    pill.textContent = '检查失败';
+    body.innerHTML = `<p class="muted">${escapeHtml(error.message || '无法读取数据状态')}</p>`;
+  }
 }
 async function loadReports() {
   const data = await jsonFetch('api/v1/reports?limit=20');

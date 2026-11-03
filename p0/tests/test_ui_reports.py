@@ -35,3 +35,12 @@ def test_report_workbench_styles_are_present():
     css = read("ui.css")
     for selector in (".report-actions", ".report-history", ".report-history-item", ".batch-table"):
         assert selector in css
+
+
+def test_report_panel_has_data_readiness_card():
+    html = read("index.html")
+    for element in ("reportInputsCard", "reportInputsPill", "reportInputsBody"):
+        assert f'id="{element}"' in html
+    js = read("ui.js")
+    for marker in ("function loadReportInputs", "api/v1/reports/inputs/status", "reportInputsPill", "reportInputsBody"):
+        assert marker in js

@@ -96,6 +96,13 @@
         <div id="reportRoleNotice" class="banner warn hidden"></div>
         <div class="report-layout">
           <div class="stack">
+            <section class="card card-pad" id="reportInputsCard">
+              <div class="card-head">
+                <div><h2>本地数据</h2><p>任务单、原始记录、样品、设备台账就绪后，审核会追加 X01–X04 跨文档检查；未配置时只运行报告内 R01–R11。</p></div>
+                <span class="pill neutral" id="reportInputsPill">检查中</span>
+              </div>
+              <div class="config-facts" id="reportInputsBody"><div class="muted">正在检查本地 inbox…</div></div>
+            </section>
             <section class="card card-pad" id="reportUploadCard">
               <div class="card-head">
                 <div><h2>上传检验报告</h2><p>支持 .docx，可多选；单个文件不超过 20 MB，批量合计不超过 100 MB。</p></div>
