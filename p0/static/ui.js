@@ -18,6 +18,7 @@ const SEVERITY_TONES = { high: 'danger', medium: 'warn', low: 'neutral', info: '
 const QUOTE_HEADER_NAMES = { item: '试验项目', price: '单价', quantity: '数量', unit: '单位', sample: '样品名称' };
 const PERMISSIONS = {
   'report:audit': ['admin', 'reviewer'],
+  'report:read': ['admin', 'reviewer'],
   'standard:parse': ['admin', 'reviewer'],
   'standard:review': ['admin', 'reviewer'],
   'standard:publish': ['admin', 'reviewer'],
@@ -84,6 +85,9 @@ const state = {
   standards: [],
   current: null,
   selectedIndex: -1,
+  reports: [],
+  reportsTotal: 0,
+  currentReport: null,
   adminView: 'users',
   userRoleFilter: null,
   projectUser: null,
@@ -197,9 +201,11 @@ function applyRoleUi() {
   const canReview = can('standard:review');
   const canPublish = can('standard:publish');
   const canQuote = can('quote:generate');
+  const canReadReports = can('report:read');
   $('reportUploadCard').classList.toggle('hidden', !canAudit);
   $('reportResultCard').classList.toggle('hidden', !canAudit);
   $('recordsCard').classList.toggle('hidden', !canAudit);
+  $('reportHistoryCard').classList.toggle('hidden', !canReadReports);
   $('reportRoleNotice').classList.toggle('hidden', canAudit);
   if (!canAudit) {
     $('reportRoleNotice').innerHTML = `${ic('lock')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，只能查看规则说明；报告审核需要复核人或管理员权限。</span>`;
@@ -258,15 +264,22 @@ function setupDropzone(dzId, inputId, meta) {
   const title = dz.querySelector('.dz-title');
   const sub = dz.querySelector('.dz-sub');
   const update = () => {
-    const file = input.files && input.files[0];
-    dz.classList.toggle('has-file', Boolean(file));
-    if (file) {
-      title.textContent = file.name;
-      sub.textContent = `${fileSize(file.size)} · 已选择，点击可重新选择`;
-    } else {
+    const selected = Array.from(input.files || []);
+    dz.classList.toggle('has-file', selected.length > 0);
+    if (!selected.length) {
       title.textContent = meta.title;
       sub.textContent = meta.sub;
+      return;
     }
+    if (selected.length === 1) {
+      title.textContent = selected[0].name;
+      sub.textContent = `${fileSize(selected[0].size)} · 已选择，点击可重新选择`;
+      return;
+    }
+    const total = selected.reduce((sum, file) => sum + file.size, 0);
+    const names = selected.slice(0, 3).map((file) => file.name).join('、');
+    title.textContent = `${selected.length} 份文件`;
+    sub.textContent = `共 ${fileSize(total)} · ${names}${selected.length > 3 ? ' 等' : ''}，点击可重新选择`;
   };
   dz.addEventListener('click', (event) => {
     if (event.target === input) return;
@@ -281,10 +294,11 @@ function setupDropzone(dzId, inputId, meta) {
   dz.addEventListener('drop', (event) => {
     event.preventDefault();
     dz.classList.remove('dragover');
-    const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
-    if (!file) return;
+    const dropped = Array.from((event.dataTransfer && event.dataTransfer.files) || []);
+    if (!dropped.length) return;
+    if (!input.multiple) dropped.splice(1);
     const transfer = new DataTransfer();
-    transfer.items.add(file);
+    dropped.forEach((file) => transfer.items.add(file));
     input.files = transfer.files;
     input.dispatchEvent(new Event('change'));
   });
@@ -340,6 +354,7 @@ function switchTab(name) {
     loadKbStandards();
   }
   if (name === 'report' || name === 'standards' || name === 'quote') loadModuleConfig();
+  if (name === 'report' && can('report:read')) loadReports().catch(showError);
   if (name === 'admin') {
     loadAdmin().catch(showError);
     switchAdminView(state.adminView || 'users');
@@ -535,12 +550,23 @@ function renderReport(data) {
       <div class="finding-list">${items.map(renderFinding).join('')}</div>
     </div>`;
   }).join('');
+  const meta = [
+    data.project ? `项目 ${data.project}` : '',
+    data.created_at ? `审核于 ${formatTime(data.created_at)}` : '',
+  ].filter(Boolean).map(escapeHtml).join(' · ');
+  const actions = data.report_id ? `<div class="report-actions">
+      <span class="report-actions-meta">记录 ${escapeHtml(data.report_id)}${data.created_by ? ` · ${escapeHtml(data.created_by)}` : ''}</span>
+      <span class="grow"></span>
+      <button type="button" class="btn btn-secondary btn-sm" data-report-export="${escapeHtml(data.report_id)}">${ic('download')}导出 Excel</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-report-source="${escapeHtml(data.report_id)}">${ic('file')}下载原文</button>
+    </div>` : '';
   $('reportResult').innerHTML = `
     <div class="summary-band">
       <span class="file-badge">${ic('file')}</span>
-      <div><span class="file-name">${escapeHtml(data.file || '已上传报告')}</span><span class="file-sub">${escapeHtml(TEMPLATE_NAMES[data.template] || data.template || '报告模板')} · 共 ${escapeHtml(summary.total ?? findings.length)} 条规则</span></div>
+      <div><span class="file-name">${escapeHtml(data.file || '已上传报告')}</span><span class="file-sub">${escapeHtml(TEMPLATE_NAMES[data.template] || data.template || '报告模板')} · 共 ${escapeHtml(summary.total ?? findings.length)} 条规则${meta ? ` · ${meta}` : ''}</span></div>
       <div class="summary-pills">${pills}</div>
     </div>
+    ${actions}
     <div class="kpi-grid">
       ${kpi(summary.pass ?? 0, '通过', 'success', 'check')}
       ${kpi(summary.warn ?? 0, '提示', 'warn', 'alert')}
@@ -551,6 +577,102 @@ function renderReport(data) {
     <details class="raw-details"><summary>查看原始 JSON</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
   $('reportEmpty').classList.add('hidden');
   $('reportResult').classList.remove('hidden');
+}
+function reportPills(summary) {
+  return [
+    summary.fail ? `<span class="pill danger">失败 ${summary.fail}</span>` : '',
+    summary.warn ? `<span class="pill warn">提示 ${summary.warn}</span>` : '',
+    summary.pass ? `<span class="pill success">通过 ${summary.pass}</span>` : '',
+  ].filter(Boolean).join('');
+}
+function renderReportBatch(data) {
+  const items = data.items || [];
+  const summary = data.summary || {};
+  const rows = items.map((item) => {
+    if (!item.ok) {
+      return `<tr>
+        <td><span class="cell-main">${escapeHtml(item.file)}</span></td>
+        <td><span class="pill danger">失败</span></td>
+        <td colspan="2"><span class="muted">${escapeHtml(item.error || '审核失败')}</span></td>
+      </tr>`;
+    }
+    return `<tr>
+      <td><span class="cell-main">${escapeHtml(item.file)}</span><span class="cell-sub">${escapeHtml(item.report_id)}</span></td>
+      <td><span class="pill success">已审核</span></td>
+      <td><span class="report-history-pills">${reportPills(item.summary || {})}</span></td>
+      <td><button type="button" class="btn btn-secondary btn-sm" data-report-id="${escapeHtml(item.report_id)}">查看</button></td>
+    </tr>`;
+  }).join('');
+  const pills = [
+    summary.fail ? `<span class="pill danger">失败 ${summary.fail}</span>` : '',
+    summary.warn ? `<span class="pill warn">提示 ${summary.warn}</span>` : '',
+    summary.stored ? `<span class="pill success">成功 ${summary.stored}</span>` : '',
+  ].filter(Boolean).join('');
+  $('reportResult').innerHTML = `
+    <div class="summary-band">
+      <span class="file-badge">${ic('layers')}</span>
+      <div><span class="file-name">批量审核 · ${escapeHtml(summary.total ?? items.length)} 份报告</span><span class="file-sub">批次 ${escapeHtml(data.batch_id)} · ${data.project ? `项目 ${escapeHtml(data.project)} · ` : ''}${escapeHtml(summary.failed ?? 0)} 份失败</span></div>
+      <div class="summary-pills">${pills}</div>
+    </div>
+    <div class="report-actions">
+      <span class="report-actions-meta">批次 ${escapeHtml(data.batch_id)}</span>
+      <span class="grow"></span>
+      <button type="button" class="btn btn-secondary btn-sm" data-batch-export="${escapeHtml(data.batch_id)}">${ic('download')}导出汇总 Excel</button>
+    </div>
+    <div class="kpi-grid">
+      ${kpi(summary.total ?? items.length, '提交文件', 'info', 'file')}
+      ${kpi(summary.stored ?? 0, '已留存', 'success', 'check')}
+      ${kpi(summary.failed ?? 0, '失败', 'danger', 'x')}
+      ${kpi(summary.fail ?? 0, '失败规则', 'warn', 'alert')}
+    </div>
+    <div class="table-wrap batch-table">
+      <table>
+        <thead><tr><th>文件</th><th>结果</th><th>问题汇总</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  $('reportEmpty').classList.add('hidden');
+  $('reportResult').classList.remove('hidden');
+}
+function renderReportHistory() {
+  const box = $('reportHistory');
+  $('reportHistoryCount').textContent = state.reportsTotal;
+  if (!state.reports.length) {
+    box.innerHTML = `<div class="empty compact"><b>还没有审核记录</b><p>完成一次报告审核后，结果会出现在这里。</p></div>`;
+    return;
+  }
+  box.innerHTML = state.reports.map((report) => {
+    const active = state.currentReport && state.currentReport.id === report.id ? ' active' : '';
+    const batch = report.batch_id ? '<span class="pill neutral">批量</span>' : '';
+    return `<button type="button" class="report-history-item${active}" data-report-id="${escapeHtml(report.id)}">
+      <span class="report-history-main">
+        <span class="cell-main">${escapeHtml(report.file_name || '未命名报告')}</span>
+        <span class="cell-sub">${escapeHtml(formatTime(report.created_at))} · ${escapeHtml(report.created_by || '—')}${report.project ? ` · 项目 ${escapeHtml(report.project)}` : ''}</span>
+      </span>
+      <span class="report-history-pills">${batch}${reportPills(report.summary || {})}</span>
+    </button>`;
+  }).join('');
+}
+async function loadReports() {
+  const data = await jsonFetch('api/v1/reports?limit=20');
+  state.reports = data.reports || [];
+  state.reportsTotal = data.total ?? state.reports.length;
+  renderReportHistory();
+}
+async function loadReport(reportId) {
+  const record = await jsonFetch(`api/v1/reports/${encodeURIComponent(reportId)}`);
+  state.currentReport = record;
+  const result = record.result || {};
+  renderReport({
+    ...result,
+    file: result.file || record.file_name,
+    report_id: record.id,
+    project: record.project,
+    created_at: record.created_at,
+    created_by: record.created_by,
+  });
+  $('reportStatus').textContent = `已打开历史记录 ${record.id}`;
+  renderReportHistory();
 }
 function renderRecords(data) {
   const findings = data.findings || [];
@@ -1448,23 +1570,70 @@ function bindEvents() {
   setupDropzone('templateDrop', 'quoteTemplate', { title: '选择销售报价表模板', sub: '不提供时只生成 CRM 草稿' });
 
   $('auditBtn').addEventListener('click', async () => {
-    const file = $('reportFile').files[0];
-    if (!file) { toast('请先选择一份 .docx 报告', 'info'); return; }
-    busy($('auditBtn'), true, '审核中…');
+    const files = Array.from($('reportFile').files || []);
+    if (!files.length) { toast('请先选择 .docx 报告', 'info'); return; }
+    const project = ($('reportProject').value || '').trim();
+    busy($('auditBtn'), true, files.length > 1 ? '批量审核中…' : '审核中…');
     $('reportStatus').textContent = '';
     try {
-      const form = new FormData();
-      form.append('file', file);
-      const data = await jsonFetch('api/v1/reports/audit', { method: 'POST', body: form });
-      renderReport(data);
-      $('reportStatus').textContent = `完成：${data.summary.fail} 项需要处理`;
-      toast('报告审核完成');
+      if (files.length > 1) {
+        const form = new FormData();
+        files.forEach((file) => form.append('files', file));
+        if (project) form.append('project', project);
+        const data = await jsonFetch('api/v1/reports/batch', { method: 'POST', body: form });
+        state.currentReport = null;
+        renderReportBatch(data);
+        $('reportStatus').textContent = `完成：${data.summary.stored} 份成功，${data.summary.failed} 份失败`;
+        toast(`批量审核完成：${data.summary.stored} 份`);
+      } else {
+        const form = new FormData();
+        form.append('file', files[0]);
+        if (project) form.append('project', project);
+        const data = await jsonFetch('api/v1/reports/audit', { method: 'POST', body: form });
+        state.currentReport = {
+          id: data.report_id,
+          project: data.project,
+          created_at: data.created_at,
+          created_by: (state.me && state.me.username) || '',
+          file_name: data.file,
+          summary: data.summary,
+        };
+        renderReport(data);
+        $('reportStatus').textContent = `完成：${data.summary.fail} 项需要处理`;
+        toast('报告审核完成');
+      }
+      if (can('report:read')) await loadReports();
     } catch (error) {
       $('reportStatus').textContent = '审核失败';
       showError(error);
     } finally {
       busy($('auditBtn'), false);
     }
+  });
+  $('reportHistory').addEventListener('click', (event) => {
+    const item = event.target.closest('[data-report-id]');
+    if (!item) return;
+    loadReport(item.dataset.reportId).catch(showError);
+  });
+  $('reportResult').addEventListener('click', (event) => {
+    const exportButton = event.target.closest('[data-report-export]');
+    if (exportButton) {
+      window.location = `api/v1/reports/${encodeURIComponent(exportButton.dataset.reportExport)}/export.xlsx`;
+      return;
+    }
+    const sourceButton = event.target.closest('[data-report-source]');
+    if (sourceButton) {
+      window.location = `api/v1/reports/${encodeURIComponent(sourceButton.dataset.reportSource)}/source.docx`;
+      return;
+    }
+    const batchButton = event.target.closest('[data-batch-export]');
+    if (batchButton) {
+      window.location = `api/v1/reports/batch/${encodeURIComponent(batchButton.dataset.batchExport)}/export.xlsx`;
+      return;
+    }
+    const item = event.target.closest('[data-report-id]');
+    if (!item) return;
+    loadReport(item.dataset.reportId).catch(showError);
   });
   $('recordsSample').addEventListener('click', () => {
     $('records').value = SAMPLE_RECORDS;

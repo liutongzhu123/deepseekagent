@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import auth, main, quote_store, standard_store
+from app import auth, main, quote_store, report_store, standard_store
 from app.store import config, db, migration
 
 PG_URL = os.getenv("P0_TEST_DATABASE_URL", "")
@@ -66,6 +66,7 @@ def pg(monkeypatch, tmp_path):
     monkeypatch.setattr(auth, "AUDIT_DIR", data / "audit")
     monkeypatch.setattr(standard_store, "DATA_DIR", data / "standards")
     monkeypatch.setattr(quote_store, "QUOTE_DIR", data / "quotes")
+    monkeypatch.setattr(report_store, "REPORT_DIR", data / "reports")
     monkeypatch.setattr(main, "QUOTE_DIR", data / "quotes")
     config.reset_caches()
     db.reset_schema()
@@ -263,3 +264,42 @@ def test_migration_reconciliation_and_file_rollback(pg):
         else:
             os.environ["P0_STORE"] = old_store
         config.reset_caches()
+
+
+def test_report_audit_roundtrip(pg):
+    report_id = "rp_20261103010101_abcdef"
+    batch_id = "rb_20261103010101_abcdef"
+    result = {
+        "file": "demo.docx",
+        "template": "BYD-odor",
+        "summary": {"total": 2, "pass": 1, "warn": 0, "fail": 1, "skip": 0},
+        "findings": [
+            {"rule_id": "R01", "title": "编号一致性", "status": "pass", "severity": "high", "message": "ok"},
+            {"rule_id": "R02", "title": "均值一致", "status": "fail", "severity": "high", "message": "均值不符"},
+        ],
+    }
+    record = {
+        "id": report_id,
+        "batch_id": batch_id,
+        "project": "P1",
+        "created_by": "alice",
+        "created_at": "2026-11-03T01:01:01+00:00",
+        "file_name": "demo.docx",
+        "file_size": 9,
+        "file_sha256": "0" * 64,
+        "template": "BYD-odor",
+        "summary": dict(result["summary"]),
+    }
+    report_store.create(record, result, b"fake-docx")
+
+    loaded = report_store.load(report_id)
+    assert loaded["result"]["findings"] == result["findings"]
+    assert loaded["project"] == "P1"
+    assert report_store.read_source(report_id) == b"fake-docx"
+
+    rows = report_store.list_reports()
+    assert [row["id"] for row in rows] == [report_id]
+    assert rows[0]["batch_id"] == batch_id
+    assert rows[0]["summary"]["fail"] == 1
+    assert (pg / "reports" / report_id / "source.docx").read_bytes() == b"fake-docx"
+
