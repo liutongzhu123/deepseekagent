@@ -1,0 +1,15 @@
+{
+  "name": "P1-4 UAT example",
+  "standards": [
+    {"path": "/absolute/path/to/standard-text.pdf", "project": "UAT"},
+    {"path": "/absolute/path/to/standard-scan.pdf", "project": "UAT"}
+  ],
+  "reports": [
+    "/absolute/path/to/report-01.docx",
+    "/absolute/path/to/report-02.docx"
+  ],
+  "quotes": [
+    {"path": "/absolute/path/to/dvp.xlsx", "template": "/absolute/path/to/sales-template.xlsx"},
+    {"path": "/absolute/path/to/inquiry.pdf", "template": "/absolute/path/to/sales-template.xlsx"}
+  ]
+}

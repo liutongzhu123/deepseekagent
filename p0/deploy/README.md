@@ -165,6 +165,20 @@ cd /opt/cq-ai-p0
 清理默认只处理 `P0 |` 开头的重复组，保留 `completed`/最新的一条；详见
 `docs/p1-weknora-ops/README.md`。
 
+工作台 UAT（本地/测试环境，不上生产）：
+
+```bash
+cd /opt/cq-ai-p0
+P0_UAT_PASSWORD='<admin password>' \
+  .venv/bin/python scripts/uat_smoke.py \
+    --base-url http://127.0.0.1:8090 \
+    --manifest /path/to/uat-manifest.json \
+    --report /var/backups/cq-ai-p0/uat-report.json \
+    --markdown /var/backups/cq-ai-p0/uat-report.md --strict
+```
+
+清单格式见 `scripts/uat_manifest.example.json`；真实样例与报告留在工单/本地，不提交仓库。
+
 ## nginx
 
 `/etc/nginx/sites-enabled/cq-ai-p0` 中需要：
