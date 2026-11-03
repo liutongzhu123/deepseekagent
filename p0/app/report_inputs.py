@@ -261,6 +261,13 @@ class InputsSnapshot:
             self._indexes[dataset] = index
         return self._indexes[dataset].get(_text(key))
 
+    def find(self, dataset: str, field: str, value: str) -> list[dict[str, str]]:
+        """Return rows whose ``field`` equals ``value`` (empty value matches nothing)."""
+        wanted = _text(value)
+        if not wanted:
+            return []
+        return [row for row in self.datasets.get(dataset, []) if _text(row.get(field, "")) == wanted]
+
     def counts(self) -> dict[str, int]:
         return {name: len(rows) for name, rows in self.datasets.items()}
 

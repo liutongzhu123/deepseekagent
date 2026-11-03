@@ -34,7 +34,7 @@ from . import admin_config
 from . import auth
 from . import quote as quote_service
 from . import crm, monitoring, quote_store, store, task_worker
-from . import feedback_store, oidc, report_store, report_writer, standard_parse, standard_qa, standard_store, weknora
+from . import feedback_store, oidc, report_store, report_writer, report_inputs, standard_parse, standard_qa, standard_store, weknora
 from . import xlsx_writer
 from .store import tasks
 from .docx_parser import parse_docx
@@ -769,6 +769,25 @@ def list_rules(request: Request) -> dict:
     }
 
 
+@app.get("/api/v1/reports/inputs/status")
+def report_inputs_status(request: Request) -> dict:
+    _require_permission(request, "report:read")
+    directory = os.getenv("P0_REPORT_INPUTS_DIR", "").strip()
+    snapshot = _load_report_inputs()
+    if snapshot is None:
+        return {
+            "configured": bool(directory),
+            "source_dir": directory,
+            "counts": {},
+            "datasets": {},
+            "warnings": [],
+            "errors": [] if not directory else ["无法读取 P0_REPORT_INPUTS_DIR，报告审核将只运行报告内规则"],
+        }
+    payload = snapshot.to_dict()
+    payload["configured"] = True
+    return payload
+
+
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _REPORT_ID = re.compile(r"^rp_[0-9]{14}_[0-9a-f]{6}$")
 _REPORT_BATCH_ID = re.compile(r"^rb_[0-9]{14}_[0-9a-f]{6}$")
@@ -788,8 +807,19 @@ async def _read_report_upload(file: UploadFile) -> bytes:
     return data
 
 
+def _load_report_inputs():
+    """Load the optional local inbox; unavailable data must not block audit."""
+    directory = os.getenv("P0_REPORT_INPUTS_DIR", "").strip()
+    if not directory:
+        return None
+    try:
+        return report_inputs.load_inputs(directory)
+    except Exception:  # noqa: BLE001 - audit degrades to report-only rules
+        return None
+
+
 def _audit_report_bytes(
-    data: bytes, filename: str, *, user: dict, project: str, batch_id: str = ""
+    data: bytes, filename: str, *, user: dict, project: str, batch_id: str = "", inputs=None
 ) -> dict:
     config = admin_config.load()
     rules_revision = int(config.get("revision", 0) or 0)
@@ -800,7 +830,9 @@ def _audit_report_bytes(
             tmp_path = tmp.name
         parsed = parse_docx(tmp_path)
         parsed.file_name = filename
-        result = audit_report(parsed, config.get("report") or {})
+        if inputs is None:
+            inputs = _load_report_inputs()
+        result = audit_report(parsed, config.get("report") or {}, inputs=inputs)
     finally:
         if tmp_path:
             Path(tmp_path).unlink(missing_ok=True)
@@ -876,7 +908,7 @@ async def audit_report_markdown(request: Request, file: UploadFile = File(...)) 
             tmp_path = tmp.name
         parsed = parse_docx(tmp_path)
         parsed.file_name = file.filename
-        result = audit_report(parsed, admin_config.report_config())
+        result = audit_report(parsed, admin_config.report_config(), inputs=_load_report_inputs())
         _audit_event(request, user, "report_audited_markdown", file_name=file.filename)
         return PlainTextResponse(
             report_writer.audit_markdown(result, {"file_name": file.filename}),
@@ -963,6 +995,7 @@ async def audit_report_batch(
         raise HTTPException(status_code=400, detail=f"一次最多 {batch_max} 份报告")
     byte_limit = int(os.getenv("P0_REPORT_BATCH_MB", "100")) * 1024 * 1024
     batch_id = _new_report_id("rb_")
+    inputs = _load_report_inputs()
     items: list[dict] = []
     totals = {"pass": 0, "warn": 0, "fail": 0, "skip": 0}
     consumed = 0
@@ -977,7 +1010,7 @@ async def audit_report_batch(
                     detail=f"批次总大小超过 {byte_limit // 1024 // 1024} MB",
                 )
             result = _audit_report_bytes(
-                data, name, user=user, project=project, batch_id=batch_id
+                data, name, user=user, project=project, batch_id=batch_id, inputs=inputs
             )
         except HTTPException as exc:
             items.append(

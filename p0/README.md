@@ -224,7 +224,10 @@ WeKnora 服务器上 Ollama 只在容器网络内时，可设为容器地址（�
 - `POST /api/v1/reports/audit`（multipart `file`，仅 .docx）→ JSON
 - `POST /api/v1/reports/audit.md`（multipart `file`）→ Markdown 审核报告
 - `POST /api/v1/records/validate`（JSON，`{"records":[...]}`）
+- `GET /api/v1/reports/inputs/status`（`report:read`，报告审核本地数据就绪状态）
 - `GET /` 上传/演示页
+
+设置 `P0_REPORT_INPUTS_DIR=/path/to/inbox` 后，审核会在 R01–R11 之后追加 `X01` 报告—任务单、`X02` 报告—样品、`X03` 报告—原始记录三条数据驱动检查；未设置时行为不变。字段契约与目录约定见 [`docs/report-inputs.md`](docs/report-inputs.md)。
 
 规则：R01 页眉编号 / R02 均值 / R03 字段一致 / R04 日期顺序 / R05 设备溯源 /
 R06 符合性判定 / R07 页码 / R08 注意事项 / R09 标记符号 / R10 签名印章 /
