@@ -5,6 +5,7 @@ review workbenches can call them without coupling to parser internals.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -31,7 +32,8 @@ from . import admin_config
 from . import auth
 from . import quote as quote_service
 from . import crm, monitoring, quote_store, store, task_worker
-from . import report_writer, standard_parse, standard_qa, standard_store, weknora
+from . import report_store, report_writer, standard_parse, standard_qa, standard_store, weknora
+from . import xlsx_writer
 from .store import tasks
 from .docx_parser import parse_docx
 from .rules import RecordInput, audit_report, rules_catalog, validate_records
@@ -66,7 +68,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="中汽零部件 P1 API",
-    version="0.7.3",
+    version="0.8.0",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -652,35 +654,96 @@ def list_rules(request: Request) -> dict:
     }
 
 
-@app.post("/api/v1/reports/audit")
-async def audit_report_file(request: Request, file: UploadFile = File(...)) -> dict:
-    user = _require_permission(request, "report:audit")
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_REPORT_ID = re.compile(r"^rp_[0-9]{14}_[0-9a-f]{6}$")
+_REPORT_BATCH_ID = re.compile(r"^rb_[0-9]{14}_[0-9a-f]{6}$")
+_REPORT_STATUS_LABELS = {"pass": "通过", "warn": "提示", "fail": "失败", "skip": "未检查"}
+
+
+def _new_report_id(prefix: str) -> str:
+    return prefix + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3)
+
+
+async def _read_report_upload(file: UploadFile) -> bytes:
     if not file.filename or not file.filename.lower().endswith(".docx"):
         raise HTTPException(status_code=400, detail="only .docx reports are supported in this slice")
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"file exceeds {MAX_UPLOAD_BYTES // 1024 // 1024} MB")
+    return data
+
+
+def _audit_report_bytes(
+    data: bytes, filename: str, *, user: dict, project: str, batch_id: str = ""
+) -> dict:
+    config = admin_config.load()
+    rules_revision = int(config.get("revision", 0) or 0)
     tmp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
         parsed = parse_docx(tmp_path)
-        parsed.file_name = file.filename
-        result = audit_report(parsed, admin_config.report_config())
-        _audit_event(
-            request, user, "report_audited", file_name=file.filename,
-            fail=result.get("summary", {}).get("fail", 0),
-            pass_count=result.get("summary", {}).get("pass", 0),
+        parsed.file_name = filename
+        result = audit_report(parsed, config.get("report") or {})
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+    report_id = _new_report_id("rp_")
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    record = {
+        "id": report_id,
+        "batch_id": batch_id,
+        "project": project,
+        "created_by": user.get("username", ""),
+        "created_at": created_at,
+        "file_name": filename,
+        "file_size": len(data),
+        "file_sha256": hashlib.sha256(data).hexdigest(),
+        "template": result.get("template", ""),
+        "rules_revision": rules_revision,
+        "summary": dict(result.get("summary") or {}),
+    }
+    report_store.create(record, result, data)
+    return {
+        **result,
+        "report_id": report_id,
+        "project": project,
+        "created_at": created_at,
+        "batch_id": batch_id,
+        "rules_revision": rules_revision,
+    }
+
+
+def _report_project(user: dict, project: str) -> str:
+    project = (project or "").strip()
+    if not auth.can_create_in_project(user, project):
+        raise HTTPException(status_code=400, detail="受限账号必须填写有权限的项目标识")
+    return project
+
+
+@app.post("/api/v1/reports/audit")
+async def audit_report_file(
+    request: Request, file: UploadFile = File(...), project: str = Form("")
+) -> dict:
+    user = _require_permission(request, "report:audit")
+    project = _report_project(user, project)
+    data = await _read_report_upload(file)
+    try:
+        result = _audit_report_bytes(
+            data, file.filename or "report.docx", user=user, project=project
         )
-        return result
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 - API boundary
         raise HTTPException(status_code=422, detail=f"failed to parse report: {exc}") from exc
-    finally:
-        if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
+    summary = result.get("summary") or {}
+    _audit_event(
+        request, user, "report_audited", report_id=result["report_id"],
+        file_name=file.filename, project=project,
+        fail=summary.get("fail", 0), pass_count=summary.get("pass", 0),
+    )
+    return result
 
 
 @app.post("/api/v1/reports/audit.md")
@@ -711,6 +774,246 @@ async def audit_report_markdown(request: Request, file: UploadFile = File(...)) 
     finally:
         if tmp_path:
             Path(tmp_path).unlink(missing_ok=True)
+
+
+def _report_export_rows(records: list[dict]) -> tuple[list[list[object]], list[list[object]]]:
+    summary_rows: list[list[object]] = [
+        ["文件", "项目", "审核人", "审核时间", "批次", "通过", "提示", "失败", "未检查"]
+    ]
+    finding_rows: list[list[object]] = [
+        ["文件", "规则", "标题", "状态", "严重级别", "说明", "证据", "建议"]
+    ]
+    for record in records:
+        summary = record.get("summary") or {}
+        summary_rows.append(
+            [
+                record.get("file_name", ""),
+                record.get("project", ""),
+                record.get("created_by", ""),
+                record.get("created_at", ""),
+                record.get("batch_id", "") or "—",
+                summary.get("pass", 0),
+                summary.get("warn", 0),
+                summary.get("fail", 0),
+                summary.get("skip", 0),
+            ]
+        )
+        result = record.get("result") or {}
+        for finding in result.get("findings") or []:
+            status = str(finding.get("status", ""))
+            finding_rows.append(
+                [
+                    record.get("file_name", ""),
+                    finding.get("rule_id", ""),
+                    finding.get("title", ""),
+                    _REPORT_STATUS_LABELS.get(status, status),
+                    finding.get("severity", ""),
+                    finding.get("message", ""),
+                    finding.get("evidence", ""),
+                    finding.get("suggestion", ""),
+                ]
+            )
+    return summary_rows, finding_rows
+
+
+def _report_export_bytes(records: list[dict]) -> bytes:
+    summary_rows, finding_rows = _report_export_rows(records)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "report-review.xlsx"
+        xlsx_writer.write_xlsx(
+            path,
+            [
+                ("审核汇总", summary_rows, [32, 18, 14, 22, 22, 10, 10, 10, 10]),
+                ("问题清单", finding_rows, [28, 10, 24, 10, 10, 56, 56, 56]),
+            ],
+        )
+        return path.read_bytes()
+
+
+def _report_export_name(record: dict) -> str:
+    stem = Path(record.get("file_name") or "report").stem or "report"
+    return f"{stem}-审核结果.xlsx"
+
+
+@app.post("/api/v1/reports/batch")
+async def audit_report_batch(
+    request: Request, files: list[UploadFile] = File(...), project: str = Form("")
+) -> dict:
+    user = _require_permission(request, "report:audit")
+    project = _report_project(user, project)
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少选择一份报告")
+    batch_max = int(os.getenv("P0_REPORT_BATCH_MAX", "20"))
+    if len(files) > batch_max:
+        raise HTTPException(status_code=400, detail=f"一次最多 {batch_max} 份报告")
+    byte_limit = int(os.getenv("P0_REPORT_BATCH_MB", "100")) * 1024 * 1024
+    batch_id = _new_report_id("rb_")
+    items: list[dict] = []
+    totals = {"pass": 0, "warn": 0, "fail": 0, "skip": 0}
+    consumed = 0
+    for file in files:
+        name = file.filename or "report.docx"
+        try:
+            data = await _read_report_upload(file)
+            consumed += len(data)
+            if consumed > byte_limit:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"批次总大小超过 {byte_limit // 1024 // 1024} MB",
+                )
+            result = _audit_report_bytes(
+                data, name, user=user, project=project, batch_id=batch_id
+            )
+        except HTTPException as exc:
+            items.append(
+                {"file": name, "report_id": "", "summary": {}, "ok": False, "error": str(exc.detail)}
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001 - one bad file must not drop the batch
+            items.append(
+                {"file": name, "report_id": "", "summary": {}, "ok": False,
+                 "error": f"failed to parse report: {exc}"}
+            )
+            continue
+        summary = result.get("summary") or {}
+        for key in totals:
+            totals[key] += int(summary.get(key, 0) or 0)
+        items.append(
+            {"file": name, "report_id": result["report_id"], "summary": summary,
+             "ok": True, "error": ""}
+        )
+    stored = sum(1 for item in items if item["ok"])
+    _audit_event(
+        request, user, "report_batch_audited", batch_id=batch_id,
+        files=len(items), stored=stored, project=project,
+    )
+    return {
+        "batch_id": batch_id,
+        "project": project,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "items": items,
+        "summary": {
+            "total": len(items),
+            "stored": stored,
+            "failed": len(items) - stored,
+            **totals,
+        },
+    }
+
+
+@app.get("/api/v1/reports")
+def list_report_history(
+    request: Request, limit: int = 20, offset: int = 0, q: str = "", batch_id: str = ""
+) -> dict:
+    user = _require_permission(request, "report:read")
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    query = (q or "").strip().lower()
+    rows = [
+        row
+        for row in report_store.list_reports()
+        if auth.can_access_project(user, row.get("project", ""), row.get("created_by", ""))
+    ]
+    if query:
+        rows = [
+            row
+            for row in rows
+            if query in f"{row.get('file_name', '')} {row.get('project', '')}".lower()
+        ]
+    if batch_id:
+        rows = [row for row in rows if row.get("batch_id") == batch_id]
+    return {
+        "reports": rows[offset:offset + limit],
+        "total": len(rows),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/api/v1/reports/{report_id}")
+def get_report_record(report_id: str, request: Request) -> dict:
+    user = _require_permission(request, "report:read")
+    if not _REPORT_ID.fullmatch(report_id):
+        raise HTTPException(status_code=404, detail="report not found")
+    try:
+        record = report_store.load(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="report not found") from exc
+    _assert_project_access(user, record)
+    return record
+
+
+@app.get("/api/v1/reports/{report_id}/source.docx")
+def download_report_source(report_id: str, request: Request) -> Response:
+    user = _require_permission(request, "report:read")
+    if not _REPORT_ID.fullmatch(report_id):
+        raise HTTPException(status_code=404, detail="report not found")
+    try:
+        record = report_store.load(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="report not found") from exc
+    _assert_project_access(user, record)
+    try:
+        data = report_store.read_source(report_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="原始报告未留存") from None
+    _audit_event(request, user, "report_source_downloaded", report_id=report_id)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": _attachment_header(record.get("file_name") or "report.docx")
+        },
+    )
+
+
+@app.get("/api/v1/reports/{report_id}/export.xlsx")
+def export_report_record(report_id: str, request: Request) -> Response:
+    user = _require_permission(request, "report:read")
+    if not _REPORT_ID.fullmatch(report_id):
+        raise HTTPException(status_code=404, detail="report not found")
+    try:
+        record = report_store.load(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="report not found") from exc
+    _assert_project_access(user, record)
+    data = _report_export_bytes([record])
+    _audit_event(request, user, "report_exported", report_id=report_id)
+    return Response(
+        content=data,
+        media_type=_XLSX_MEDIA,
+        headers={"Content-Disposition": _attachment_header(_report_export_name(record))},
+    )
+
+
+@app.get("/api/v1/reports/batch/{batch_id}/export.xlsx")
+def export_report_batch(batch_id: str, request: Request) -> Response:
+    user = _require_permission(request, "report:read")
+    if not _REPORT_BATCH_ID.fullmatch(batch_id):
+        raise HTTPException(status_code=404, detail="batch not found")
+    rows = [
+        row
+        for row in report_store.list_reports()
+        if row.get("batch_id") == batch_id
+        and auth.can_access_project(user, row.get("project", ""), row.get("created_by", ""))
+    ]
+    records: list[dict] = []
+    for row in rows:
+        try:
+            records.append(report_store.load(row["id"]))
+        except KeyError:
+            continue
+    if not records:
+        raise HTTPException(status_code=404, detail="batch not found")
+    data = _report_export_bytes(records)
+    _audit_event(request, user, "report_batch_exported", batch_id=batch_id, reports=len(records))
+    return Response(
+        content=data,
+        media_type=_XLSX_MEDIA,
+        headers={
+            "Content-Disposition": _attachment_header(f"报告批量审核-{batch_id}.xlsx")
+        },
+    )
 
 
 @app.post("/api/v1/records/validate")

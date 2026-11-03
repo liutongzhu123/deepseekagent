@@ -502,6 +502,37 @@ td.actions .btn { margin-right: 4px; }
 .summary-band .file-name { display: block; font-size: 13px; font-weight: 600; }
 .summary-band .file-sub { display: block; margin-top: 1px; color: var(--muted); font-size: 11px; }
 .summary-band .summary-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.report-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.report-actions-meta { color: var(--muted); font-size: 11.5px; }
+.report-actions .grow { flex: 1; }
+.report-history { display: flex; flex-direction: column; gap: 6px; }
+.report-history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+}
+.report-history-item:hover { border-color: var(--line); background: var(--surface-2); }
+.report-history-item.active { border-color: #b2ddff; background: var(--brand-soft); }
+.report-history-main { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.report-history-main .cell-main { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-history-main .cell-sub { color: var(--muted); font-size: 11px; }
+.report-history-pills { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.report-history-pills .pill { padding: 2px 6px; font-size: 10.5px; }
+.batch-table { margin-top: 14px; }
+.batch-table td { font-size: 12px; }
 .finding-group { margin-top: 16px; }
 .finding-group:first-of-type { margin-top: 0; }
 .group-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }

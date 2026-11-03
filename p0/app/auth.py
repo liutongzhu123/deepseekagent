@@ -62,6 +62,7 @@ LOCKOUT_SECONDS = 15 * 60
 PERMISSIONS: dict[str, tuple[str, ...]] = {
     "rules:read": ("admin", "reviewer", "sales", "viewer"),
     "report:audit": ("admin", "reviewer"),
+    "report:read": ("admin", "reviewer"),
     "standard:read": ("admin", "reviewer", "sales", "viewer"),
     "standard:parse": ("admin", "reviewer"),
     "standard:review": ("admin", "reviewer"),

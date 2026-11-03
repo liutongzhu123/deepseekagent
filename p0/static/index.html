@@ -63,7 +63,7 @@
       </div>
     </nav>
     <div class="side-foot">
-      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.7.2</span></div>
+      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.8.0</span></div>
       <div class="user-card" id="userBox">
         <span class="avatar">··</span>
         <div class="user-meta"><b>正在确认登录状态…</b><span>请稍候</span></div>
@@ -79,7 +79,7 @@
       </div>
       <div class="topbar-right">
         <span class="env-pill"><span class="dot"></span>内部受控环境</span>
-        <span class="version-pill">P1 · v0.7.3</span>
+        <span class="version-pill">P1 · v0.8.0</span>
       </div>
     </header>
     <main class="content">
@@ -98,19 +98,20 @@
           <div class="stack">
             <section class="card card-pad" id="reportUploadCard">
               <div class="card-head">
-                <div><h2>上传检验报告</h2><p>支持 .docx，单个文件不超过 20 MB。点击开始审核后逐条检查。</p></div>
+                <div><h2>上传检验报告</h2><p>支持 .docx，可多选；单个文件不超过 20 MB，批量合计不超过 100 MB。</p></div>
                 <span class="pill neutral">DOCX</span>
               </div>
               <div class="dropzone" id="reportDrop">
-                <input type="file" id="reportFile" accept=".docx" hidden>
+                <input type="file" id="reportFile" accept=".docx" multiple hidden>
                 <span class="dz-icon"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg></span>
                 <div class="dz-body">
                   <div class="dz-title" id="reportFileTitle">点击选择，或把报告拖到这里</div>
-                  <div class="dz-sub" id="reportFileSub">只看结构、字段与标记，不上传外部服务</div>
+                  <div class="dz-sub" id="reportFileSub">可多选；只看结构、字段与标记，不上传外部服务</div>
                 </div>
                 <span class="dz-action">选择文件</span>
               </div>
-              <div class="row mt-16">
+              <input type="text" id="reportProject" class="mt-10" placeholder="项目标识（受限账号必填，留空=不限定）">
+              <div class="row mt-10">
                 <button class="btn btn-primary" id="auditBtn"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg>开始审核</button>
                 <span class="muted" id="reportStatus"></span>
               </div>
@@ -122,6 +123,13 @@
                 <p>上传报告后，这里会给出通过 / 提示 / 失败的汇总，以及每条规则的证据和修改建议。</p>
               </div>
               <div id="reportResult" class="hidden"></div>
+            </section>
+            <section class="card card-pad" id="reportHistoryCard">
+              <div class="card-head">
+                <div><h2>审核历史</h2><p>审核结果已留存；点击记录回看问题清单，可导出 Excel 或下载原文。</p></div>
+                <span class="pill info" id="reportHistoryCount">0</span>
+              </div>
+              <div id="reportHistory" class="report-history"><div class="muted">正在加载…</div></div>
             </section>
             <details class="card advanced" id="recordsCard">
               <summary>

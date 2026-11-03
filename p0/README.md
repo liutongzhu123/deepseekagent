@@ -92,6 +92,15 @@ P1 运维与安全收口增量（0.7.3，P1-6）：
 - **依赖扫描**——`scripts/dependency_scan.py`；本轮升级 fastapi/starlette/python-multipart/pytest，`pip-audit` 漏洞从 28 清零；
 - **等保差距清单**——见 [`docs/p1-ops-security/README.md`](../docs/p1-ops-security/README.md)（等级待客户确认）。
 
+P1 报告审核台增量（0.8.0，审核历史 + 批量 + 项目隔离）：
+
+- **审核历史**——每次审核留存结果、规则版本、审核人/项目/批次与原文；工作台显示最近记录，可回看完整问题清单；
+- **批量审核**——一次多选 `.docx`，逐份审核并汇总成功/失败；单份失败不中断整批；批量可导出汇总 Excel；
+- **导出与原文**——单份导出「审核汇总 + 问题清单」Excel，原文可下载；
+- **项目隔离**——报告带项目标签，受限账号只能看授权项目内的记录与下载，跨项目 403；
+- **存储**——文件模式写 `data/reports/<id>/`；`P0_STORE=postgres` 写 `report_audits` 表并把原文放对象存储；不迁移旧数据；
+- 运行手册与限制见 [`docs/p1-report-workbench/README.md`](../docs/p1-report-workbench/README.md)。
+
 ## 运行
 
 ```bash

@@ -109,6 +109,24 @@ quotes = Table(
 Index("ix_quotes_project", quotes.c.project)
 Index("ix_quotes_created_at", quotes.c.created_at)
 
+report_audits = Table(
+    "report_audits",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column("batch_id", String(48), nullable=False, default=""),
+    Column("project", String(128), nullable=False, default=""),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("file_name", String(512), nullable=False, default=""),
+    Column("template", String(64), nullable=False, default=""),
+    Column("summary", JSON_TYPE, nullable=False),
+    Column("source_file_id", String(64)),
+    Column("data", JSON_TYPE, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+Index("ix_report_audits_project", report_audits.c.project)
+Index("ix_report_audits_created_at", report_audits.c.created_at)
+Index("ix_report_audits_batch", report_audits.c.batch_id)
+
 audit_events = Table(
     "audit_events",
     metadata,
