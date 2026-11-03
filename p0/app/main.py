@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import tempfile
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote as url_quote
@@ -26,14 +27,12 @@ from pydantic import BaseModel, Field
 
 from . import admin_config
 from . import auth
-from . import ocr as ocr_service
 from . import quote as quote_service
-from . import quote_store, store
-from . import report_writer, standard_qa, standard_store, weknora
+from . import quote_store, store, task_worker
+from . import report_writer, standard_parse, standard_qa, standard_store, weknora
+from .store import tasks
 from .docx_parser import parse_docx
-from .pdf_text import extract_pages
 from .rules import RecordInput, audit_report, rules_catalog, validate_records
-from .standard_parser import parse_standard
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
@@ -50,7 +49,19 @@ AUTH_DISABLED = os.getenv("P0_AUTH_DISABLED", "0").lower() in {"1", "true", "yes
 
 AUTH_BOOTSTRAP = auth.bootstrap()
 
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Start the in-process worker with the API; stop it on shutdown."""
+    task_worker.start_worker_if_enabled()
+    try:
+        yield
+    finally:
+        task_worker.stop()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="中汽零部件 P1 API",
     version="0.7.3",
     root_path=ROOT_PATH,
@@ -556,6 +567,8 @@ def health() -> dict:
         "weknora": "configured" if weknora.configured() else "missing",
         "store": store.config.store_mode(),
     }
+    worker = task_worker.status()
+    payload["tasks"] = "worker" if worker["running"] else ("enabled" if worker["enabled"] else "off")
     if store.config.postgres_enabled():
         payload["object_store"] = store.config.object_store_mode()
     return payload
@@ -709,6 +722,83 @@ def list_standards(request: Request) -> dict:
     }
 
 
+def _task_switch(env_name: str, default: str = "1") -> bool:
+    if not tasks.enabled():
+        return False
+    value = os.getenv(env_name, default).strip().lower()
+    return value not in {"0", "false", "off", "no"}
+
+
+def _async_parse_min_bytes() -> int:
+    try:
+        megabytes = float(os.getenv("P0_TASKS_ASYNC_MIN_MB", "5"))
+    except ValueError:
+        megabytes = 5.0
+    return max(0, int(megabytes * 1024 * 1024))
+
+
+def _async_parse_wanted(data: bytes) -> bool:
+    if not _task_switch("P0_TASKS_PARSE_ASYNC"):
+        return False
+    threshold = _async_parse_min_bytes()
+    if threshold == 0 or len(data) >= threshold:
+        return True
+    # Scanned PDFs are often small; sample the text layer before deciding.
+    return standard_parse.looks_scanned(data)
+
+
+def _task_response(task: dict) -> JSONResponse:
+    return JSONResponse(
+        status_code=202,
+        content={
+            "task_id": task["id"],
+            "status": task["status"],
+            "status_url": f"{ROOT_PATH}/api/v1/tasks/{task['id']}",
+        },
+    )
+
+
+def _enqueue_parse(
+    request: Request,
+    user: dict,
+    *,
+    data: bytes,
+    filename: str,
+    project: str,
+    enable_ocr: bool,
+) -> JSONResponse:
+    from .store import objects
+
+    payload = {
+        "file_name": filename,
+        "project": project,
+        "enable_ocr": bool(enable_ocr),
+        "created_by": user["username"],
+    }
+    task = tasks.create(
+        "standard_parse",
+        payload,
+        created_by=user["username"],
+        project=project,
+        max_attempts=int(os.getenv("P0_TASKS_MAX_ATTEMPTS", "2")),
+    )
+    with store.db.engine().begin() as conn:
+        file_record = objects.upsert_file(
+            conn,
+            owner_type="task",
+            owner_id=task["id"],
+            name="source.pdf",
+            data=data,
+            content_type="application/pdf",
+        )
+    task = tasks.set_payload(task["id"], {**payload, "file_id": file_record["id"]})
+    _audit_event(
+        request, user, "standard_parse_queued",
+        task_id=task["id"], project=project, bytes=len(data),
+    )
+    return _task_response(task)
+
+
 @app.post("/api/v1/standards/parse")
 async def parse_standard_file(
     request: Request,
@@ -731,32 +821,18 @@ async def parse_standard_file(
             status_code=413,
             detail=f"file exceeds {MAX_STANDARD_BYTES // 1024 // 1024} MB",
         )
+    if _async_parse_wanted(data):
+        return _enqueue_parse(
+            request, user, data=data, filename=file.filename,
+            project=project, enable_ocr=enable_ocr,
+        )
     try:
-        pages = extract_pages(data)
-        page_confidence: list[float] | None = None
-        ocr_meta: dict | None = None
-        ocr_warning: str | None = None
-        ocr_enabled = enable_ocr and os.getenv("P0_OCR_ENABLED", "1") not in {"0", "false", "off"}
-        if sum(len(page) for page in pages) < 500 and ocr_enabled:
-            try:
-                dpi = int(os.getenv("P0_OCR_DPI", "220"))
-                max_pages = int(os.getenv("P0_OCR_MAX_PAGES", "0")) or None
-                ocr_result = ocr_service.ocr_pdf(data, dpi=dpi, max_pages=max_pages)
-                pages = ocr_result.page_texts()
-                page_confidence = ocr_result.page_confidences()
-                ocr_meta = ocr_result.meta()
-            except ocr_service.OcrUnavailable as exc:
-                ocr_warning = f"扫描件 OCR 未启用：{exc}"
-        parsed = parse_standard(
-            pages,
+        parsed = standard_parse.parse_pdf_standard(
+            data,
             file.filename,
-            pdf_bytes=data,
-            page_confidence=page_confidence,
-            ocr=ocr_meta,
+            enable_ocr=enable_ocr,
             rule_config=admin_config.standard_config(),
         )
-        if ocr_warning:
-            parsed.setdefault("warnings", []).append(ocr_warning)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - API boundary
@@ -880,6 +956,19 @@ def publish_standard(standard_id: str, request: Request) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
     _assert_project_access(user, record.get("meta", {}))
+    if _task_switch("P0_TASKS_PUBLISH_ASYNC"):
+        task = tasks.create(
+            "standard_publish",
+            {"standard_id": standard_id, "created_by": user["username"]},
+            created_by=user["username"],
+            project=record.get("meta", {}).get("project", ""),
+            max_attempts=int(os.getenv("P0_TASKS_MAX_ATTEMPTS", "2")),
+        )
+        _audit_event(
+            request, user, "standard_publish_queued",
+            standard_id=standard_id, task_id=task["id"],
+        )
+        return _task_response(task)
     try:
         result = standard_store.publish(standard_id)
     except KeyError as exc:
@@ -893,6 +982,65 @@ def publish_standard(standard_id: str, request: Request) -> dict:
         chunks=result.get("chunks", 0),
     )
     return result
+
+
+def _require_tasks_enabled() -> None:
+    if not tasks.enabled():
+        raise HTTPException(status_code=503, detail="后台任务队列未启用")
+
+
+@app.get("/api/v1/tasks")
+def list_tasks(request: Request, limit: int = 10) -> dict:
+    _require_tasks_enabled()
+    user = _require_permission(request, "standard:read")
+    created_by = "" if user.get("role") == "admin" else user["username"]
+    return {"tasks": tasks.list_recent(created_by=created_by, limit=limit)}
+
+
+def _visible_task(task_id: str, user: dict) -> dict:
+    try:
+        task = tasks.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    if user.get("role") == "admin":
+        return task
+    if task.get("created_by") != user.get("username"):
+        raise HTTPException(status_code=404, detail="task not found")
+    if task.get("project") and not auth.can_access_project(
+        user, task.get("project", ""), task.get("created_by", "")
+    ):
+        raise HTTPException(status_code=404, detail="task not found")
+    return task
+
+
+@app.get("/api/v1/tasks/{task_id}")
+def get_task(task_id: str, request: Request) -> dict:
+    _require_tasks_enabled()
+    user = _require_permission(request, "standard:read")
+    return tasks.public(_visible_task(task_id, user))
+
+
+@app.post("/api/v1/tasks/{task_id}/cancel")
+def cancel_task(task_id: str, request: Request) -> dict:
+    _require_tasks_enabled()
+    user = _require_permission(request, "standard:parse")
+    _visible_task(task_id, user)
+    task = tasks.cancel(task_id)
+    _audit_event(request, user, "task_cancelled", task_id=task_id)
+    return task
+
+
+@app.post("/api/v1/tasks/{task_id}/retry")
+def retry_task(task_id: str, request: Request) -> dict:
+    _require_tasks_enabled()
+    user = _require_permission(request, "standard:parse")
+    _visible_task(task_id, user)
+    try:
+        task = tasks.retry(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _audit_event(request, user, "task_retried", task_id=task_id)
+    return task
 
 
 @app.post("/api/v1/standards/ask")

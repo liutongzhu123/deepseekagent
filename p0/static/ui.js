@@ -603,12 +603,109 @@ async function loadStandards(preferredId) {
 }
 async function loadStandard(id, keepClause) {
   if (!id) return;
+  $('publishTaskBox').classList.add('hidden');
   const data = await jsonFetch(`api/v1/standards/${encodeURIComponent(id)}`);
   state.current = data;
   state.selectedIndex = keepClause ? (data.items || []).findIndex((item) => item.clause === keepClause) : -1;
   renderStdDetail();
   renderStdList();
 }
+const TASK_STAGE_LABELS = {
+  queued: '排队中', starting: '启动中', extract: '提取文本层', ocr: '扫描件 OCR',
+  parse: '结构化解析', parsed: '解析完成', save: '保存结果', load: '读取标准',
+  indexing: '写入知识库', succeeded: '已完成', failed: '失败', cancelled: '已取消', requeued: '重新排队',
+};
+const TASK_STATUS_LABELS = { queued: '排队中', running: '进行中', succeeded: '已完成', failed: '失败', cancelled: '已取消' };
+const TASK_STATUS_PILL = { queued: 'neutral', running: 'info', succeeded: 'success', failed: 'danger', cancelled: 'neutral' };
+
+function renderTask(prefix, task) {
+  if (!task || !task.id) return;
+  const box = $(`${prefix}Box`);
+  if (!box) return;
+  state[`${prefix}Id`] = task.id;
+  box.classList.remove('hidden', 'is-queued', 'is-running', 'is-succeeded', 'is-failed', 'is-cancelled');
+  box.classList.add(`is-${task.status || 'queued'}`);
+  const pill = $(`${prefix}Pill`);
+  pill.textContent = TASK_STATUS_LABELS[task.status] || task.status || '';
+  pill.className = `pill ${TASK_STATUS_PILL[task.status] || 'neutral'}`;
+  const percent = task.status === 'succeeded' ? 100 : Math.max(0, Math.min(100, Number(task.progress || 0)));
+  $(`${prefix}Bar`).style.width = `${percent}%`;
+  const stage = TASK_STAGE_LABELS[task.stage] || task.stage || '';
+  $(`${prefix}Stage`).textContent = task.status === 'running' ? `${stage} · ${percent}%` : stage;
+  const cancel = $(`${prefix}Cancel`);
+  cancel.classList.toggle('hidden', !['queued', 'running'].includes(task.status));
+  cancel.disabled = Boolean(task.cancel_requested);
+  cancel.textContent = task.cancel_requested ? '取消中…' : '取消任务';
+  const error = $(`${prefix}Error`);
+  if (task.status === 'failed' && task.error) {
+    error.textContent = `任务失败：${task.error}`;
+    error.classList.remove('hidden');
+  } else {
+    error.classList.add('hidden');
+  }
+}
+
+function pollTask(taskId, prefix) {
+  if (state[`${prefix}Timer`]) clearTimeout(state[`${prefix}Timer`]);
+  return new Promise((resolve, reject) => {
+    const tick = async () => {
+      try {
+        const task = await jsonFetch(`api/v1/tasks/${encodeURIComponent(taskId)}`);
+        renderTask(prefix, task);
+        if (['queued', 'running'].includes(task.status)) {
+          state[`${prefix}Timer`] = setTimeout(tick, 1000);
+        } else {
+          resolve(task);
+        }
+      } catch (error) {
+        reject(error);
+      }
+    };
+    tick();
+  });
+}
+
+async function cancelTask(prefix) {
+  const taskId = state[`${prefix}Id`];
+  if (!taskId) return;
+  try {
+    const task = await jsonFetch(`api/v1/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' });
+    renderTask(prefix, task);
+    toast('已请求取消任务', 'info');
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function resumeLatestTask() {
+  try {
+    const data = await jsonFetch('api/v1/tasks?limit=1');
+    const task = (data.tasks || [])[0];
+    if (!task) return;
+    if (task.kind === 'standard_parse') {
+      renderTask('stdTask', task);
+      if (['queued', 'running'].includes(task.status)) {
+        pollTask(task.id, 'stdTask').then((finished) => {
+          if (finished.status === 'succeeded' && finished.result && finished.result.standard_id) {
+            loadStandards(finished.result.standard_id).catch(showError);
+          }
+        }).catch(() => {});
+      }
+      return;
+    }
+    if (task.kind === 'standard_publish' && state.current && state.current.id === task.standard_id) {
+      renderTask('publishTask', task);
+      if (['queued', 'running'].includes(task.status)) {
+        pollTask(task.id, 'publishTask').then((finished) => {
+          if (finished.status === 'succeeded') loadStandard(task.standard_id).catch(showError);
+        }).catch(() => {});
+      }
+    }
+  } catch (error) {
+    /* task queue is optional; a 503/404 simply means nothing to resume */
+  }
+}
+
 function renderReviewHistory(clause) {
   const entries = (state.current.review_history || []).filter((entry) => entry.clause === clause).slice(-3).reverse();
   if (!entries.length) {
@@ -1394,6 +1491,8 @@ function bindEvents() {
   });
 
   $('stdSearch').addEventListener('input', renderStdList);
+  $('stdTaskCancel').addEventListener('click', () => cancelTask('stdTask'));
+  $('publishTaskCancel').addEventListener('click', () => cancelTask('publishTask'));
   $('stdList').addEventListener('click', (event) => {
     const item = event.target.closest('[data-std-id]');
     if (!item) return;
@@ -1407,11 +1506,29 @@ function bindEvents() {
     const file = $('stdFile').files[0];
     if (!file) { toast('请先选择标准 PDF', 'info'); return; }
     busy($('parseBtn'), true, '解析中…');
+    $('stdTaskError').classList.add('hidden');
     try {
       const form = new FormData();
       form.append('file', file);
       if ($('stdProject').value.trim()) form.append('project', $('stdProject').value.trim());
       const data = await jsonFetch('api/v1/standards/parse', { method: 'POST', body: form });
+      if (data.task_id) {
+        $('parseStatus').textContent = '已进入后台队列，可继续查看其他标准';
+        renderTask('stdTask', { ...data, stage: 'queued', progress: 0 });
+        const finished = await pollTask(data.task_id, 'stdTask');
+        if (finished.status === 'succeeded') {
+          const items = finished.result ? finished.result.items : 0;
+          $('parseStatus').textContent = `解析完成：${items} 项`;
+          toast(`标准解析完成：${items} 项`);
+          await loadStandards(finished.result.standard_id);
+        } else if (finished.status === 'failed') {
+          $('parseStatus').textContent = '解析失败';
+          toast(`标准解析失败：${finished.error}`, 'error');
+        } else {
+          $('parseStatus').textContent = '解析已取消';
+        }
+        return;
+      }
       $('parseStatus').textContent = `解析完成：${data.summary.items} 项，${data.summary.clauses_traced} 条可溯源`;
       toast(`标准解析完成：${data.summary.items} 项`);
       await loadStandards(data.id);
@@ -1459,8 +1576,22 @@ function bindEvents() {
     });
     if (!confirmed) return;
     busy($('publishBtn'), true, '发布中…');
+    $('publishTaskError').classList.add('hidden');
     try {
       const data = await jsonFetch(`api/v1/standards/${encodeURIComponent(standard.id)}/publish`, { method: 'POST' });
+      if (data.task_id) {
+        renderTask('publishTask', { ...data, stage: 'queued', progress: 0 });
+        const finished = await pollTask(data.task_id, 'publishTask');
+        if (finished.status === 'succeeded') {
+          const chunks = finished.result ? finished.result.chunks : 0;
+          toast(`已发布 ${chunks} 个知识片段${finished.result && finished.result.weknora ? '，并同步到 WeKnora' : '（当前为本地演示索引）'}`);
+          const clause = state.selectedIndex >= 0 ? standard.items[state.selectedIndex].clause : '';
+          await loadStandard(standard.id, clause);
+        } else if (finished.status === 'failed') {
+          toast(`发布失败：${finished.error}`, 'error');
+        }
+        return;
+      }
       toast(`已发布 ${data.chunks} 个知识片段${data.weknora ? '，并同步到 WeKnora' : '（当前为本地演示索引）'}`);
       const clause = state.selectedIndex >= 0 ? standard.items[state.selectedIndex].clause : '';
       await loadStandard(standard.id, clause);
@@ -1734,7 +1865,7 @@ function boot() {
         }));
       });
     }
-    loadStandards().catch((error) => {
+    loadStandards().then(() => resumeLatestTask()).catch((error) => {
       $('stdList').innerHTML = `<div class="muted pad-8">标准加载失败：${escapeHtml(error.message)}</div>`;
     });
   }).catch(showError);

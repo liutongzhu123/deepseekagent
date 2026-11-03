@@ -50,6 +50,15 @@ P1 配置入口与精准跳转增量（0.7.2）：
 - **精准落点**——跳转后自动滚动到「标准解析规则字段」或「报价助手规则字段」并短暂高亮；URL 记录 `view=config&section=...`，刷新后仍定位到对应分区；
 - **权限边界**——非管理员可以查看配置，但「修改配置」按钮不显示。
 
+P1 异步任务增量（0.7.3，P1-2）：
+
+- **后台解析**——大文件/扫描件上传返回 `202 + task_id`，OCR/解析在 worker 线程执行，期间 `/health` 与其他 API 保持响应；
+- **进度与阶段**——标准解析页与发布按钮显示排队/提取/OCR/解析/保存阶段、百分比与失败原因；
+- **取消、重试与恢复**——任务可取消、失败可重试；进程重启后按租约把中断任务重新入队，任务不丢；
+- **发布异步**——标准发布（WeKnora 索引）同样进入任务队列，前端轮询到已发布后自动刷新；
+- **兼容**——`P0_TASKS_ENABLED=0`（默认）或小文本 PDF 仍走原同步路径，API 字段不变；
+- 运行手册与限制见 [`docs/p1-async-tasks/README.md`](../docs/p1-async-tasks/README.md)。
+
 ## 运行
 
 ```bash
@@ -275,6 +284,9 @@ backups/                         本地数据快照（0600，已在 .gitignore �
 数据层可用 `P0_STORE`、`P0_DATABASE_URL`、`P0_OBJECT_STORE`、`P0_OBJECT_DIR`、
 `P0_MINIO_ENDPOINT`、`P0_MINIO_ACCESS_KEY`、`P0_MINIO_SECRET_KEY`、`P0_MINIO_BUCKET`、
 `P0_MINIO_SECURE`、`P0_STORE_MIRROR` 调整；完整说明见 `docs/p1-data-layer/README.md`；
+后台任务用 `P0_TASKS_ENABLED`、`P0_TASKS_CONCURRENCY`、`P0_TASKS_PARSE_ASYNC`、
+`P0_TASKS_PUBLISH_ASYNC`、`P0_TASKS_ASYNC_MIN_MB`、`P0_TASKS_LEASE_SECONDS` 调整，
+见 `docs/p1-async-tasks/README.md`；
 `P0_CONFIG_PATH` 指定规则配置文件（默认 `data/config/rules.json`；文件不存在时使用默认规则）；
 `P0_AUDIT_RETENTION_DAYS`（默认 180）、`P0_SESSION_TTL`（默认 8 小时）控制审计保留与会话时长；
 `P0_OIDC_ISSUER` / `P0_OIDC_CLIENT_ID` 仅作为 SSO 预留配置，当前登录仍走本地账号；

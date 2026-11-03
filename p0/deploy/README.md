@@ -1,4 +1,4 @@
-# 部署说明（P0 受控上线 0.5 + P1-S1 身份/权限/审计 0.6 + P1-1 数据层 0.7.3）
+# 部署说明（P0 受控上线 0.5 + P1-S1 身份/权限/审计 0.6 + P1-1/P1-2 数据层与异步任务 0.7.3）
 
 当前 P0 服务器（`<P0_HOST>`，真实地址只在工单/服务器本地）使用 **venv + systemd** 运行：
 `/opt/cq-ai-p0`，服务名 `cq-p0-api`，监听 `127.0.0.1:8090`。
@@ -43,10 +43,20 @@ P0_STORE=json
 # P0_MINIO_BUCKET=cq-p0
 # P0_MINIO_SECURE=0
 # P0_STORE_MIRROR=1
+
+# P1-2 异步任务（先完成 P1-1 迁移再打开）
+# P0_TASKS_ENABLED=1
+# P0_TASKS_CONCURRENCY=1
+# P0_TASKS_PARSE_ASYNC=1
+# P0_TASKS_PUBLISH_ASYNC=1
+# P0_TASKS_ASYNC_MIN_MB=5
+# P0_TASKS_LEASE_SECONDS=900
 ```
 
 - `P0_STORE=postgres` 的完整迁移/对账/回滚步骤见 `docs/p1-data-layer/README.md`；
   迁移完成前不要打开该开关。
+- `P0_TASKS_ENABLED=1` 需要 `P0_STORE=postgres` 与可写对象存储；worker 在 API 进程内，
+  默认并发 1。任务接口与前端进度、取消/重试见 `docs/p1-async-tasks/README.md`。
 - 首次启动若没有 `P0_ADMIN_PASSWORD`，会在 `data/auth/initial_admin_password.txt`
   生成一次性密码（0600）；设置环境变量后该文件会被删除。
 - `P0_WEKNORA_RERANK=1` 会改用带重排的 `/knowledge-search`，精度更高但明显更慢；

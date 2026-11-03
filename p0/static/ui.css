@@ -982,3 +982,14 @@ dialog.modal.config-modal[open] { display: flex; flex-direction: column; overflo
   .module-config-bar { flex-wrap: wrap; }
   .module-config-bar .mc-title { flex-basis: calc(100% - 42px); }
 }
+
+/* P1-2 background task progress */
+.task-box { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2); }
+.task-box.compact { margin: 0 0 14px; }
+.task-box-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.task-box .progress { margin: 7px 0; height: 6px; }
+.task-box-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11.5px; }
+.task-box-foot .btn { padding: 3px 9px; }
+.task-box.is-running .progress i { background: linear-gradient(90deg, #1769aa, #38bdf8); }
+.task-box.is-succeeded .progress i { background: var(--green); }
+.task-box.is-failed .progress i, .task-box.is-cancelled .progress i { background: var(--red); }
