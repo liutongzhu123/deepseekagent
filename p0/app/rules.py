@@ -379,8 +379,156 @@ def r11_template(data: ReportData) -> Finding:
     return Finding("R11", "模板识别", "warn", "low", "未识别为已知模板", f"basis={data.basis[:80]}", "确认主机厂模板")
 
 
-def audit_report(data: ReportData, config: dict | None = None) -> dict:
-    """Run the enabled report rules with the configured thresholds/severity."""
+_PLACEHOLDERS = {"", "xx", "xxxx", "xxxxx", "----", "-", "/", "无", "n/a", "na"}
+
+
+def _known(value: object) -> bool:
+    text = re.sub(r"\s+", "", str(value or "")).strip()
+    if text.lower() in _PLACEHOLDERS:
+        return False
+    return not (set(text) <= {"x"} or set(text) <= {"-"})
+
+
+def _norm_compare(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip().lower()
+
+
+def _same(left: object, right: object) -> bool | None:
+    """None when either side is empty/placeholder; otherwise exact after normalization."""
+    if not _known(left) or not _known(right):
+        return None
+    return _norm_compare(left) == _norm_compare(right)
+
+
+def _quantity_same(left: object, right: object) -> bool | None:
+    if not _known(left) or not _known(right):
+        return None
+    left_nums = re.findall(r"\d+(?:\.\d+)?", str(left))
+    right_nums = re.findall(r"\d+(?:\.\d+)?", str(right))
+    if len(left_nums) == 1 and len(right_nums) == 1:
+        try:
+            return float(left_nums[0]) == float(right_nums[0])
+        except ValueError:
+            pass
+    return _same(left, right)
+
+
+def _crosscheck_task_order(data: ReportData, inputs: object) -> Finding:
+    order: dict | None = None
+    if data.cover_number:
+        rows = inputs.find("task_orders", "report_no", data.cover_number)  # type: ignore[attr-defined]
+        if rows:
+            order = rows[0]
+    if order is None and data.sample_no:
+        rows = inputs.find("task_orders", "sample_no", data.sample_no)  # type: ignore[attr-defined]
+        if rows:
+            order = rows[0]
+    if order is None:
+        return _skip("X01", "报告—任务单一致", "未找到与报告编号/样品编号匹配的任务单")
+    mismatches: list[str] = []
+    compared = 0
+    pairs = [
+        ("报告编号", data.cover_number, order.get("report_no")),
+        ("样品编号", data.sample_no, order.get("sample_no")),
+        ("委托单位", data.client, order.get("customer")),
+        ("样品名称", data.sample_name, order.get("sample_name")),
+        ("检验项目", data.item, order.get("item")),
+    ]
+    for label, left, right in pairs:
+        same = _same(left, right)
+        if same is not None:
+            compared += 1
+        if same is False:
+            mismatches.append(f"{label}: 报告={left or '空'} / 任务单={right or '空'}")
+    if mismatches:
+        return _fail(
+            "X01", "报告—任务单一致", f"报告与任务单存在 {len(mismatches)} 处不一致",
+            "; ".join(mismatches), "high", "核对任务单字段，统一报告与任务单口径",
+        )
+    if compared == 0:
+        return _skip("X01", "报告—任务单一致", "报告与任务单的可比字段均为空或占位")
+    return _pass("X01", "报告—任务单一致", "报告与任务单关键字段一致", f"任务单={order.get('order_no', '')}")
+
+
+def _crosscheck_sample(data: ReportData, inputs: object) -> Finding:
+    rows = []
+    if data.sample_no:
+        rows = inputs.find("samples", "sample_no", data.sample_no)  # type: ignore[attr-defined]
+    if not rows and data.cover_number:
+        rows = inputs.find("samples", "report_no", data.cover_number)  # type: ignore[attr-defined]
+    if not rows:
+        return _skip("X02", "报告—样品信息一致", "未找到与样品编号/报告编号匹配的样品记录")
+    sample = rows[0]
+    mismatches: list[str] = []
+    compared = 0
+    same_name = _same(data.sample_name, sample.get("sample_name"))
+    if same_name is not None:
+        compared += 1
+    if same_name is False:
+        mismatches.append(f"样品名称: 报告={data.sample_name or '空'} / 样品系统={sample.get('sample_name') or '空'}")
+    same_qty = _quantity_same(data.sample_qty, sample.get("quantity"))
+    if same_qty is not None:
+        compared += 1
+    if same_qty is False:
+        mismatches.append(f"样品数量: 报告={data.sample_qty or '空'} / 样品系统={sample.get('quantity') or '空'}")
+    if mismatches:
+        return _fail(
+            "X02", "报告—样品信息一致", f"报告与样品记录存在 {len(mismatches)} 处不一致",
+            "; ".join(mismatches), "high", "核对样品编号、名称与数量",
+        )
+    if compared == 0:
+        return _skip("X02", "报告—样品信息一致", "报告与样品记录的可比字段均为空或占位")
+    return _pass("X02", "报告—样品信息一致", "报告与样品记录关键字段一致", f"样品={sample.get('sample_no', '')}")
+
+
+def _crosscheck_record(data: ReportData, inputs: object) -> Finding:
+    rows = []
+    if data.cover_number:
+        rows = inputs.find("original_records", "report_no", data.cover_number)  # type: ignore[attr-defined]
+    if not rows and data.sample_no:
+        rows = inputs.find("original_records", "sample_no", data.sample_no)  # type: ignore[attr-defined]
+    if not rows:
+        return _skip("X03", "报告—原始记录一致", "未找到与报告编号/样品编号匹配的原始记录")
+    record = rows[0]
+    mismatches: list[str] = []
+    compared = 0
+    same_sample = _same(data.sample_no, record.get("sample_no"))
+    if same_sample is not None:
+        compared += 1
+    if same_sample is False:
+        mismatches.append(f"样品编号: 报告={data.sample_no or '空'} / 原始记录={record.get('sample_no') or '空'}")
+    record_date = parse_date(record.get("test_date", ""))
+    start = parse_date(data.test_start)
+    end = parse_date(data.test_end) or start
+    if record_date and start and end:
+        compared += 1
+        if not (start <= record_date <= end):
+            mismatches.append(f"检验日期 {record_date} 不在报告检验时间 {start}~{end} 内")
+    if mismatches:
+        return _fail(
+            "X03", "报告—原始记录一致", f"报告与原始记录存在 {len(mismatches)} 处不一致",
+            "; ".join(mismatches), "high", "核对原始记录日期与样品编号",
+        )
+    if compared == 0:
+        return _skip("X03", "报告—原始记录一致", "报告与原始记录的可比字段均为空或占位")
+    return _pass("X03", "报告—原始记录一致", "报告与原始记录关键字段一致", f"记录={record.get('record_no', '')}")
+
+
+def crosscheck_report(data: ReportData, inputs: object) -> list[Finding]:
+    """Data-driven checks appended only when a local inbox is configured."""
+    return [
+        _crosscheck_task_order(data, inputs),
+        _crosscheck_sample(data, inputs),
+        _crosscheck_record(data, inputs),
+    ]
+
+
+def audit_report(data: ReportData, config: dict | None = None, inputs: object | None = None) -> dict:
+    """Run the enabled report rules with the configured thresholds/severity.
+
+    When a local inbox snapshot is supplied, append the data-driven
+    ``X01``–``X03`` cross-document checks; without it the result is unchanged.
+    """
     meta, tolerance, expected_notices = _rule_meta(config)
     findings = []
     for rule_id, function_name in _RULE_FUNCTIONS.items():
@@ -391,6 +539,8 @@ def audit_report(data: ReportData, config: dict | None = None) -> dict:
         else:
             finding = globals()[function_name](data)
         findings.append(_apply_rule_meta(finding, meta.get(rule_id)))
+    if inputs is not None:
+        findings.extend(crosscheck_report(data, inputs))
     return {
         "file": data.file_name,
         "template": data.template_family,
