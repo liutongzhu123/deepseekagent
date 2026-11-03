@@ -21,7 +21,11 @@ from .store import db, objects, tasks
 
 
 class TaskCancelled(Exception):
-    """Raised by a handler when the task was cancelled or the worker stopped."""
+    """Raised by a handler when the user cancelled the task."""
+
+
+class WorkerStopping(Exception):
+    """Raised by a handler when the worker is shutting down."""
 
 
 Handler = Callable[[dict, Callable[[str, int], None]], dict]
@@ -207,7 +211,7 @@ class TaskWorker:
 
             def report(stage: str, progress: int) -> None:
                 if self._stop.is_set():
-                    raise TaskCancelled("worker stopping")
+                    raise WorkerStopping("worker stopping")
                 if tasks.cancel_requested(task_id):
                     raise TaskCancelled("cancelled")
                 tasks.heartbeat(task_id, stage, progress)
@@ -218,6 +222,8 @@ class TaskWorker:
             # handler returns its side effects exist, so record success rather
             # than a misleading cancelled status.
             tasks.finish(task_id, "succeeded", result=result or {})
+        except WorkerStopping:
+            tasks.requeue(task_id, "worker stopping")
         except TaskCancelled:
             tasks.finish(task_id, "cancelled", error="任务已取消")
         except Exception as exc:  # noqa: BLE001 - report any handler failure

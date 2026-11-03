@@ -318,6 +318,30 @@ def retry(task_id: str) -> dict:
     return public(get(task_id))
 
 
+def requeue(task_id: str, reason: str = "") -> None:
+    """Return a running task to the queue without counting it as a failure.
+
+    Used on graceful worker shutdown so a restart can pick the job up
+    immediately instead of waiting for the lease to expire.
+    """
+    _check_id(task_id)
+    now = _now()
+    with db.engine().begin() as conn:
+        conn.execute(
+            update(db.tasks)
+            .where(db.tasks.c.id == task_id, db.tasks.c.status == "running")
+            .values(
+                status="queued",
+                stage="requeued",
+                progress=0,
+                worker_id="",
+                lease_until=None,
+                error="",
+                updated_at=now,
+            )
+        )
+
+
 def recover_stale() -> int:
     """Requeue running tasks whose worker lease expired (restart/crash)."""
     db.ensure_schema()

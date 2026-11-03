@@ -266,3 +266,28 @@ def test_failed_task_can_be_retried(task_env):
         assert tasks.get(task["id"])["status"] == "succeeded"
     finally:
         worker.stop()
+
+
+def test_graceful_stop_requeues_running_task(task_env):
+    started = threading.Event()
+    release = threading.Event()
+
+    def handler(task, report):
+        started.set()
+        release.wait(5)
+        report("parse", 60)
+        return {"ok": True}
+
+    worker = task_worker.TaskWorker(handlers={"standard_parse": handler}, concurrency=1)
+    task = tasks.create("standard_parse", {"file_name": "stop.pdf"}, created_by="admin")
+    worker.start()
+    assert started.wait(5)
+    stopper = threading.Thread(target=worker.stop, kwargs={"timeout": 5})
+    stopper.start()
+    time.sleep(0.2)
+    release.set()
+    stopper.join(timeout=10)
+    deadline = time.time() + 5
+    while time.time() < deadline and tasks.get(task["id"])["status"] != "queued":
+        time.sleep(0.05)
+    assert tasks.get(task["id"])["status"] == "queued"

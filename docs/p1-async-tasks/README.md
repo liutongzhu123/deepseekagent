@@ -13,7 +13,7 @@ P0 的扫描件 OCR 在请求内同步执行，44 页扫描约 1.5–2 分钟，
 - 新增 `GET /api/v1/tasks/{id}`、`GET /api/v1/tasks`、`POST .../cancel`、`POST .../retry`；
 - 任务状态：`queued / running / succeeded / failed / cancelled`，带阶段与进度；
 - 进程内 worker 线程池（默认并发 1，可配 1–4）；PostgreSQL `FOR UPDATE SKIP LOCKED`
-  领取任务，租约超时后重启可恢复；
+  领取任务；正常停止时把运行中任务重新入队，异常退出后按租约恢复；
 - 前端标准解析/发布显示阶段、进度、失败原因，并可取消。
 
 小于 `P0_TASKS_ASYNC_MIN_MB` 且文本层正常的 PDF 仍走同步路径，保持原有 API 行为。
@@ -108,8 +108,8 @@ After（任务进行中，阶段/百分比/取消）：
 
 ## 6. 验证
 
-- 全量测试（PostgreSQL 16 / 本地 14）：`86 passed, 2 skipped`；
-- 新增 6 项任务集成测试：202 入队、`/health` 在任务运行期间保持 < 500 ms、
+- 全量测试（PostgreSQL 16 / 本地 14）：`87 passed, 2 skipped`；
+- 新增 7 项任务集成测试：202 入队、`/health` 在任务运行期间保持 < 500 ms、
   发布任务、取消/重试、并发领取、租约过期恢复、失败重试；
 - 44 页扫描件（同一份两页扫描件复制为 44 页，706 KB，OCR DPI 200）端到端 **176 s**，
   上传立即返回 202，任务 `succeeded`（44 页）；
