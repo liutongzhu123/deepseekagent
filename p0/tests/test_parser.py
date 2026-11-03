@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.docx_parser import parse_docx
+from app.docx_parser import Cell, _expand_table, parse_docx
 from app.rules import audit_report
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -153,3 +153,38 @@ def test_r09_uses_run_styles_not_plain_text(tmp_path):
     assert data.font_sizes == [12.0]
     finding = next(item for item in audit_report(data)["findings"] if item["rule_id"] == "R09")
     assert finding["status"] == "fail"
+
+
+def test_expand_table_handles_gridspan_and_vmerge():
+    table = [
+        [Cell("评价员", gridspan=2), Cell("检验结果")],
+        [Cell("1"), Cell("2"), Cell("3")],
+        [Cell("甲", vmerge="restart"), Cell("4"), Cell("5")],
+        [Cell("", vmerge="continue"), Cell("6"), Cell("7")],
+    ]
+    grid = _expand_table(table)
+
+    assert grid[0] == ["评价员", "评价员", "检验结果"]
+    assert grid[2] == ["甲", "4", "5"]
+    assert grid[3][0] == "甲"
+    assert all(len(row) == 3 for row in grid)
+
+
+def test_expand_table_pads_empty_cells():
+    grid = _expand_table([[Cell("A")], [Cell("B"), Cell("C")]])
+
+    assert grid == [["A", ""], ["B", "C"]]
+
+
+def test_expand_table_keeps_rows_across_page_boundary():
+    # Word keeps a split table in one XML table; a blank boundary row must not
+    # drop the rows that continue after the page break.
+    grid = _expand_table([
+        [Cell("评价员"), Cell("检验结果")],
+        [Cell("1"), Cell("4")],
+        [Cell(""), Cell("")],
+        [Cell("2"), Cell("5")],
+    ])
+
+    assert len(grid) == 4
+    assert grid[3] == ["2", "5"]
