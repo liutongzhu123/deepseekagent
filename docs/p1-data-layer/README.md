@@ -219,4 +219,4 @@ systemctl start cq-p0-api
 - **报告审核历史未落库**：按计划留到 P1-4；本轮只迁移已有的标准/报价/审计/用户。
 - 迁移脚本假设停服务执行；双写镜像降低但未消除并发写入的竞态。
 - 审计过滤在数据库侧完成，但 `query_audit` 的 CSV 导出仍按筛选结果读入内存后再写 CSV；
-  百万级审计需要后续加导出流式化。
+  该路径已改为流式导出（`iter_entries` + `StreamingResponse`）；见 `docs/p1-ops-retention/README.md`。

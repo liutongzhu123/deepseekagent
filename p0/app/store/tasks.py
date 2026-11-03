@@ -15,7 +15,7 @@ import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from . import config, db
 
@@ -391,3 +391,35 @@ def stats() -> dict:
         ).all()
     counts = {status: int(count) for status, count in rows}
     return {status: counts.get(status, 0) for status in ("queued", "running", "succeeded", "failed", "cancelled")}
+
+
+def _prune_conditions(days: int, statuses: tuple[str, ...]):
+    if days <= 0:
+        raise ValueError("days must be positive")
+    unknown = [status for status in statuses if status not in STATUSES]
+    if unknown:
+        raise ValueError(f"unknown task status: {unknown}")
+    cutoff = db.utcnow() - timedelta(days=int(days))
+    return cutoff, (
+        db.tasks.c.finished_at.is_not(None),
+        db.tasks.c.finished_at < cutoff,
+        db.tasks.c.status.in_(tuple(statuses)),
+    )
+
+
+def count_prunable(*, days: int = 30, statuses: tuple[str, ...] = ("succeeded", "failed", "cancelled")) -> int:
+    db.ensure_schema()
+    _cutoff, conditions = _prune_conditions(days, statuses)
+    with db.engine().connect() as conn:
+        return int(
+            conn.execute(select(func.count()).select_from(db.tasks).where(*conditions)).scalar_one()
+        )
+
+
+def prune(*, days: int = 30, statuses: tuple[str, ...] = ("succeeded", "failed", "cancelled")) -> int:
+    """Delete finished tasks older than ``days`` (queued/running are never touched)."""
+    db.ensure_schema()
+    _cutoff, conditions = _prune_conditions(days, statuses)
+    with db.engine().begin() as conn:
+        result = conn.execute(delete(db.tasks).where(*conditions))
+    return int(result.rowcount or 0)

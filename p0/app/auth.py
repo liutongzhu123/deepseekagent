@@ -786,6 +786,35 @@ def audit_csv(entries: list[dict]) -> str:
     return buffer.getvalue()
 
 
+def count_audit(**filters) -> int:
+    if store.config.postgres_enabled():
+        return store.audit.count_entries(**filters)
+    return len(filter_audit(**filters))
+
+
+def iter_filtered_audit(**filters):
+    """Yield filtered audit events in newest-first order (CSV streaming)."""
+    if store.config.postgres_enabled():
+        yield from store.audit.iter_entries(**filters)
+        return
+    yield from filter_audit(**filters)
+
+
+def audit_csv_stream(entries):
+    fields = ("at", "user", "role", "event", "action", "method", "path", "status", "ms", "ip")
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    yield "\ufeff" + buffer.getvalue()
+    buffer.seek(0)
+    buffer.truncate(0)
+    for entry in entries:
+        writer.writerow({field: _csv_cell(entry.get(field, "")) for field in fields})
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+
+
 # ---------------------------------------------------------------------------
 # Login throttling (per IP+username, in memory)
 # ---------------------------------------------------------------------------

@@ -393,3 +393,29 @@ def test_qa_feedback_roundtrip(pg):
     assert [row["id"] for row in rows] == [record["id"]]
     assert rows[0]["rating"] == "not_helpful"
     assert rows[0]["citations"][0]["clause"] == "5.1"
+
+
+def test_task_prune_removes_only_old_finished(pg):
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    from app.store import tasks
+
+    old_task = tasks.create("standard_parse", {"file_name": "old.pdf"}, created_by="alice", project="")
+    tasks.finish(old_task["id"], "succeeded", result={"items": 1})
+    new_task = tasks.create("standard_parse", {"file_name": "new.pdf"}, created_by="alice", project="")
+    tasks.finish(new_task["id"], "succeeded", result={"items": 1})
+    with db.engine().begin() as conn:
+        conn.execute(
+            update(db.tasks)
+            .where(db.tasks.c.id == old_task["id"])
+            .values(finished_at=db.utcnow() - timedelta(days=40))
+        )
+
+    assert tasks.count_prunable(days=30) == 1
+    assert tasks.prune(days=30) == 1
+    with pytest.raises(KeyError):
+        tasks.get(old_task["id"])
+    assert tasks.get(new_task["id"])["status"] == "succeeded"
+    assert tasks.prune(days=30, statuses=("queued",)) == 0
