@@ -124,6 +124,13 @@ P1 知识问答反馈与引用跳转增量（0.8.3）：
 - **前端**——答案反馈条、知识问答右栏「问答反馈」卡（管理员）；
 - 运行手册与限制见 [`docs/p1-qa-feedback/README.md`](../docs/p1-qa-feedback/README.md)。
 
+版本化发布与割接（0.8.3 起）：
+
+- **发布包**——`scripts/release_kit.py build` 生成带 `manifest.json`（版本/Git commit/逐文件 SHA-256）与 `.sha256` 的 tar.gz；
+- **校验**——`verify` 拒绝篡改、缺失文件、路径穿越与符号链接；`check` 校验 `/health` 版本/auth 与 `/metrics`；
+- **割接/回滚**——步骤与检查清单见 [`docs/p1-release/README.md`](../docs/p1-release/README.md)（需要服务器权限，由运维执行）；
+- 不修改应用行为与版本号，也不自动切换 systemd 服务。
+
 ## 运行
 
 ```bash

@@ -68,6 +68,9 @@ P0_STORE=json
 
 - `P0_STORE=postgres` 的完整迁移/对账/回滚步骤见 `docs/p1-data-layer/README.md`；
   迁移完成前不要打开该开关。
+
+- 版本化发布包、上线前检查、割接与回滚步骤见 `docs/p1-release/README.md`；
+  `scripts/release_kit.py build/verify/check` 负责打包、校验与发布后版本检查。
 - `P0_TASKS_ENABLED=1` 需要 `P0_STORE=postgres` 与可写对象存储；worker 在 API 进程内，
   默认并发 1。任务接口与前端进度、取消/重试见 `docs/p1-async-tasks/README.md`。
 - 首次启动若没有 `P0_ADMIN_PASSWORD`，会在 `data/auth/initial_admin_password.txt`
