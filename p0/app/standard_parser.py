@@ -1288,6 +1288,26 @@ def parse_standard(
                 "材料性能以多页合并表格给出，已按表格结构抽取项目和试验方法，需人工复核"
             )
 
+    if not items and method_sec is not None:
+        # Table-only standards often have a "技术要求" section whose rows are
+        # not clause headings, so the normal pair/item-table paths find
+        # nothing.  Expose the method clauses as review-only candidates rather
+        # than returning an empty parse; the workbench fills the requirement.
+        fallback_items = _parse_single_section_items(lines, headings, method_sec, "method")
+        if fallback_items:
+            items = fallback_items
+            source = "method-only-fallback"
+            warnings = [
+                warning
+                for warning in warnings
+                if "无法抽取项目" not in warning
+                and "未找到完整检验项目表" not in warning
+            ]
+            warnings.append(
+                "「技术要求」未形成条款条目（可能为表格型标准），已按「试验方法」章节生成待复核项目；"
+                "判定要求需人工补充"
+            )
+
     if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
 

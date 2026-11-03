@@ -223,3 +223,16 @@ def test_table_cell_cleanup_for_merged_performance_tables():
     assert _table_item_name("悬臂梁缺口冲击强度（-30℃），Notched Izod", "6.8.3") == "悬臂梁缺口冲击强度（-30℃）"
     assert _table_item_name("2：气味性/Odor", "6.10") == "气味性"
     assert _readable_requirement(["0.92±0.02；天；0.92±0.02；0.90±0.02"]) == "0.92±0.02；0.90±0.02"
+
+
+def test_table_style_standard_falls_back_to_method_candidates():
+    """Requirement tables without clause headings must not yield an empty parse."""
+    pages = [
+        "Q/TEST 456-2026\n汽车材料性能要求\n2026-01-01 发布",
+        "3 技术要求\n表 1 试验要求\n分类 适用零件 性能要求 试验方法\n方法 A 擦拭法 内饰 外观无变化 6.1",
+        "6 试验方法\n6.1 擦拭法\n试样应从正常产品上截取。\n6.2 线性摩擦法\n按 ISO 105-X12 进行。",
+    ]
+    result = parse_standard(pages, "table-only.pdf")
+    assert result["summary"]["items"] >= 1
+    assert result["mapping_source"] == "method-only-fallback"
+    assert any("表格型标准" in warning for warning in result["warnings"])
