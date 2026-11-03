@@ -53,7 +53,7 @@
 - **涉及**：`p0/app/docx_parser.py`、`p0/tests/test_parser.py`
 
 ### T102 · 表格单元格解析（合并单元格 / 均值表）
-- **状态**：`todo`  **依赖**：T101  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
+- **状态**：`pr-open`  **依赖**：T101  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 解析「检验结果表」为结构化 `cells[row][col]`，支持横向/纵向合并
   - R02 能取到 3 名评价员分数并算出均值；12 份草稿 12/12 判出「均值空白」
@@ -69,7 +69,7 @@
 - **涉及**：`p0/app/docx_parser.py`
 
 ### T104 · PDF / 扫描件统一接入
-- **状态**：`pr-open`  **依赖**：T101  **分支**：`agent/t104-pdf-ocr-acceptance-gap-plan-bca950f1a022`
+- **状态**：`pr-open`  **依赖**：T101  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - `pdf_text.py` + `ocr.py` 输出与 docx 相同的 `Document` 结构（字段可空但结构一致）
   - 至少 1 份 PDF 报告跑通 R01/R02/R03/R04（无字段时返回 `skip` 并注明原因，不得 `pass`）
@@ -135,9 +135,9 @@
 | （历史）X01–X03 跨文档检查 | `merged` | #33 | 绿 | 任务单/记录/样品比对 |
 | （历史）X04 设备台账校验 | `merged` | — | — | 设备表解析 |
 | T101 | `merged` | #37 | 绿 | 页眉/页脚部件 + 正文回退 |
-| T102 | `todo` | — | — | 暂停已解除（2026-11-03） |
+| T102 | `pr-open` | #43 | 绿 | 表格网格 + 合并单元格 |
 | T103 | `merged` | #40 | 绿 | 目录页码 + 字体/字号 + R07 校验 |
-| T104 | `pr-open` | #41 | 绿 | PDF 文本层/OCR + R01–R04 skip |
+| T104 | `pr-open` | #42 | pending | PDF 文本层/OCR + R01–R04 skip |
 | T105 | `blocked` | — | — | 缺 XG/第二主机厂样例 |
 | T106 | `todo` | — | — | — |
 | T107 | `todo` | — | — | — |

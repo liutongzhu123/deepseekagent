@@ -57,6 +57,7 @@ class ReportData:
     judgment: str = ""
     device_valid: str = ""
     devices: list[dict] = field(default_factory=list)
+    result_cells: list[list[str]] = field(default_factory=list)
     page_totals: list[int] = field(default_factory=list)
     page_numbers: list[int] = field(default_factory=list)
     footer_pages: list[int] = field(default_factory=list)
@@ -149,6 +150,31 @@ def _count_markup(root: ET.Element) -> tuple[int, int]:
             if val in red_colors:
                 red_runs += 1
     return highlights, red_runs
+
+
+def _expand_table(rows: list[list[Cell]]) -> list[list[str]]:
+    """Expand gridSpan/vMerge cells into a rectangular ``cells[row][col]``."""
+    grid: list[list[str]] = []
+    for row in rows:
+        expanded: list[str] = []
+        column = 0
+        for cell in row:
+            text = cell.text.strip()
+            span = max(1, cell.gridspan)
+            for offset in range(span):
+                value = text
+                if cell.vmerge == "continue" and not text and grid:
+                    # Continuation cells inherit the value directly above.
+                    previous = grid[-1]
+                    if column + offset < len(previous):
+                        value = previous[column + offset]
+                expanded.append(value)
+            column += span
+        grid.append(expanded)
+    width = max((len(row) for row in grid), default=0)
+    for row in grid:
+        row.extend([""] * (width - len(row)))
+    return grid
 
 
 def _pairs_from_table(rows: list[list[Cell]]) -> list[tuple[str, str]]:
@@ -360,6 +386,7 @@ def parse_docx(path: str | Path) -> ReportData:
 
     result_table = _find_result_table(tables)
     scores, reported_mean, limit, judgment = _parse_result_rows(result_table) if result_table else ([], None, None, "")
+    result_cells = _expand_table(result_table) if result_table else []
 
     devices: list[dict] = []
     device_valid = ""
@@ -456,6 +483,7 @@ def parse_docx(path: str | Path) -> ReportData:
         judgment=judgment,
         device_valid=device_valid,
         devices=devices,
+        result_cells=result_cells,
         page_totals=page_totals,
         page_numbers=page_numbers,
         footer_pages=page_numbers,
