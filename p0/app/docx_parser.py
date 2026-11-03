@@ -58,6 +58,7 @@ class ReportData:
     devices: list[dict] = field(default_factory=list)
     page_totals: list[int] = field(default_factory=list)
     page_numbers: list[int] = field(default_factory=list)
+    footer_pages: list[int] = field(default_factory=list)
     notices: int = 0
     highlights: int = 0
     red_runs: int = 0
@@ -220,27 +221,59 @@ def _parse_result_rows(table: list[list[Cell]]) -> tuple[list[float], float | No
     return scores, mean, limit, judgment
 
 
+def _part_texts(zf: zipfile.ZipFile, prefix: str) -> list[str]:
+    """Read header/footer parts in numeric order (header1, header2, ...)."""
+    names = [name for name in zf.namelist() if name.startswith(prefix) and name.endswith(".xml")]
+    names.sort(key=lambda name: int(re.search(r"(\d+)\.xml$", name).group(1)) if re.search(r"(\d+)\.xml$", name) else 0)
+    texts: list[str] = []
+    for name in names:
+        try:
+            texts.append(_text(ET.fromstring(zf.read(name))))
+        except ET.ParseError:
+            continue
+    return texts
+
+
+def _header_number(text: str) -> str:
+    match = re.search(r"报告编号\s*[:：]\s*([A-Za-z0-9\-]*)", text or "")
+    return match.group(1).strip() if match else ""
+
+
+def _footer_pages(text: str) -> tuple[list[int], list[int]]:
+    pages = [int(value) for value in re.findall(r"第\s*(\d+)\s*页", text or "")]
+    totals = [int(value) for value in re.findall(r"共\s*(\d+)\s*页", text or "")]
+    return pages, totals
+
+
 def parse_docx(path: str | Path) -> ReportData:
     path = Path(path)
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
         xml_bytes = zf.read("word/document.xml")
         embedded_images = len([n for n in names if n.startswith("word/media/")])
+        header_texts = _part_texts(zf, "word/header")
+        footer_texts = _part_texts(zf, "word/footer")
     root = ET.fromstring(xml_bytes)
     paragraphs = _iter_paragraphs(root)
     tables = _iter_tables(root)
     body_text = "\n".join(paragraphs)
     xml_text = xml_bytes.decode("utf-8", errors="ignore")
 
-    header_numbers: list[str] = []
+    body_header_numbers: list[str] = []
     for line in paragraphs:
         if "报告编号" in line:
             match = re.search(r"报告编号\s*[:：]\s*([A-Za-z0-9\-]*)", line)
-            header_numbers.append(match.group(1).strip() if match else "")
-    # Some documents place the number on the line after the label; capture only
-    # explicit non-empty values from the line itself to avoid false positives.
-    cover_number = next((n for n in header_numbers if n), "")
-    body_numbers = header_numbers[1:] if header_numbers else []
+            body_header_numbers.append(match.group(1).strip() if match else "")
+    # Prefer real header parts; fall back to body occurrences for drafts/templates
+    # that put the number in the body instead of a Word header.
+    if header_texts:
+        header_numbers = [_header_number(text) for text in header_texts]
+        cover_number = next((n for n in body_header_numbers if n), "") or next((n for n in header_numbers if n), "")
+        body_numbers = header_numbers
+    else:
+        header_numbers = body_header_numbers
+        cover_number = next((n for n in header_numbers if n), "")
+        body_numbers = header_numbers[1:] if header_numbers else []
 
     summary_pairs: list[tuple[str, str]] = []
     sample_pairs: list[tuple[str, str]] = []
@@ -311,6 +344,16 @@ def parse_docx(path: str | Path) -> ReportData:
 
     page_totals = [int(m.group(1)) for m in re.finditer(r"共\s*(\d+)\s*页", body_text)]
     page_numbers = [int(m.group(1)) for m in re.finditer(r"第\s*(\d+)\s*页", body_text)]
+    footer_page_numbers: list[int] = []
+    footer_page_totals: list[int] = []
+    for text in footer_texts:
+        pages, totals = _footer_pages(text)
+        footer_page_numbers.extend(pages)
+        footer_page_totals.extend(totals)
+    if footer_page_numbers:
+        page_numbers = footer_page_numbers
+    if footer_page_totals:
+        page_totals = footer_page_totals
 
     notices = 0
     notice_start = next((i for i, line in enumerate(paragraphs) if "注  意  事  项" in line or "注意事项" in line), None)
@@ -364,6 +407,7 @@ def parse_docx(path: str | Path) -> ReportData:
         devices=devices,
         page_totals=page_totals,
         page_numbers=page_numbers,
+        footer_pages=page_numbers,
         notices=notices,
         highlights=highlights,
         red_runs=red_runs,
