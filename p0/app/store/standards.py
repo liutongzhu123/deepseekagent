@@ -319,3 +319,79 @@ def items_for(standard_id: str, version: int | None = None) -> list[dict]:
     statement = statement.order_by(db.standard_items.c.id)
     with db.engine().connect() as conn:
         return [dict(row) for row in conn.execute(statement).scalars() if row]
+
+
+def _iso(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat(timespec="seconds")
+    return str(value or "")
+
+
+def list_versions(standard_id: str) -> list[dict]:
+    """Revision snapshots for the review/rollback panel, newest first."""
+    _check_id(standard_id)
+    db.ensure_schema()
+    with db.engine().connect() as conn:
+        current_row = conn.execute(
+            select(db.standards.c.data).where(db.standards.c.id == standard_id)
+        ).first()
+        if current_row is None or not current_row[0]:
+            raise KeyError(standard_id)
+        current = int((current_row[0] or {}).get("revision", 0))
+        rows = conn.execute(
+            select(
+                db.standard_versions.c.version,
+                db.standard_versions.c.data,
+                db.standard_versions.c.created_at,
+            )
+            .where(db.standard_versions.c.standard_id == standard_id)
+            .order_by(db.standard_versions.c.version.desc())
+        ).mappings().all()
+    versions: list[dict] = []
+    for row in rows:
+        data = row["data"] or {}
+        version = int(row["version"])
+        versions.append(
+            {
+                "version": version,
+                "created_at": _iso(row["created_at"]),
+                "reviewer": str(data.get("reviewer", "")),
+                "items": len(data.get("items") or []),
+                "current": version == current,
+                "rollbackable": version != current,
+            }
+        )
+    return versions
+
+
+def version_record(standard_id: str, version: int) -> dict:
+    _check_id(standard_id)
+    db.ensure_schema()
+    with db.engine().connect() as conn:
+        row = conn.execute(
+            select(db.standard_versions.c.data).where(
+                db.standard_versions.c.standard_id == standard_id,
+                db.standard_versions.c.version == int(version),
+            )
+        ).first()
+    if row is None or not row[0]:
+        raise KeyError(f"{standard_id}@{version}")
+    return dict(row[0])
+
+
+def clear_kb(standard_id: str) -> None:
+    """Drop the local KB document while keeping the review record."""
+    _check_id(standard_id)
+    db.ensure_schema()
+    with db.engine().begin() as conn:
+        conn.execute(
+            update(db.standards)
+            .where(db.standards.c.id == standard_id)
+            .values(kb=None)
+        )
+    try:
+        (_mirror_dir(standard_id) / "kb.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+

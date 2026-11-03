@@ -649,6 +649,33 @@ pre {
 .detail-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 5px; color: var(--muted); font-size: 11.5px; }
 .detail-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .detail-actions { flex: none; }
+.version-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0 4px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.version-strip-label { flex: none; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; padding-top: 3px; }
+.version-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.version-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+}
+.version-chip b { color: var(--ink-2); font: 700 11px ui-monospace, Consolas, monospace; }
+.version-chip.current { border-color: #b2ddff; background: var(--brand-soft); }
+.version-chip .link-btn { font-size: 11px; }
+
 .review-progress { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
 .progress { flex: 1; height: 7px; overflow: hidden; border-radius: 999px; background: #eef2f6; }
 .progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #1769aa, #38bdf8); transition: width .3s ease; }

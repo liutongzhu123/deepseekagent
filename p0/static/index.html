@@ -63,7 +63,7 @@
       </div>
     </nav>
     <div class="side-foot">
-      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.8.0</span></div>
+      <div class="side-status"><span class="dot"></span><span>内部受控环境</span><span class="ver">v0.8.1</span></div>
       <div class="user-card" id="userBox">
         <span class="avatar">··</span>
         <div class="user-meta"><b>正在确认登录状态…</b><span>请稍候</span></div>
@@ -79,7 +79,7 @@
       </div>
       <div class="topbar-right">
         <span class="env-pill"><span class="dot"></span>内部受控环境</span>
-        <span class="version-pill">P1 · v0.8.0</span>
+        <span class="version-pill">P1 · v0.8.1</span>
       </div>
     </header>
     <main class="content">
@@ -243,8 +243,13 @@
                 </div>
                 <div class="row detail-actions">
                   <button class="btn btn-secondary" id="exportBtn"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>导出 Excel</button>
+                  <button class="btn btn-secondary" id="unpublishBtn"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg>下架</button>
                   <button class="btn btn-primary" id="publishBtn"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>发布到知识库</button>
                 </div>
+              </div>
+              <div class="version-strip hidden" id="stdVersionStrip">
+                <span class="version-strip-label">修订记录</span>
+                <div class="version-list" id="stdVersionList"></div>
               </div>
               <div id="publishTaskBox" class="task-box compact hidden" aria-live="polite">
                 <div class="task-box-head"><b id="publishTaskTitle">后台发布任务</b><span class="pill neutral" id="publishTaskPill">排队中</span></div>

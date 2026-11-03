@@ -68,7 +68,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="中汽零部件 P1 API",
-    version="0.8.0",
+    version="0.8.1",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -580,6 +580,11 @@ class ItemPatch(BaseModel):
 
 class ReviewRequest(BaseModel):
     items: list[ItemPatch] = Field(default_factory=list)
+    reviewer: str = ""
+
+
+class RollbackRequest(BaseModel):
+    version: int = Field(ge=0)
     reviewer: str = ""
 
 
@@ -1344,6 +1349,78 @@ def publish_standard(standard_id: str, request: Request) -> dict:
         chunks=result.get("chunks", 0),
     )
     return result
+
+
+@app.get("/api/v1/standards/{standard_id}/versions")
+def list_standard_versions(standard_id: str, request: Request) -> dict:
+    user = _require_permission(request, "standard:read")
+    try:
+        record = standard_store.load(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
+    try:
+        versions = standard_store.list_versions(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    return {"versions": versions}
+
+
+@app.post("/api/v1/standards/{standard_id}/unpublish")
+def unpublish_standard(standard_id: str, request: Request) -> dict:
+    user = _require_permission(request, "standard:publish")
+    try:
+        record = standard_store.load(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
+    actor = user.get("display_name") or user["username"]
+    try:
+        result = standard_store.unpublish(standard_id, actor)
+    except weknora.WeKnoraError as exc:
+        raise HTTPException(status_code=502, detail=f"WeKnora 下架失败：{exc}") from exc
+    _audit_event(
+        request, user, "standard_unpublished", standard_id=standard_id,
+        removed=len(result.get("removed_knowledge_ids") or []),
+    )
+    return result
+
+
+@app.post("/api/v1/standards/{standard_id}/rollback")
+def rollback_standard(
+    standard_id: str, payload: RollbackRequest, request: Request
+) -> dict:
+    user = _require_permission(request, "standard:review")
+    try:
+        record = standard_store.load(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
+    current = int(record.get("revision", 0) or 0)
+    if payload.version >= current:
+        raise HTTPException(status_code=409, detail="只能回滚到更早的修订")
+    reviewer = payload.reviewer or user.get("display_name") or user["username"]
+    was_published = bool(record.get("published"))
+    try:
+        standard_store.version_record(standard_id, payload.version)
+    except KeyError as exc:
+        raise HTTPException(status_code=409, detail="该修订没有可回滚的快照") from exc
+    try:
+        if was_published:
+            standard_store.unpublish(standard_id, reviewer)
+        updated = standard_store.rollback(standard_id, payload.version, reviewer)
+    except KeyError as exc:
+        raise HTTPException(status_code=409, detail="该修订没有可回滚的快照") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except weknora.WeKnoraError as exc:
+        raise HTTPException(status_code=502, detail=f"WeKnora 下架失败：{exc}") from exc
+    _audit_event(
+        request, user, "standard_rolled_back", standard_id=standard_id,
+        from_version=payload.version, revision=updated.get("revision", 0),
+        unpublished=was_published,
+    )
+    return updated
 
 
 def _require_tasks_enabled() -> None:
