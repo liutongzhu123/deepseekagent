@@ -128,3 +128,15 @@ python scripts/report_inputs_check.py --dir /path/to/inbox --json
 cd p0
 python -m pytest tests/test_report_inputs.py -q
 ```
+
+## 9. 幂等导入（T107）
+
+```bash
+python scripts/report_inputs_import.py --dir /path/to/inbox \
+  --state data/report_inputs/imported.json
+```
+
+- 四类数据按业务主键去重：任务单号 / 原始记录号 / 样品编号 / 设备编号。
+- 输出 `success / skipped / failed` 清单；失败行带行号与原因，坏行不中断整批。
+- 状态文件只存业务主键与来源行号，不存客户字段值；重复导入同一批文件时 `success=0`、`skipped=N`。
+- 未找到文件、缺必填列、列名歧义进入 `failed`；同批重复与已导入进入 `skipped`。
