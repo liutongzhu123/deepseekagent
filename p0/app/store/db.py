@@ -130,6 +130,32 @@ Index("ix_audit_at", audit_events.c.at)
 Index("ix_audit_user", audit_events.c.user_name)
 Index("ix_audit_event", audit_events.c.event)
 
+tasks = Table(
+    "tasks",
+    metadata,
+    Column("id", String(48), primary_key=True),
+    Column("kind", String(32), nullable=False),
+    Column("status", String(16), nullable=False, default="queued"),
+    Column("stage", String(64), nullable=False, default=""),
+    Column("progress", Integer, nullable=False, default=0),
+    Column("payload", JSON_TYPE, nullable=False),
+    Column("result", JSON_TYPE),
+    Column("error", Text, nullable=False, default=""),
+    Column("attempts", Integer, nullable=False, default=0),
+    Column("max_attempts", Integer, nullable=False, default=2),
+    Column("cancel_requested", Boolean, nullable=False, default=False),
+    Column("created_by", String(64), nullable=False, default=""),
+    Column("project", String(128), nullable=False, default=""),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("worker_id", String(64), nullable=False, default=""),
+    Column("lease_until", DateTime(timezone=True)),
+)
+Index("ix_tasks_status", tasks.c.status, tasks.c.created_at)
+Index("ix_tasks_creator", tasks.c.created_by, tasks.c.created_at)
+
 files = Table(
     "files",
     metadata,

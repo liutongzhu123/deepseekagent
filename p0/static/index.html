@@ -79,7 +79,7 @@
       </div>
       <div class="topbar-right">
         <span class="env-pill"><span class="dot"></span>内部受控环境</span>
-        <span class="version-pill">P1 · v0.7.2</span>
+        <span class="version-pill">P1 · v0.7.3</span>
       </div>
     </header>
     <main class="content">
@@ -210,6 +210,12 @@
               <input type="text" id="stdProject" class="mt-10" placeholder="项目标识（受限账号必填，留空=不限定）">
               <button class="btn btn-primary btn-block mt-10" id="parseBtn"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg>解析标准</button>
               <div class="muted mt-8" id="parseStatus">扫描件会自动启用本地 OCR，耗时约 1–2 分钟。</div>
+              <div id="stdTaskBox" class="task-box hidden" aria-live="polite">
+                <div class="task-box-head"><b id="stdTaskTitle">后台解析任务</b><span class="pill neutral" id="stdTaskPill">排队中</span></div>
+                <div class="progress"><i id="stdTaskBar" style="width:0%"></i></div>
+                <div class="task-box-foot"><span id="stdTaskStage">等待 worker 取任务…</span><button type="button" class="btn btn-secondary btn-sm hidden" id="stdTaskCancel">取消任务</button></div>
+              </div>
+              <div id="stdTaskError" class="banner danger hidden mt-10"></div>
             </div>
           </aside>
           <section class="card std-main">
@@ -232,6 +238,12 @@
                   <button class="btn btn-primary" id="publishBtn"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg>发布到知识库</button>
                 </div>
               </div>
+              <div id="publishTaskBox" class="task-box compact hidden" aria-live="polite">
+                <div class="task-box-head"><b id="publishTaskTitle">后台发布任务</b><span class="pill neutral" id="publishTaskPill">排队中</span></div>
+                <div class="progress"><i id="publishTaskBar" style="width:0%"></i></div>
+                <div class="task-box-foot"><span id="publishTaskStage">等待 worker 取任务…</span><button type="button" class="btn btn-secondary btn-sm hidden" id="publishTaskCancel">取消任务</button></div>
+              </div>
+              <div id="publishTaskError" class="banner danger hidden mt-10"></div>
               <div class="kpi-grid" id="stdStats"></div>
               <div class="progress-row" id="reviewProgress"></div>
               <div id="stdWarnings"></div>

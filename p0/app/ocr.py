@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 from io import BytesIO
 from typing import Any
 
@@ -212,6 +213,7 @@ def ocr_pdf(
     max_pages: int | None = None,
     min_line_confidence: float = 0.35,
     engine: Any | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> OcrResult:
     """Render a PDF and OCR every page, preserving reading order.
 
@@ -248,6 +250,8 @@ def ocr_pdf(
             else 0.0
         )
         pages.append(OcrPage(page=index + 1, lines=lines, confidence=confidence))
+        if progress is not None:
+            progress(index + 1, limit)
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return OcrResult(
