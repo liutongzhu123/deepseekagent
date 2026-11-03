@@ -131,6 +131,172 @@ def ping(cfg: WeKnoraConfig | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge-base administration (read/write helpers for ops scripts)
+# ---------------------------------------------------------------------------
+def get_knowledge_base(cfg: WeKnoraConfig | None = None) -> dict:
+    cfg = cfg or config_from_env()
+    if cfg is None:
+        raise WeKnoraUnavailable("未配置 WeKnora")
+    try:
+        with _client(cfg) as client:
+            payload = _check(client.get(f"/api/v1/knowledge-bases/{cfg.kb_id}"))
+    except httpx.HTTPError as exc:
+        raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+    return payload.get("data") or {}
+
+
+def list_models(cfg: WeKnoraConfig | None = None) -> list[dict]:
+    cfg = cfg or config_from_env()
+    if cfg is None:
+        raise WeKnoraUnavailable("未配置 WeKnora")
+    try:
+        with _client(cfg) as client:
+            payload = _check(client.get("/api/v1/models"))
+    except httpx.HTTPError as exc:
+        raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+    data = payload.get("data") or []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def list_knowledge_page(
+    *,
+    page: int = 1,
+    page_size: int = 100,
+    parse_status: str = "",
+    keyword: str = "",
+    cfg: WeKnoraConfig | None = None,
+) -> dict:
+    cfg = cfg or config_from_env()
+    if cfg is None:
+        raise WeKnoraUnavailable("未配置 WeKnora")
+    params: dict[str, Any] = {"page": max(1, int(page)), "page_size": max(1, min(int(page_size), 200))}
+    if parse_status:
+        params["parse_status"] = parse_status
+    if keyword:
+        params["keyword"] = keyword
+    try:
+        with _client(cfg) as client:
+            payload = _check(
+                client.get(f"/api/v1/knowledge-bases/{cfg.kb_id}/knowledge", params=params)
+            )
+    except httpx.HTTPError as exc:
+        raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+    return {
+        "items": [item for item in (payload.get("data") or []) if isinstance(item, dict)],
+        "total": int(payload.get("total") or 0),
+        "page": int(payload.get("page") or page),
+        "page_size": int(payload.get("page_size") or page_size),
+    }
+
+
+def iter_knowledge(
+    *,
+    max_pages: int = 50,
+    page_size: int = 100,
+    parse_status: str = "",
+    cfg: WeKnoraConfig | None = None,
+) -> list[dict]:
+    """Read every knowledge document, bounded so an ops run cannot loop forever."""
+    cfg = cfg or config_from_env()
+    items: list[dict] = []
+    page = 1
+    while page <= max(1, int(max_pages)):
+        result = list_knowledge_page(
+            page=page, page_size=page_size, parse_status=parse_status, cfg=cfg
+        )
+        items.extend(result["items"])
+        if len(result["items"]) < result["page_size"]:
+            break
+        if result["total"] and len(items) >= result["total"]:
+            break
+        page += 1
+    return items
+
+
+def delete_knowledge(knowledge_id: str, cfg: WeKnoraConfig | None = None) -> dict:
+    cfg = cfg or config_from_env()
+    if cfg is None:
+        raise WeKnoraUnavailable("未配置 WeKnora")
+    if not (knowledge_id or "").strip():
+        raise WeKnoraError("缺少知识 ID")
+    try:
+        with _client(cfg) as client:
+            return _check(client.delete(f"/api/v1/knowledge/{knowledge_id}"))
+    except httpx.HTTPError as exc:
+        raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+
+
+def update_custom_metadata(
+    knowledge_id: str, metadata: dict, cfg: WeKnoraConfig | None = None
+) -> dict:
+    cfg = cfg or config_from_env()
+    if cfg is None:
+        raise WeKnoraUnavailable("未配置 WeKnora")
+    try:
+        with _client(cfg) as client:
+            payload = _check(
+                client.put(
+                    f"/api/v1/knowledge/{knowledge_id}",
+                    json={"custom_metadata": metadata},
+                )
+            )
+    except httpx.HTTPError as exc:
+        raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+    return payload.get("data") or {}
+
+
+def update_summary_model(model_id: str, cfg: WeKnoraConfig | None = None) -> dict:
+    cfg = cfg or config_from_env()
+    if cfg is None:
+        raise WeKnoraUnavailable("未配置 WeKnora")
+    if not (model_id or "").strip():
+        raise WeKnoraError("缺少摘要模型 ID")
+    try:
+        with _client(cfg) as client:
+            payload = _check(
+                client.patch(
+                    f"/api/v1/knowledge-bases/{cfg.kb_id}",
+                    json={"summary_model_id": model_id},
+                )
+            )
+    except httpx.HTTPError as exc:
+        raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+    return payload.get("data") or {}
+
+
+def regenerate_summary(knowledge_id: str, cfg: WeKnoraConfig | None = None) -> dict:
+    cfg = cfg or config_from_env()
+    if cfg is None:
+        raise WeKnoraUnavailable("未配置 WeKnora")
+    try:
+        with _client(cfg) as client:
+            payload = _check(
+                client.post(f"/api/v1/knowledge/{knowledge_id}/regenerate-summary")
+            )
+    except httpx.HTTPError as exc:
+        raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+    return payload.get("data") or {}
+
+
+def find_publications(
+    title: str, cfg: WeKnoraConfig | None = None, standard_id: str = ""
+) -> list[dict]:
+    """Match a publication by deterministic title or P0 standard ID metadata."""
+    wanted = (title or "").strip()
+    wanted_id = (standard_id or "").strip()
+    if not wanted and not wanted_id:
+        return []
+    matches: list[dict] = []
+    for item in iter_knowledge(cfg=cfg):
+        item_title = str(item.get("title") or "").strip()
+        metadata = item.get("custom_metadata") or {}
+        item_id = str(metadata.get("p0_standard_id") or "").strip()
+        if (wanted and item_title == wanted) or (wanted_id and item_id == wanted_id):
+            matches.append(item)
+    return matches
+
+
+# ---------------------------------------------------------------------------
 # Publication
 # ---------------------------------------------------------------------------
 def _record_header(record: dict) -> str:
@@ -200,6 +366,18 @@ def publish_standard(record: dict, chunks: list[dict], cfg: WeKnoraConfig | None
     content = render_markdown(record, chunks)
     title = _knowledge_title(record)
     previous = (record.get("weknora") or {}).get("knowledge_id") or ""
+    matches: list[dict] = []
+    dedupe_error = ""
+    if not previous:
+        # A lost/old local knowledge_id must not create a duplicate publication:
+        # find the existing document by its deterministic title first.  A key
+        # without list permission still gets to publish (no dedupe, with a
+        # warning) instead of failing the whole operation.
+        try:
+            matches = find_publications(title, cfg, str(record.get('id', '')))
+        except WeKnoraError as exc:
+            dedupe_error = str(exc)
+        previous = _canonical_knowledge_id(matches)
     try:
         with _client(cfg) as client:
             knowledge_id = ""
@@ -211,9 +389,23 @@ def publish_standard(record: dict, chunks: list[dict], cfg: WeKnoraConfig | None
                 )
                 if response.status_code == 404:
                     previous = ""
+                    try:
+                        matches = find_publications(title, cfg, str(record.get('id', '')))
+                    except WeKnoraError as exc:
+                        dedupe_error = str(exc)
                 else:
                     payload = _check(response)
                     knowledge_id = (payload.get("data") or {}).get("id") or previous
+                    updated = True
+            if not knowledge_id and matches:
+                existing = _canonical_knowledge_id(matches)
+                if existing:
+                    response = client.put(
+                        f"/api/v1/knowledge/manual/{existing}",
+                        json={"title": title, "content": content, "status": "publish"},
+                    )
+                    payload = _check(response)
+                    knowledge_id = (payload.get("data") or {}).get("id") or existing
                     updated = True
             if not knowledge_id:
                 response = client.post(
@@ -225,19 +417,57 @@ def publish_standard(record: dict, chunks: list[dict], cfg: WeKnoraConfig | None
                 if not knowledge_id:
                     raise WeKnoraError("WeKnora 未返回知识 ID")
             parse_status = _wait_for_index(client, knowledge_id)
-            return {
-                "ok": True,
-                "kb_id": cfg.kb_id,
-                "knowledge_id": knowledge_id,
-                "title": title,
-                "chars": len(content),
-                "chunks": len(chunks),
-                "updated": updated,
-                "parse_status": parse_status,
-                "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
     except httpx.HTTPError as exc:
         raise WeKnoraUnavailable(f"无法连接 WeKnora：{exc}") from exc
+
+    meta = record.get("meta") or {}
+    metadata = {
+        "p0_standard_id": str(record.get("id", "")),
+        "p0_standard_no": str(meta.get("standard_no", "")),
+        "p0_name": str(meta.get("name", ""))[:200],
+        "p0_revision": int(record.get("revision", 0)),
+        "p0_project": str(meta.get("project", "")),
+    }
+    metadata_updated = False
+    metadata_error = ""
+    try:
+        update_custom_metadata(knowledge_id, metadata, cfg)
+        metadata_updated = True
+    except WeKnoraError as exc:
+        # Publication itself succeeded; keep the warning for the API/ops report.
+        metadata_error = str(exc)
+    return {
+        "ok": True,
+        "kb_id": cfg.kb_id,
+        "knowledge_id": knowledge_id,
+        "title": title,
+        "chars": len(content),
+        "chunks": len(chunks),
+        "updated": updated,
+        "parse_status": parse_status,
+        "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "deduped": bool(matches),
+        "duplicates": max(0, len(matches) - 1),
+        "metadata_updated": metadata_updated,
+        "metadata_error": metadata_error,
+        "dedupe_error": dedupe_error,
+    }
+
+
+def _canonical_knowledge_id(matches: list[dict]) -> str:
+    """Pick the best existing document when several share the same title."""
+    if not matches:
+        return ""
+    def sort_key(item: dict) -> tuple:
+        status = str(item.get("parse_status") or "")
+        return (
+            1 if status == "completed" else 0,
+            str(item.get("updated_at") or item.get("created_at") or ""),
+        )
+    best = max(matches, key=sort_key)
+    return str(best.get("id") or "")
+
+
 
 
 # ---------------------------------------------------------------------------

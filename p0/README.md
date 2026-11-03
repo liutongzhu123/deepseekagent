@@ -59,6 +59,14 @@ P1 异步任务增量（0.7.3，P1-2）：
 - **兼容**——`P0_TASKS_ENABLED=0`（默认）或小文本 PDF 仍走原同步路径，API 字段不变；
 - 运行手册与限制见 [`docs/p1-async-tasks/README.md`](../docs/p1-async-tasks/README.md)。
 
+P1 WeKnora 运营与评测增量（0.7.3，P1-3）：
+
+- **发布幂等**——本地 `knowledge_id` 失效或缺失时，按确定性标题查找已有知识并更新；多个同名保留 completed/最新的一条；
+- **元数据对齐**——发布后写 `custom_metadata`（P0 标准 ID、标准号、名称、修订、项目），供去重与引用核对；
+- **运营脚本**——`scripts/weknora_ops.py` 只读体检摘要模型/解析状态/重复/失败，`--apply` 才清理；支持配置摘要模型；
+- **评测基线**——`scripts/run_weknora_eval.py` + 22 条 demo 问答集，输出命中率/拒答率/引用准确率/延迟；
+- 运行手册与限制见 [`docs/p1-weknora-ops/README.md`](../docs/p1-weknora-ops/README.md)。
+
 ## 运行
 
 ```bash
@@ -201,6 +209,9 @@ API 返回 `sales_quote_skipped_reason`。这保证报价金额不会由模型�
 守卫：条款号必须存在、标准号必须在库、相关度低于 `P0_WEKNORA_MIN_SCORE`（默认 0.35）时明确拒答。
 标准发布时 `POST /api/v1/standards/{id}/publish` 会写入 WeKnora 的 P0 业务专用知识库；
 重复发布更新同一条 knowledge；本地 `kb.json` 保留审计副本与 `weknora.knowledge_id`。
+发布失败或本地 ID 丢失时，会按 `P0 | 标准号 | 标准名` 查找已有文档并更新，避免重复上传；
+同时写入 `custom_metadata`（标准 ID/标准号/修订/项目）。运营与评测脚本见
+[`docs/p1-weknora-ops/README.md`](../docs/p1-weknora-ops/README.md)。
 
 问答只返回条款原文与标准号/条款/页码引用；标准或条款不在库时明确回答「未找到」，不编造。
 
