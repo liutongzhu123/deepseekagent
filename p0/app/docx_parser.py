@@ -69,6 +69,9 @@ class ReportData:
     test_end: str = ""
     approval_date: str = ""
     template_family: str = ""
+    toc_entries: list[dict] = field(default_factory=list)
+    font_sizes: list[float] = field(default_factory=list)
+    font_names: list[str] = field(default_factory=list)
     paragraphs: list[str] = field(default_factory=list)
     tables: list[list[list[Cell]]] = field(default_factory=list)
 
@@ -219,6 +222,50 @@ def _parse_result_rows(table: list[list[Cell]]) -> tuple[list[float], float | No
         if idx_judgment is not None and idx_judgment < len(row) and not judgment:
             judgment = row[idx_judgment].text.strip()
     return scores, mean, limit, judgment
+
+
+TOC_LINE_RE = re.compile(r"^(?P<title>.+?)\s*[…\.·]{2,}\s*\(?(\d+)\)?\s*$")
+
+
+def _parse_toc(paragraphs: list[str]) -> list[dict]:
+    marker = next(
+        (index for index, line in enumerate(paragraphs) if re.sub(r"\s+", "", line) == "目录"),
+        None,
+    )
+    if marker is None:
+        return []
+    entries: list[dict] = []
+    for line in paragraphs[marker + 1 :]:
+        match = TOC_LINE_RE.match(line.strip())
+        if not match:
+            if entries:
+                break
+            continue
+        title = match.group("title").strip().rstrip(".．·… ")
+        entries.append({"title": title, "page": int(match.group(2))})
+    return entries
+
+
+def _style_summary(root: ET.Element) -> tuple[list[float], list[str]]:
+    sizes: set[float] = set()
+    names: set[str] = set()
+    for run in root.iter(_q("r")):
+        rpr = run.find(_q("rPr"))
+        if rpr is None:
+            continue
+        size = rpr.find(_q("sz"))
+        if size is not None:
+            try:
+                sizes.add(int(size.attrib.get(_q("val"), "0")) / 2)
+            except ValueError:
+                pass
+        fonts = rpr.find(_q("rFonts"))
+        if fonts is not None:
+            for key in ("ascii", "eastAsia", "hAnsi"):
+                value = fonts.attrib.get(_q(key))
+                if value:
+                    names.add(value)
+    return sorted(sizes), sorted(names)
 
 
 def _part_texts(zf: zipfile.ZipFile, prefix: str) -> list[str]:
@@ -377,6 +424,8 @@ def parse_docx(path: str | Path) -> ReportData:
     signature_text = " | ".join(signatures)
 
     highlights, red_runs = _count_markup(root)
+    toc_entries = _parse_toc(paragraphs)
+    font_sizes, font_names = _style_summary(root)
     external_images = xml_text.count("INCLUDEPICTURE")
 
     basis = summary.get("检验依据", "")
@@ -418,6 +467,9 @@ def parse_docx(path: str | Path) -> ReportData:
         test_end=test_end,
         approval_date=approval_date,
         template_family=template_family,
+        toc_entries=toc_entries,
+        font_sizes=font_sizes,
+        font_names=font_names,
         paragraphs=paragraphs,
         tables=tables,
     )
