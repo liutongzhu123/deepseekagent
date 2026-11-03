@@ -72,6 +72,7 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
     "quote:parse": ("admin", "sales"),
     "quote:generate": ("admin", "sales"),
     "quote:download": ("admin", "sales"),
+    "crm:read": ("admin", "reviewer", "sales"),
     "kb:rebuild": ("admin",),
     "kb:stats": ("admin", "reviewer", "sales", "viewer"),
     "user:manage": ("admin",),

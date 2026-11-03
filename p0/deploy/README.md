@@ -51,6 +51,13 @@ P0_STORE=json
 # P0_TASKS_PUBLISH_ASYNC=1
 # P0_TASKS_ASYNC_MIN_MB=5
 # P0_TASKS_LEASE_SECONDS=900
+
+# P1-5 CRM 只读适配（先用客户导出，接口就绪后替换）
+# P0_CRM_MODE=off
+# P0_CRM_PATH=/opt/cq-ai-p0/data/crm/export.xlsx
+# P0_CRM_REQUIRED=0
+# P0_CRM_API_BASE_URL=
+# P0_CRM_API_KEY=
 ```
 
 - `P0_STORE=postgres` 的完整迁移/对账/回滚步骤见 `docs/p1-data-layer/README.md`；
