@@ -127,6 +127,28 @@ Index("ix_report_audits_project", report_audits.c.project)
 Index("ix_report_audits_created_at", report_audits.c.created_at)
 Index("ix_report_audits_batch", report_audits.c.batch_id)
 
+qa_feedback = Table(
+    "qa_feedback",
+    metadata,
+    Column("id", String(64), primary_key=True),
+    Column("at", DateTime(timezone=True), nullable=False),
+    Column("user_name", String(64), nullable=False, default=""),
+    Column("role", String(16), nullable=False, default=""),
+    Column("rating", String(16), nullable=False, default=""),
+    Column("reason", String(64), nullable=False, default=""),
+    Column("comment", Text, nullable=False, default=""),
+    Column("question", Text, nullable=False, default=""),
+    Column("answer_excerpt", Text, nullable=False, default=""),
+    Column("standard_id", String(64), nullable=False, default=""),
+    Column("clause", String(128), nullable=False, default=""),
+    Column("retrieval_mode", String(32), nullable=False, default=""),
+    Column("citations", JSON_TYPE, nullable=False),
+    Column("project", String(128), nullable=False, default=""),
+)
+Index("ix_qa_feedback_at", qa_feedback.c.at)
+Index("ix_qa_feedback_rating", qa_feedback.c.rating)
+Index("ix_qa_feedback_project", qa_feedback.c.project)
+
 audit_events = Table(
     "audit_events",
     metadata,

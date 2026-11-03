@@ -367,3 +367,29 @@ def test_quote_history_roundtrip(pg):
     assert [row["quote_id"] for row in rows] == [quote_id]
     assert rows[0]["project"] == "P1"
     assert rows[0]["has_sales_quote"] is False
+
+
+def test_qa_feedback_roundtrip(pg):
+    from app import feedback_store
+
+    record = {
+        "id": "fb_20261103030303_abcdef",
+        "at": "2026-11-03T03:03:03+00:00",
+        "user": "alice",
+        "role": "reviewer",
+        "rating": "not_helpful",
+        "reason": "引用不对",
+        "comment": "条款页码对不上",
+        "question": "气味等级要求？",
+        "answer_excerpt": "气味等级≤3.0级",
+        "standard_id": STANDARD_ID,
+        "clause": "5.1",
+        "retrieval_mode": "keyword-fallback",
+        "citations": [{"standard_id": STANDARD_ID, "clause": "5.1"}],
+        "project": "P1",
+    }
+    feedback_store.create(record)
+    rows = feedback_store.list_feedback()
+    assert [row["id"] for row in rows] == [record["id"]]
+    assert rows[0]["rating"] == "not_helpful"
+    assert rows[0]["citations"][0]["clause"] == "5.1"

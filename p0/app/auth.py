@@ -70,6 +70,7 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
     "standard:project": ("admin",),
     "standard:publish": ("admin", "reviewer"),
     "standard:ask": ("admin", "reviewer", "sales", "viewer"),
+    "feedback:read": ("admin",),
     "quote:parse": ("admin", "sales"),
     "quote:generate": ("admin", "sales"),
     "quote:download": ("admin", "sales"),

@@ -6,6 +6,7 @@ review workbenches can call them without coupling to parser internals.
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 import logging
 import os
 import re
@@ -32,7 +33,7 @@ from . import admin_config
 from . import auth
 from . import quote as quote_service
 from . import crm, monitoring, quote_store, store, task_worker
-from . import report_store, report_writer, standard_parse, standard_qa, standard_store, weknora
+from . import feedback_store, report_store, report_writer, standard_parse, standard_qa, standard_store, weknora
 from . import xlsx_writer
 from .store import tasks
 from .docx_parser import parse_docx
@@ -68,7 +69,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="中汽零部件 P1 API",
-    version="0.8.2",
+    version="0.8.3",
     root_path=ROOT_PATH,
     description="Multi-user report review, standard parsing, quote draft and WeKnora-cited Q&A.",
 )
@@ -594,6 +595,18 @@ class AskRequest(BaseModel):
     mode: str = "auto"
     min_score: float | None = None
     top_k: int | None = None
+
+
+class FeedbackRequest(BaseModel):
+    question: str = ""
+    answer: str = ""
+    rating: str
+    reason: str = ""
+    comment: str = ""
+    standard_id: str = ""
+    clause: str = ""
+    retrieval_mode: str = ""
+    citations: list[dict] = Field(default_factory=list)
 
 
 @app.get("/metrics")
@@ -1513,6 +1526,83 @@ def ask_standard(payload: AskRequest, request: Request) -> dict:
         mode=(answer.get("retrieval") or {}).get("mode", ""),
     )
     return answer
+
+
+_FEEDBACK_RATINGS = {"helpful", "not_helpful"}
+
+
+def _feedback_text(value: object, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+@app.post("/api/v1/standards/ask/feedback")
+def record_ask_feedback(payload: FeedbackRequest, request: Request) -> dict:
+    user = _require_permission(request, "standard:ask")
+    rating = (payload.rating or "").strip()
+    if rating not in _FEEDBACK_RATINGS:
+        raise HTTPException(status_code=422, detail="rating 必须是 helpful 或 not_helpful")
+    project = ""
+    if payload.standard_id:
+        try:
+            standard = standard_store.load(payload.standard_id)
+        except KeyError:
+            project = ""
+        else:
+            _assert_project_access(user, standard.get("meta", {}))
+            project = (standard.get("meta") or {}).get("project", "")
+    citations: list[dict] = []
+    for item in (payload.citations or [])[:10]:
+        if not isinstance(item, dict):
+            continue
+        standard_id = str(item.get("standard_id", ""))[:64]
+        clause = str(item.get("clause", ""))[:64]
+        if standard_id or clause:
+            citations.append({"standard_id": standard_id, "clause": clause})
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    record = {
+        "id": "fb_" + datetime.now().strftime("%Y%m%d%H%M%S") + "_" + secrets.token_hex(3),
+        "at": at,
+        "user": user.get("username", ""),
+        "role": user.get("role", ""),
+        "rating": rating,
+        "reason": _feedback_text(payload.reason, 64),
+        "comment": _feedback_text(payload.comment, 500),
+        "question": _feedback_text(payload.question, 1000),
+        "answer_excerpt": _feedback_text(payload.answer, 2000),
+        "standard_id": _feedback_text(payload.standard_id, 64),
+        "clause": _feedback_text(payload.clause, 128),
+        "retrieval_mode": _feedback_text(payload.retrieval_mode, 32),
+        "citations": citations,
+        "project": project,
+    }
+    feedback_store.create(record)
+    _audit_event(
+        request, user, "standard_ask_feedback", rating=rating,
+        standard_id=record["standard_id"], clause=record["clause"],
+    )
+    return {"id": record["id"], "at": record["at"], "rating": rating}
+
+
+@app.get("/api/v1/kb/feedback")
+def list_qa_feedback(request: Request, limit: int = 20, offset: int = 0) -> dict:
+    _require_permission(request, "feedback:read")
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    rows = feedback_store.list_feedback()
+    helpful = sum(1 for row in rows if row.get("rating") == "helpful")
+    not_helpful = sum(1 for row in rows if row.get("rating") == "not_helpful")
+    reasons = Counter(
+        str(row.get("reason", ""))
+        for row in rows
+        if row.get("rating") == "not_helpful" and row.get("reason")
+    )
+    return {
+        "totals": {"total": len(rows), "helpful": helpful, "not_helpful": not_helpful},
+        "reasons": [{"reason": reason, "count": count} for reason, count in reasons.most_common(6)],
+        "items": rows[offset:offset + limit],
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 # ---------------------------------------------------------------------------
