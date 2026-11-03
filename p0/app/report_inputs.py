@@ -18,6 +18,7 @@ No file is uploaded anywhere.  The caller owns the local directory.
 from __future__ import annotations
 
 import csv
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -295,3 +296,102 @@ def load_inputs(directory: str | Path) -> InputsSnapshot:
         snapshot.warnings.extend(warnings)
         snapshot.errors.extend(errors)
     return snapshot
+
+
+def _read_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"version": 1, "datasets": {}}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("datasets"), dict):
+        raise ValueError("导入状态文件格式不正确")
+    return data
+
+
+def _write_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    temporary.replace(path)
+
+
+def import_inputs(directory: str | Path, state_path: str | Path | None = None) -> dict[str, Any]:
+    """Import the four inbox datasets with business-key idempotency.
+
+    Returns explicit ``success`` / ``skipped`` / ``failed`` lists; a bad row is
+    reported with its row number and does not abort the rest of the batch.  The
+    optional JSON state stores only business keys (no row values) so a second
+    import of the same export is a no-op.
+    """
+    root = Path(directory).expanduser()
+    state_file = Path(state_path).expanduser() if state_path else None
+    state = {"version": 1, "datasets": {}}
+    warnings: list[str] = []
+    if state_file is not None:
+        try:
+            state = _read_state(state_file)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            warnings.append(f"导入状态读取失败，按空状态继续：{exc}")
+    datasets = state.setdefault("datasets", {})
+
+    success: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    if not root.is_dir():
+        failed.append({"dataset": "*", "label": "目录", "row": 0, "key": "", "reason": f"目录不存在：{root}"})
+        return {"success": success, "skipped": skipped, "failed": failed, "counts": {"success": 0, "skipped": 0, "failed": 1}, "warnings": warnings, "state_path": str(state_file or "")}
+
+    for spec in DATASETS.values():
+        path, file_warnings = _find_file(root, spec)
+        warnings.extend(file_warnings)
+        if path is None:
+            failed.append({"dataset": spec.name, "label": spec.label, "row": 0, "key": "", "reason": "未找到文件"})
+            continue
+        try:
+            headers, raw_rows = _read_csv(path) if path.suffix.lower() == ".csv" else _read_xlsx(path)
+        except Exception as exc:  # noqa: BLE001 - optional file boundary
+            failed.append({"dataset": spec.name, "label": spec.label, "row": 0, "key": "", "reason": f"读取失败：{exc}"})
+            continue
+        mapping, unknown, ambiguous = _alias_index(spec, headers)
+        if unknown:
+            warnings.append(f"{spec.label}：忽略未识别列 " + "、".join(unknown))
+        missing = [name for name in spec.required if name not in mapping]
+        if missing or ambiguous:
+            reason = "缺少必填列 " + "、".join(missing) if missing else "列名重复映射到 " + "、".join(ambiguous)
+            failed.append({"dataset": spec.name, "label": spec.label, "row": 0, "key": "", "reason": reason})
+            continue
+
+        seen_batch: set[str] = set()
+        imported = datasets.setdefault(spec.name, {})
+        for offset, raw in enumerate(raw_rows, start=2):
+            if not any(_text(cell) for cell in raw):
+                continue
+            row = {
+                canonical: _text(raw[index]) if index < len(raw) else ""
+                for canonical, index in mapping.items()
+            }
+            key = row.get(spec.key, "")
+            if not key:
+                failed.append({"dataset": spec.name, "label": spec.label, "row": offset, "key": "", "reason": f"缺少主键 {spec.key}"})
+                continue
+            if key in seen_batch:
+                skipped.append({"dataset": spec.name, "label": spec.label, "row": offset, "key": key, "reason": "批次内重复"})
+                continue
+            seen_batch.add(key)
+            if key in imported:
+                skipped.append({"dataset": spec.name, "label": spec.label, "row": offset, "key": key, "reason": "已导入"})
+                continue
+            imported[key] = {"row": offset, "file": path.name}
+            success.append({"dataset": spec.name, "label": spec.label, "row": offset, "key": key})
+
+    if state_file is not None:
+        _write_state(state_file, state)
+    counts = {"success": len(success), "skipped": len(skipped), "failed": len(failed)}
+    return {
+        "success": success,
+        "skipped": skipped,
+        "failed": failed,
+        "counts": counts,
+        "warnings": warnings,
+        "state_path": str(state_file or ""),
+    }

@@ -85,7 +85,7 @@
 - **需要人给**：XG 变更报告样例 2–3 份、第二主机厂报告样例
 
 ### T106 · 12 项检查输出标准化（证据 / 建议 / 定位）
-- **状态**：`pr-open`  **依赖**：T102、T103  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
+- **状态**：`merged`  **依赖**：T102、T103  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 每条规则结果统一含：`rule_id / 结论 / 严重级别 / 定位(页-段-单元格) / 证据 / 建议`
   - 12 份草稿导出 JSON 后，6 个 fail 项（R01/R02/R03/R04/R09/R10）定位准确率 100%
@@ -93,7 +93,7 @@
 - **涉及**：`p0/app/rules.py`、`p0/app/report_writer.py`
 
 ### T107 · Excel/CSV 适配收尾（四类 + 失败清单 + 幂等）
-- **状态**：`todo`  **依赖**：无（基线已合入 #30）  **分支**：`feat/T107-import-finish`
+- **状态**：`pr-open`  **依赖**：无（基线已合入 #30）  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 任务单 / 原始记录 / 样品 / 设备 四类导入，按业务主键（任务单号/样品编号/报告编号）幂等去重
   - 导入结果产出 `success / skipped / failed` 清单，失败行给出行号与原因
@@ -139,8 +139,8 @@
 | T103 | `merged` | #40 | 绿 | 目录页码 + 字体/字号 + R07 校验 |
 | T104 | `merged` | #41 | 绿 | PDF 文本层/OCR + R01–R04 skip |
 | T105 | `blocked` | — | — | 缺 XG/第二主机厂样例 |
-| T106 | `pr-open` | #46 | pending | 页/段/单元格定位 + Markdown 定位列 |
-| T107 | `todo` | — | — | — |
+| T106 | `merged` | #46 | 绿 | 页/段/单元格定位 + Markdown 定位列 |
+| T107 | `pr-open` | #47 | pending | 幂等导入 + 失败清单 |
 | T108 | `todo` | — | — | — |
 | T109 | `todo` | — | — | 阶段门禁 |
 | T110 | `todo` | — | — | 阶段门禁 |
