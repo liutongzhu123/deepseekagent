@@ -28,6 +28,11 @@ def _inbox(tmp_path: Path) -> Path:
         "记录编号,报告编号,样品编号,检验日期,设备编号\n"
         "REC-001,QA17LX1LDT861,TS24LXJ8A-01,2025-03-03,NJ.18.91.662\n",
     )
+    _write(
+        tmp_path / "equipment.csv",
+        "设备编号,设备名称,溯源有效期,状态\n"
+        "NJ.18.91.662,袋式法环境舱,2026-12-03,正常\n",
+    )
     return tmp_path
 
 
@@ -64,7 +69,8 @@ def test_crosscheck_passes_with_matching_inputs(tmp_path):
     assert statuses["X01"] == "pass"
     assert statuses["X02"] == "pass"
     assert statuses["X03"] == "pass"
-    assert result["summary"]["total"] == 14
+    assert statuses["X04"] == "skip"
+    assert result["summary"]["total"] == 15
 
 
 def test_crosscheck_flags_task_order_mismatch(tmp_path):
@@ -135,4 +141,42 @@ def test_audit_endpoint_includes_crosschecks(tmp_path, monkeypatch):
     payload = response.json()
     statuses = {item["rule_id"]: item["status"] for item in payload["findings"]}
     assert statuses["X01"] == "pass"
-    assert payload["summary"]["total"] == 14
+    assert payload["summary"]["total"] == 15
+
+
+def test_crosscheck_equipment_passes(tmp_path):
+    snapshot = load_inputs(_inbox(tmp_path))
+    devices = [{"device_id": "NJ.18.91.662", "device_name": "袋式法环境舱", "valid_until": "2026-12-03"}]
+
+    result = audit_report(_report(devices=devices), inputs=snapshot)
+    finding = next(item for item in result["findings"] if item["rule_id"] == "X04")
+
+    assert finding["status"] == "pass"
+    assert "1 台" in finding["message"]
+
+
+def test_crosscheck_equipment_expired_or_disabled(tmp_path):
+    _write(
+        tmp_path / "equipment.csv",
+        "设备编号,设备名称,溯源有效期,状态\n"
+        "NJ.18.91.662,袋式法环境舱,2024-01-01,停用\n",
+    )
+    snapshot = load_inputs(tmp_path)
+    devices = [{"device_id": "NJ.18.91.662", "device_name": "袋式法环境舱", "valid_until": "2026-12-03"}]
+
+    result = audit_report(_report(devices=devices), inputs=snapshot)
+    finding = next(item for item in result["findings"] if item["rule_id"] == "X04")
+
+    assert finding["status"] == "fail"
+    assert "台账有效期" in finding["evidence"]
+    assert "停用" in finding["evidence"]
+
+
+def test_crosscheck_equipment_skips_without_ledger(tmp_path):
+    snapshot = load_inputs(_inbox(tmp_path))
+    devices = [{"device_id": "UNKNOWN", "device_name": "未知设备", "valid_until": "2026-12-03"}]
+
+    result = audit_report(_report(devices=devices), inputs=snapshot)
+    finding = next(item for item in result["findings"] if item["rule_id"] == "X04")
+
+    assert finding["status"] == "skip"
