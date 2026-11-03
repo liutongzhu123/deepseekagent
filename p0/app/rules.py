@@ -157,6 +157,11 @@ def _skip(rule_id: str, title: str, message: str) -> Finding:
 
 
 def r01_header(data: ReportData) -> Finding:
+    if data.source_format in {"pdf", "ocr"}:
+        if not data.cover_number:
+            return _skip("R01", "页眉报告编号一致", f"{data.source_format.upper()} 未识别到报告编号，无法核对")
+        if not data.header_numbers:
+            return _skip("R01", "页眉报告编号一致", f"{data.source_format.upper()} 未识别到页眉编号，无法核对")
     if not data.cover_number:
         return _fail("R01", "页眉报告编号一致", "封面未识别到报告编号", "封面报告编号为空", "high", "补齐封面报告编号")
     bad = [value for value in data.header_numbers if value != data.cover_number]
@@ -210,6 +215,10 @@ def r03_fields(data: ReportData) -> Finding:
             "high",
             "统一字段口径，并确认占位符已替换",
         )
+    if data.source_format in {"pdf", "ocr"} and not any(
+        [data.sample_name, data.client, data.sample_no, data.model]
+    ):
+        return _skip("R03", "报告内字段一致", f"{data.source_format.upper()} 未识别到摘要/样品字段，无法核对")
     return _pass("R03", "报告内字段一致", "摘要页与样品情况表字段一致")
 
 
