@@ -1,0 +1,13 @@
+[Unit]
+Description=CQ P0 blackbox monitor check (P1-6)
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/cq-ai-p0
+EnvironmentFile=/opt/cq-ai-p0/.env
+ExecStart=/opt/cq-ai-p0/.venv/bin/python scripts/monitor_check.py --strict --prometheus --base-url http://127.0.0.1:8090 --data-dir /opt/cq-ai-p0/data --backup-dir /var/backups/cq-ai-p0
+Nice=10
+IOSchedulingClass=idle
+# Wire OnFailure= to your alerting unit/webhook (Feishu/Alertmanager) once available.

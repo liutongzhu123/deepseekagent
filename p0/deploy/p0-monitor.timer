@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CQ P0 blackbox monitor every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=p0-monitor.service
+
+[Install]
+WantedBy=timers.target

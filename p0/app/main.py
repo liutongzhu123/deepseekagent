@@ -5,10 +5,12 @@ review workbenches can call them without coupling to parser internals.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,7 +30,7 @@ from pydantic import BaseModel, Field
 from . import admin_config
 from . import auth
 from . import quote as quote_service
-from . import crm, quote_store, store, task_worker
+from . import crm, monitoring, quote_store, store, task_worker
 from . import report_writer, standard_parse, standard_qa, standard_store, weknora
 from .store import tasks
 from .docx_parser import parse_docx
@@ -43,11 +45,12 @@ ROOT_PATH = os.getenv("P0_ROOT_PATH", "").rstrip("/")
 COOKIE_SECURE = os.getenv(
     "P0_COOKIE_SECURE", "1" if os.getenv("P0_ENV") == "production" else "0"
 ) not in {"0", "false", "off"}
-PUBLIC_PATHS = {"/health", "/login", "/favicon.ico", "/api/v1/auth/providers"}
+PUBLIC_PATHS = {"/health", "/metrics", "/login", "/favicon.ico", "/api/v1/auth/providers"}
 PUBLIC_PREFIXES = ("/static/login",)
 AUTH_DISABLED = os.getenv("P0_AUTH_DISABLED", "0").lower() in {"1", "true", "yes"}
 
 AUTH_BOOTSTRAP = auth.bootstrap()
+monitoring.configure_logging()
 
 
 @asynccontextmanager
@@ -133,6 +136,35 @@ def _attachment_header(filename: str) -> str:
         f'attachment; filename="{fallback}"; '
         f"filename*=UTF-8''{url_quote(filename, safe='')}"
     )
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or monitoring.new_request_id()
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        monitoring.METRICS.observe(request.method, request.url.path, 500, time.perf_counter() - started)
+        raise
+    elapsed = time.perf_counter() - started
+    monitoring.METRICS.observe(request.method, request.url.path, response.status_code, elapsed)
+    response.headers["X-Request-ID"] = request_id
+    if os.getenv("P0_ACCESS_LOG", "1").lower() not in {"0", "false", "off"}:
+        user = getattr(request.state, "user", {}) or {}
+        logging.getLogger("p0.access").info(
+            "request",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "ms": round(elapsed * 1000, 1),
+                "user": user.get("username", ""),
+            },
+        )
+    return response
 
 
 @app.middleware("http")
@@ -555,6 +587,33 @@ class AskRequest(BaseModel):
     mode: str = "auto"
     min_score: float | None = None
     top_k: int | None = None
+
+
+@app.get("/metrics")
+def metrics(request: Request) -> PlainTextResponse:
+    token = os.getenv("P0_METRICS_TOKEN", "")
+    if token:
+        supplied = request.headers.get("x-metrics-token") or request.query_params.get("token", "")
+        if not secrets.compare_digest(str(supplied), token):
+            raise HTTPException(status_code=403, detail="metrics token required")
+    else:
+        host = request.client.host if request.client else ""
+        production = os.getenv("P0_ENV", "").strip().lower() == "production"
+        if production or host not in {"127.0.0.1", "::1", "localhost"}:
+            raise HTTPException(
+                status_code=403,
+                detail="metrics endpoint requires P0_METRICS_TOKEN in production",
+            )
+    return PlainTextResponse(
+        monitoring.METRICS.render(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
+@app.get("/api/v1/system/monitor")
+def system_monitor(request: Request) -> dict:
+    _require_permission(request, "system:status")
+    return monitoring.snapshot()
 
 
 @app.get("/health")

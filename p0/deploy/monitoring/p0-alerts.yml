@@ -1,0 +1,79 @@
+groups:
+  - name: p0-service
+    rules:
+      - alert: P0ServiceDown
+        expr: p0_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "P0 API is down"
+          description: "No scrape from {{ $labels.instance }} for 2 minutes."
+
+      - alert: P0High5xxRate
+        expr: |
+          sum(rate(p0_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(p0_http_requests_total[5m])), 0.001) > 0.02
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "P0 5xx rate above 2%"
+          description: "Check application logs and the failing route."
+
+      - alert: P0TaskFailed
+        expr: p0_tasks{status="failed"} > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "P0 background task failed"
+          description: "Inspect /api/v1/tasks and the paylaod error before retrying."
+
+      - alert: P0TaskQueueBacklog
+        expr: p0_tasks{status="queued"} > 10
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "P0 task queue backlog"
+          description: "Queue has been above 10 for 10 minutes."
+
+  - name: p0-infra
+    rules:
+      - alert: P0DiskHigh
+        expr: p0_disk_used_ratio > 0.85
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "P0 data disk above 85%"
+          description: "Free space or move backups off the data disk."
+
+      - alert: P0BackupStale
+        expr: p0_backup_age_seconds < 0 or p0_backup_age_seconds > 93600
+        for: 30m
+        labels: {severity: critical}
+        annotations:
+          summary: "P0 backup is missing or older than 26h"
+          description: "Run scripts/backup_data.py and scripts/backup_store.py; inspect the timer."
+
+      - alert: P0WeKnoraMissing
+        expr: p0_weknora_required == 1 and p0_weknora_configured == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "P0 requires WeKnora but it is not configured"
+          description: "Publication/QA will fail; check .env and WeKnora availability."
+
+      - alert: P0CertificateExpiring
+        expr: probe_ssl_earliest_cert_expiry - time() < 21 * 86400
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "P0 HTTPS certificate expires in under 21 days"
+          description: "Renew the Let's Encrypt certificate and reload nginx."
+
+      - alert: P0BlackboxCheckFailed
+        expr: p0_monitor_up == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "P0 blackbox monitor check failed"
+          description: "Run scripts/monitor_check.py --strict for details."
