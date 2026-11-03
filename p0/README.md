@@ -83,6 +83,15 @@ P1 CRM 只读适配增量（0.7.3，P1-5）：
 - **API 预留**——`P0_CRM_MODE=api` 明确提示“尚未接入”，不静默伪造数据；
 - **本地样例**——CRM 批量导入模板 73 行价格与报价 73/73 对账；不相关 DVP 0/5 正常降级；运行手册见 [`docs/p1-crm-adapter/README.md`](../docs/p1-crm-adapter/README.md)。
 
+P1 运维与安全收口增量（0.7.3，P1-6）：
+
+- **监控指标**——`/metrics` 暴露请求/延迟/任务队列/DB/磁盘/备份年龄/WeKnora 配置；token 或 loopback 访问；
+- **告警与巡检**——`deploy/monitoring/p0-alerts.yml` 覆盖服务、5xx、任务失败/积压、磁盘、备份、WeKnora、证书；`scripts/monitor_check.py` 可独立定时巡检；
+- **结构化日志**——`P0_LOG_FORMAT=json` + `X-Request-ID` 贯通请求；不记录请求体/密码/文件内容；
+- **备份恢复**——`scripts/restore_drill.py` 校验文件快照/数据层清单并可恢复文件；本地全量 DB 恢复演练通过；
+- **依赖扫描**——`scripts/dependency_scan.py`；本轮升级 fastapi/starlette/python-multipart/pytest，`pip-audit` 漏洞从 28 清零；
+- **等保差距清单**——见 [`docs/p1-ops-security/README.md`](../docs/p1-ops-security/README.md)（等级待客户确认）。
+
 ## 运行
 
 ```bash
@@ -316,6 +325,8 @@ backups/                         本地数据快照（0600，已在 .gitignore �
 见 `docs/p1-async-tasks/README.md`；
 CRM 只读适配用 `P0_CRM_MODE`、`P0_CRM_PATH`、`P0_CRM_REQUIRED`（`api` 模式另有
 `P0_CRM_API_BASE_URL`/`P0_CRM_API_KEY` 预留），见 `docs/p1-crm-adapter/README.md`；
+监控用 `P0_METRICS_TOKEN`、`P0_LOG_FORMAT=json`、`P0_ACCESS_LOG`，见
+`docs/p1-ops-security/README.md`；
 `P0_CONFIG_PATH` 指定规则配置文件（默认 `data/config/rules.json`；文件不存在时使用默认规则）；
 `P0_AUDIT_RETENTION_DAYS`（默认 180）、`P0_SESSION_TTL`（默认 8 小时）控制审计保留与会话时长；
 `P0_OIDC_ISSUER` / `P0_OIDC_CLIENT_ID` 仅作为 SSO 预留配置，当前登录仍走本地账号；

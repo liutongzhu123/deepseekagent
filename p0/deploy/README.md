@@ -58,6 +58,12 @@ P0_STORE=json
 # P0_CRM_REQUIRED=0
 # P0_CRM_API_BASE_URL=
 # P0_CRM_API_KEY=
+
+# P1-6 监控与结构化日志
+# P0_METRICS_TOKEN=<random token for /metrics; unset = loopback only>
+# P0_LOG_FORMAT=json
+# P0_ACCESS_LOG=1
+# P0_MONITOR_TLS_HOST=<DOMAIN>
 ```
 
 - `P0_STORE=postgres` 的完整迁移/对账/回滚步骤见 `docs/p1-data-layer/README.md`；
@@ -228,6 +234,31 @@ HTTP 自动跳 HTTPS。
 - 安装、异机同步、恢复演练与回滚步骤见 `docs/p1-ci-backup/README.md` 与
   `docs/p1-data-layer/README.md`；
   备份归档含账号哈希、会话密钥和客户数据，权限 0600，必须异机保存且限制访问。
+
+## 监控、日志与安全（P1-6）
+
+```bash
+# .env
+P0_METRICS_TOKEN=<random>
+P0_LOG_FORMAT=json
+P0_ACCESS_LOG=1
+P0_MONITOR_TLS_HOST=<DOMAIN>
+
+# 安装黑盒巡检 timer（每 5 分钟）
+cp deploy/p0-monitor.service deploy/p0-monitor.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now p0-monitor.timer
+systemctl list-timers 'p0-*'
+```
+
+- `/metrics` 生产必须带 `X-Metrics-Token`；未配置 token 时生产环境拒绝（本地 loopback 调试除外）；
+- Prometheus 抓取与告警规则示例见 `deploy/monitoring/prometheus.yml`、
+  `deploy/monitoring/p0-alerts.yml`；证书告警需 blackbox exporter；
+- `monitor_check.py --strict` 失败退出非零，`p0-monitor.service` 的 `OnFailure=` 可接
+  飞书 webhook/Alertmanager；
+- 结构化日志按 `P0_LOG_FORMAT=json` 输出，`X-Request-ID` 贯通 nginx/P0；
+- 恢复演练 `scripts/restore_drill.py`、依赖扫描 `scripts/dependency_scan.py`，
+  等保差距见 `docs/p1-ops-security/README.md`。
 
 ## Docker（待内部镜像仓库可用）
 

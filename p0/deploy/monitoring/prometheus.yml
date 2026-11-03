@@ -1,0 +1,34 @@
+# Example Prometheus scrape config for the P0 service.
+# Replace the token and host; keep /metrics local-only or token-protected.
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/p0-alerts.yml
+
+scrape_configs:
+  - job_name: p0-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8090"]
+    http_headers:
+      X-Metrics-Token:
+        credentials: "REPLACE_WITH_P0_METRICS_TOKEN"
+    # If Prometheus is on another host, expose /metrics through nginx with
+    # TLS + IP allow-list and use that internal URL here instead.
+
+  # Optional: blackbox exporter for HTTPS certificate expiry.
+  # - job_name: p0-tls
+  #   metrics_path: /probe
+  #   params:
+  #     module: [https_2xx]
+  #   static_configs:
+  #     - targets: ["https://<DOMAIN>/p0/health"]
+  #   relabel_configs:
+  #     - source_labels: [__address__]
+  #       target_label: __param_target
+  #     - source_labels: [__param_target]
+  #       target_label: instance
+  #     - target_label: __address__
+  #       replacement: 127.0.0.1:9115
