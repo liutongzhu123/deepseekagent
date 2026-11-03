@@ -143,6 +143,31 @@ def filter_entries(
         return [dict(row) for row in conn.execute(statement).scalars() if row]
 
 
+def iter_entries(**filters):
+    """Yield filtered events without loading the whole table (streaming CSV)."""
+    db.ensure_schema()
+    statement = select(db.audit_events.c.data).order_by(
+        db.audit_events.c.at.desc(), db.audit_events.c.id.desc()
+    )
+    clauses = _conditions(
+        user=filters.get("user", ""),
+        role=filters.get("role", ""),
+        event=filters.get("event", ""),
+        method=filters.get("method", ""),
+        path=filters.get("path", ""),
+        status=filters.get("status"),
+        date_from=filters.get("date_from", ""),
+        date_to=filters.get("date_to", ""),
+    )
+    if clauses:
+        statement = statement.where(*clauses)
+    with db.engine().connect() as conn:
+        result = conn.execution_options(stream_results=True).execute(statement)
+        for row in result.scalars():
+            if row:
+                yield dict(row)
+
+
 def count_entries(**filters) -> int:
     db.ensure_schema()
     statement = select(func.count()).select_from(db.audit_events)

@@ -25,6 +25,7 @@ from fastapi.responses import (
     PlainTextResponse,
     RedirectResponse,
     Response,
+    StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -474,12 +475,11 @@ def audit_export(
     date_to: str = "",
 ) -> Response:
     actor = _require_permission(request, "audit:export")
-    events = auth.filter_audit(
-        **_audit_filters(user, role, event, method, path, status, date_from, date_to)
-    )
-    _audit_event(request, actor, "audit_exported", rows=len(events))
-    return Response(
-        content="\ufeff" + auth.audit_csv(events),
+    filters = _audit_filters(user, role, event, method, path, status, date_from, date_to)
+    total = auth.count_audit(**filters)
+    _audit_event(request, actor, "audit_exported", rows=total)
+    return StreamingResponse(
+        auth.audit_csv_stream(auth.iter_filtered_audit(**filters)),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=audit.csv"},
     )

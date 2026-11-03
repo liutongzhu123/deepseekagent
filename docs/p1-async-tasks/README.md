@@ -122,5 +122,5 @@ After（任务进行中，阶段/百分比/取消）：
   安全，但每个进程都会启动线程池，需按 CPU/内存设置 `P0_TASKS_CONCURRENCY`。
 - OCR 阶段进度按页更新（25%→70%），但阶段标签仍是「扫描件 OCR」，没有每页文本预览。
 - 取消不能中断已进入的 OCR 调用，只能阻止后续阶段。
-- 任务结果/错误保留在 `tasks` 表；尚无自动清理策略，后续按审计保留期增加清理。
+- 任务结果/错误保留在 `tasks` 表；已完成任务用 `scripts/prune_tasks.py --days N [--apply]` 清理（dry-run 默认），见 `docs/p1-ops-retention/README.md`。
 - 解析任务依赖 P1-1 对象存储；本地开发用 `P0_OBJECT_STORE=local`，生产用 MinIO。

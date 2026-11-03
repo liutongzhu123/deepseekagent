@@ -131,6 +131,12 @@ P1 知识问答反馈与引用跳转增量（0.8.3）：
 - **割接/回滚**——步骤与检查清单见 [`docs/p1-release/README.md`](../docs/p1-release/README.md)（需要服务器权限，由运维执行）；
 - 不修改应用行为与版本号，也不自动切换 systemd 服务。
 
+运营保留（0.8.3 收尾）：
+
+- **审计导出流式化**——PostgreSQL 模式逐行读 `audit_events` 并边读边写 CSV，不再把全部结果读进内存；CSV 格式与 `audit_exported` 事件不变；
+- **任务清理**——`scripts/prune_tasks.py --days 30 [--status ...] [--apply]` 只删除超期的已完成任务，`--apply` 写 `tasks_pruned` 审计；
+- 细节与限制见 [`docs/p1-ops-retention/README.md`](../docs/p1-ops-retention/README.md)。
+
 ## 运行
 
 ```bash
