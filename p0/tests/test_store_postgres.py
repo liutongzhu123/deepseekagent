@@ -346,3 +346,24 @@ def test_standard_versions_unpublish_and_rollback(pg):
     standard_store.unpublish(record["id"], "bob")
     assert standard_store.load(record["id"])["published"] is False
     assert standard_store.published_kbs(record["id"]) == []
+
+
+def test_quote_history_roundtrip(pg):
+    quote_id = "q_20261103020202_abcdef"
+    meta = {
+        "quote_id": quote_id,
+        "project": "P1",
+        "created_by": "alice",
+        "created_at": "2026-11-03T02:02:02+00:00",
+        "source_name": "demo.xlsx",
+        "parse_method": "Excel 表格",
+        "lines": 2,
+        "priced_lines": 2,
+        "has_sales_quote": False,
+        "crm": {"enabled": False, "mode": "off", "reconciled": True, "matched": 0},
+    }
+    quote_store.create(meta, {"CRM报价草稿.xlsx": b"PK"})
+    rows = quote_store.list_quotes()
+    assert [row["quote_id"] for row in rows] == [quote_id]
+    assert rows[0]["project"] == "P1"
+    assert rows[0]["has_sales_quote"] is False
