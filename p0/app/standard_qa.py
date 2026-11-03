@@ -269,7 +269,7 @@ def answer_keyword(question: str, kbs: list[dict]) -> dict:
         )
 
     asked_standards = _STANDARD.findall(question)
-    if asked_standards and not clause_hit:
+    if asked_standards:
         known = [_std_key(kb.get("standard_no", "")) for kb in kbs]
         matched = any(_standard_matches(asked, known) for asked in asked_standards)
         if not matched:

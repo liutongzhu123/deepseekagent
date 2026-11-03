@@ -1,0 +1,320 @@
+{
+ "name": "P1-3 WeKnora Q&A demo baseline",
+ "description": "合成标准，仅用于验证评测脚本；生产评测请用客户标准与发布后的 KB。",
+ "kbs": [
+  {
+   "standard_id": "std_20260101000000_demo01",
+   "standard_no": "Q/DEMO 001-2026",
+   "standard_name": "演示材料标准",
+   "chunks": [
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "外观检查",
+     "clause": "5.1",
+     "id": "std_20260101000000_demo01:5.1:req",
+     "kind": "requirement",
+     "kind_label": "技术要求/判定要求",
+     "page": 2,
+     "text": "外观应无裂纹、无变形、无明显缺陷。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "外观检查",
+     "clause": "5.1",
+     "id": "std_20260101000000_demo01:5.1:method",
+     "kind": "method",
+     "kind_label": "试验方法",
+     "page": 3,
+     "text": "目测检查。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "密封性能",
+     "clause": "5.2",
+     "id": "std_20260101000000_demo01:5.2:req",
+     "kind": "requirement",
+     "kind_label": "技术要求/判定要求",
+     "page": 2,
+     "text": "在 0.2 MPa 下保压 5 min 不得泄漏。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "密封性能",
+     "clause": "5.2",
+     "id": "std_20260101000000_demo01:5.2:method",
+     "kind": "method",
+     "kind_label": "试验方法",
+     "page": 3,
+     "text": "保压试验。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "阻燃性能",
+     "clause": "5.3",
+     "id": "std_20260101000000_demo01:5.3:req",
+     "kind": "requirement",
+     "kind_label": "技术要求/判定要求",
+     "page": 2,
+     "text": "水平燃烧速度不大于 100 mm/min。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "阻燃性能",
+     "clause": "5.3",
+     "id": "std_20260101000000_demo01:5.3:method",
+     "kind": "method",
+     "kind_label": "试验方法",
+     "page": 3,
+     "text": "水平燃烧试验。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "耐化学试剂",
+     "clause": "5.4",
+     "id": "std_20260101000000_demo01:5.4:req",
+     "kind": "requirement",
+     "kind_label": "技术要求/判定要求",
+     "page": 2,
+     "text": "在汽油中浸泡 24 h 后不得开裂。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "耐化学试剂",
+     "clause": "5.4",
+     "id": "std_20260101000000_demo01:5.4:method",
+     "kind": "method",
+     "kind_label": "试验方法",
+     "page": 3,
+     "text": "浸泡试验。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "雾化性能",
+     "clause": "5.5",
+     "id": "std_20260101000000_demo01:5.5:req",
+     "kind": "requirement",
+     "kind_label": "技术要求/判定要求",
+     "page": 2,
+     "text": "雾化值不大于 2.0 mg。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "雾化性能",
+     "clause": "5.5",
+     "id": "std_20260101000000_demo01:5.5:method",
+     "kind": "method",
+     "kind_label": "试验方法",
+     "page": 3,
+     "text": "雾化试验。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "插接器插拔力",
+     "clause": "5.6",
+     "id": "std_20260101000000_demo01:5.6:req",
+     "kind": "requirement",
+     "kind_label": "技术要求/判定要求",
+     "page": 2,
+     "text": "插拔力应在 20 N 至 60 N 之间。"
+    },
+    {
+     "standard_id": "std_20260101000000_demo01",
+     "standard_no": "Q/DEMO 001-2026",
+     "standard_name": "演示材料标准",
+     "item_name": "插接器插拔力",
+     "clause": "5.6",
+     "id": "std_20260101000000_demo01:5.6:method",
+     "kind": "method",
+     "kind_label": "试验方法",
+     "page": 3,
+     "text": "插拔力试验。"
+    }
+   ],
+   "published_at": "2026-01-01T00:00:00+00:00"
+  }
+ ],
+ "cases": [
+  {
+   "id": "q01",
+   "question": "Q/DEMO 001-2026 的 5.1 外观检查要求是什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.1",
+   "tag": "direct"
+  },
+  {
+   "id": "q02",
+   "question": "Q/DEMO 001-2026 的 5.2 密封性能要求是什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.2",
+   "tag": "direct"
+  },
+  {
+   "id": "q03",
+   "question": "Q/DEMO 001-2026 的 5.3 阻燃性能要求是什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.3",
+   "tag": "direct"
+  },
+  {
+   "id": "q04",
+   "question": "Q/DEMO 001-2026 的 5.4 耐化学试剂要求是什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.4",
+   "tag": "direct"
+  },
+  {
+   "id": "q05",
+   "question": "Q/DEMO 001-2026 的 5.5 雾化性能要求是什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.5",
+   "tag": "direct"
+  },
+  {
+   "id": "q06",
+   "question": "Q/DEMO 001-2026 的 5.6 插接器插拔力要求是什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.6",
+   "tag": "direct"
+  },
+  {
+   "id": "q07",
+   "question": "外观检查有没有缺陷要求？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.1",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q08",
+   "question": "0.2 MPa 保压多久不能泄漏？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.2",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q09",
+   "question": "水平燃烧速度限值是多少？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.3",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q10",
+   "question": "汽油浸泡后不能出现什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.4",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q11",
+   "question": "雾化值要求是多少？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.5",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q12",
+   "question": "插拔力范围是多少？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.6",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q13",
+   "question": "密封性能怎么判定？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.2",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q14",
+   "question": "阻燃试验方法是什么？",
+   "expect": "hit",
+   "standard_no": "Q/DEMO 001-2026",
+   "clause": "5.3",
+   "tag": "paraphrase"
+  },
+  {
+   "id": "q15",
+   "question": "ISO 9001 的采购要求是什么？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  },
+  {
+   "id": "q16",
+   "question": "Q/DEMO 999-2026 的 5.1 是什么？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  },
+  {
+   "id": "q17",
+   "question": "5.9 条款有什么要求？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  },
+  {
+   "id": "q18",
+   "question": "材料的密度是多少？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  },
+  {
+   "id": "q19",
+   "question": "盐雾试验要多久？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  },
+  {
+   "id": "q20",
+   "question": "今天天气怎么样？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  },
+  {
+   "id": "q21",
+   "question": "Q/DEMO 001-2026 的 7.1 要求？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  },
+  {
+   "id": "q22",
+   "question": "拉伸强度限值是多少？",
+   "expect": "refuse",
+   "tag": "out_of_kb"
+  }
+ ]
+}

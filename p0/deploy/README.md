@@ -143,6 +143,28 @@ cd /opt/cq-ai-p0
 WeKnora 不可用且 `P0_WEKNORA_REQUIRED=1` 时返回 503，不会静默改用本地索引。
 `mode=local` / `mode=keyword` 仅用于离线调试和前后对比。
 
+发布幂等与元数据：本地 `knowledge_id` 失效时按确定性标题查找并更新已有知识；
+发布后写 `custom_metadata`（P0 标准 ID/标准号/修订/项目）。WeKnora 运营与评测：
+
+```bash
+cd /opt/cq-ai-p0
+# 只读体检（推荐每次发布/清理前后各跑一次并留档）
+.venv/bin/python scripts/weknora_ops.py status --report /tmp/weknora-status.json
+# 清理重复 + 解析失败（先看计划，确认后再 --apply）
+.venv/bin/python scripts/weknora_ops.py cleanup --delete-failed
+.venv/bin/python scripts/weknora_ops.py cleanup --delete-failed --apply
+# 摘要模型：先看了模型列表，再 dry-run / apply
+.venv/bin/python scripts/weknora_ops.py models
+.venv/bin/python scripts/weknora_ops.py summary --model-id <model-id> --apply
+# 评测（--from-store 使用已发布 KB；--mode weknora 需要服务端配置）
+.venv/bin/python scripts/run_weknora_eval.py \
+  --dataset eval/weknora_qa.demo.json --from-store --mode weknora \
+  --report /var/backups/cq-ai-p0/eval-weknora.json
+```
+
+清理默认只处理 `P0 |` 开头的重复组，保留 `completed`/最新的一条；详见
+`docs/p1-weknora-ops/README.md`。
+
 ## nginx
 
 `/etc/nginx/sites-enabled/cq-ai-p0` 中需要：
