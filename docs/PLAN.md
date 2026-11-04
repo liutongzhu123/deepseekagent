@@ -142,7 +142,7 @@
 - **涉及**：`p0/app/semantic_audit.py`、`p0/config/semantic.yaml`、`p0/tests/test_semantic_audit.py`
 
 ### T202 · 8 条部分规则（2.2）
-- **状态**：`todo`  **依赖**：T201  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
+- **状态**：`merged`  **依赖**：T201  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 按数据到位程度接入：任务单、目录、单项时间、单位、平行样、照片、标记、第二主机厂字段
   - 缺数据时 `skip` 并注明原因，不得 `pass`；视觉项无模型时标「未自动审核」
@@ -150,7 +150,7 @@
 - **涉及**：`p0/app/rules.py`、`p0/app/report_inputs.py`、`p0/tests/`
 
 ### T203 · 规则 DSL（2.3）
-- **状态**：`todo`  **依赖**：T201  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
+- **状态**：`merged`  **依赖**：T201  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 业务可配置规则：数据源 + 条件 + 阈值 + 证据 + 严重级别 + 建议
   - 支持版本、灰度、命中统计；内置 10 条示例规则
@@ -187,8 +187,8 @@
 | T109 | `merged` | #50 | 绿 | 12 草稿 + 4 记录 + 16 变异 |
 | T110 | `merged` | #51 | 绿 | 指标评测（基线） |
 | T201 | `merged` | #56 | 绿 | DeepSeek 语义审核（4 类） |
-| T202 | `todo` | — | — | 8 条部分规则 |
-| T203 | `todo` | — | — | 规则 DSL + 10 条 |
+| T202 | `merged` | #58 | 绿 | 8 条部分规则 |
+| T203 | `merged` | #59 | 绿 | 规则 DSL + 10 条 |
 | T204 | `blocked` | — | — | 缺第二主机厂样例 |
 
 **当前阻塞**：T105（缺 XG/第二主机厂样例）；T204（缺第二主机厂 5 份+）；正式验收金标准缺 20–30 份正式报告（T110 基线已交付）
