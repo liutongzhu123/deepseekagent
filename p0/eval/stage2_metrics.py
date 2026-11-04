@@ -83,20 +83,20 @@ def run_semantic(cases: list[dict], *, network: bool, cache_path: Path) -> tuple
             responses[case["id"]] = cached["response"]
             cache_hits += 1
             continue
-        if not network or not config.api_key:
+        if not network or not (config.enabled and config.api_key):
             missing.append(case["id"])
             continue
         result = semantic_audit.audit_semantics(case["text"], config=config)
         responses[case["id"]] = result
         cache[case["id"]] = {"key": key, "model": model, "response": result}
-    if network and config.api_key:
+    if network and config.enabled and config.api_key:
         _write_cache(cache_path, cache)
     meta = {
         "model": model,
         "enabled": bool(config.enabled and config.api_key),
         "cache_hits": cache_hits,
         "missing": missing,
-        "network": network and bool(config.api_key),
+        "network": network and bool(config.enabled and config.api_key),
     }
     return responses, meta
 
