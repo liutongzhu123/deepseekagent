@@ -669,6 +669,12 @@ class RecordsRequest(BaseModel):
     records: list[RecordIn]
 
 
+class ReviewAction(BaseModel):
+    rule_id: str
+    status: str
+    note: str = ""
+
+
 class ItemPatch(BaseModel):
     clause: str
     name: str | None = None
@@ -925,13 +931,19 @@ async def audit_report_markdown(request: Request, file: UploadFile = File(...)) 
 
 def _report_export_rows(records: list[dict]) -> tuple[list[list[object]], list[list[object]]]:
     summary_rows: list[list[object]] = [
-        ["文件", "项目", "审核人", "审核时间", "批次", "通过", "提示", "失败", "未检查"]
+        ["文件", "项目", "审核人", "审核时间", "批次", "通过", "提示", "失败", "未检查", "已复核", "复核覆盖率"]
     ]
     finding_rows: list[list[object]] = [
-        ["文件", "规则", "标题", "状态", "严重级别", "说明", "证据", "建议"]
+        ["文件", "规则", "标题", "状态", "严重级别", "定位", "说明", "证据", "建议", "复核状态", "备注"]
     ]
+    review_labels = {"accepted": "采纳", "ignored": "忽略", "false_positive": "误报"}
     for record in records:
         summary = record.get("summary") or {}
+        result = record.get("result") or {}
+        reviews = record.get("reviews") or {}
+        findings = result.get("findings") or []
+        reviewed = sum(1 for finding in findings if finding.get("rule_id") in reviews)
+        coverage = f"{reviewed}/{len(findings)}" if findings else "0/0"
         summary_rows.append(
             [
                 record.get("file_name", ""),
@@ -943,11 +955,23 @@ def _report_export_rows(records: list[dict]) -> tuple[list[list[object]], list[l
                 summary.get("warn", 0),
                 summary.get("fail", 0),
                 summary.get("skip", 0),
+                reviewed,
+                coverage,
             ]
         )
-        result = record.get("result") or {}
-        for finding in result.get("findings") or []:
+        for finding in findings:
             status = str(finding.get("status", ""))
+            location = finding.get("location") or {}
+            location_text = " / ".join(
+                str(part)
+                for part in (
+                    f"p{location.get('page')}" if location.get("page") else "",
+                    location.get("section", ""),
+                    location.get("cell", ""),
+                )
+                if part
+            )
+            review = reviews.get(finding.get("rule_id"), {})
             finding_rows.append(
                 [
                     record.get("file_name", ""),
@@ -955,9 +979,12 @@ def _report_export_rows(records: list[dict]) -> tuple[list[list[object]], list[l
                     finding.get("title", ""),
                     _REPORT_STATUS_LABELS.get(status, status),
                     finding.get("severity", ""),
+                    location_text,
                     finding.get("message", ""),
                     finding.get("evidence", ""),
                     finding.get("suggestion", ""),
+                    review_labels.get(review.get("status"), "待复核"),
+                    review.get("note", ""),
                 ]
             )
     return summary_rows, finding_rows
@@ -970,8 +997,8 @@ def _report_export_bytes(records: list[dict]) -> bytes:
         xlsx_writer.write_xlsx(
             path,
             [
-                ("审核汇总", summary_rows, [32, 18, 14, 22, 22, 10, 10, 10, 10]),
-                ("问题清单", finding_rows, [28, 10, 24, 10, 10, 56, 56, 56]),
+                ("审核汇总", summary_rows, [32, 18, 14, 22, 22, 10, 10, 10, 10, 10, 12]),
+                ("问题清单", finding_rows, [28, 10, 24, 10, 10, 28, 56, 56, 56, 10, 30]),
             ],
         )
         return path.read_bytes()
@@ -1078,6 +1105,15 @@ def list_report_history(
     }
 
 
+_REVIEW_STATUSES = {"accepted", "ignored", "false_positive"}
+
+
+def _review_coverage(record: dict, reviews: dict) -> dict:
+    findings = (record.get("result") or {}).get("findings") or []
+    reviewed = sum(1 for finding in findings if finding.get("rule_id") in reviews)
+    return {"reviewed": reviewed, "total": len(findings), "covered": bool(findings) and reviewed == len(findings)}
+
+
 @app.get("/api/v1/reports/{report_id}")
 def get_report_record(report_id: str, request: Request) -> dict:
     user = _require_permission(request, "report:read")
@@ -1088,7 +1124,37 @@ def get_report_record(report_id: str, request: Request) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="report not found") from exc
     _assert_project_access(user, record)
+    reviews = report_store.load_reviews(report_id)
+    record["reviews"] = reviews
+    record["review_coverage"] = _review_coverage(record, reviews)
     return record
+
+
+@app.post("/api/v1/reports/{report_id}/reviews")
+def review_report_finding(report_id: str, payload: ReviewAction, request: Request) -> dict:
+    user = _require_permission(request, "report:read")
+    if not _REPORT_ID.fullmatch(report_id):
+        raise HTTPException(status_code=404, detail="report not found")
+    if payload.status not in _REVIEW_STATUSES:
+        raise HTTPException(status_code=400, detail="review status must be accepted/ignored/false_positive")
+    try:
+        record = report_store.load(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="report not found") from exc
+    _assert_project_access(user, record)
+    findings = (record.get("result") or {}).get("findings") or []
+    if not any(finding.get("rule_id") == payload.rule_id for finding in findings):
+        raise HTTPException(status_code=404, detail="finding not found")
+    reviews = report_store.load_reviews(report_id)
+    reviews[payload.rule_id] = {
+        "status": payload.status,
+        "note": payload.note[:500],
+        "by": user.get("username", ""),
+        "at": datetime.now().isoformat(timespec="seconds"),
+    }
+    report_store.save_reviews(report_id, reviews)
+    _audit_event(request, user, "report_reviewed", report_id=report_id, rule_id=payload.rule_id, status=payload.status)
+    return {"reviews": reviews, "review_coverage": _review_coverage(record, reviews)}
 
 
 @app.get("/api/v1/reports/{report_id}/source.docx")
@@ -1125,6 +1191,7 @@ def export_report_record(report_id: str, request: Request) -> Response:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="report not found") from exc
     _assert_project_access(user, record)
+    record["reviews"] = report_store.load_reviews(report_id)
     data = _report_export_bytes([record])
     _audit_event(request, user, "report_exported", report_id=report_id)
     return Response(
@@ -1148,7 +1215,9 @@ def export_report_batch(batch_id: str, request: Request) -> Response:
     records: list[dict] = []
     for row in rows:
         try:
-            records.append(report_store.load(row["id"]))
+            record = report_store.load(row["id"])
+            record["reviews"] = report_store.load_reviews(row["id"])
+            records.append(record)
         except KeyError:
             continue
     if not records:
