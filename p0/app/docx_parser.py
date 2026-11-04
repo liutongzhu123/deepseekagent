@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Iterable
 from xml.etree import ElementTree as ET
 
+try:  # optional in minimal deployments; defaults keep the BYD mapping working
+    import yaml
+except ImportError:  # pragma: no cover - requirements installs PyYAML
+    yaml = None
+
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
@@ -71,6 +76,7 @@ class ReportData:
     test_end: str = ""
     approval_date: str = ""
     template_family: str = ""
+    template_variant: str = ""
     toc_entries: list[dict] = field(default_factory=list)
     font_sizes: list[float] = field(default_factory=list)
     font_names: list[str] = field(default_factory=list)
@@ -319,6 +325,46 @@ def _footer_pages(text: str) -> tuple[list[int], list[int]]:
     return pages, totals
 
 
+_TEMPLATE_CONFIG: dict | None = None
+
+
+def _template_config() -> dict:
+    global _TEMPLATE_CONFIG
+    if _TEMPLATE_CONFIG is not None:
+        return _TEMPLATE_CONFIG
+    path = Path(__file__).resolve().parent.parent / "config" / "templates" / "byd_odor.yaml"
+    if yaml is not None and path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                _TEMPLATE_CONFIG = loaded
+                return _TEMPLATE_CONFIG
+        except (OSError, yaml.YAMLError):
+            pass
+    _TEMPLATE_CONFIG = {
+        "family": "BYD-odor",
+        "match": {"basis_any": ["Q/BYDQ", "比亚迪"], "item_any": ["气味"]},
+        "variants": {"OTS": {"label": "OTS", "page_totals": [5]}, "MOBAN": {"label": "摸底", "page_totals": [4]}},
+    }
+    return _TEMPLATE_CONFIG
+
+
+def identify_template(basis: str, item: str, page_totals: list[int]) -> tuple[str, str]:
+    """Return (family, variant label) from the configurable BYD mapping."""
+    config = _template_config()
+    match = config.get("match") or {}
+    basis_any = [str(value) for value in match.get("basis_any") or []]
+    item_any = [str(value) for value in match.get("item_any") or []]
+    if not (any(value and value in (basis or "") for value in basis_any) or any(value and value in (item or "") for value in item_any)):
+        return "generic", ""
+    totals = set(page_totals or [])
+    for spec in (config.get("variants") or {}).values():
+        expected = set(spec.get("page_totals") or [])
+        if expected and totals and totals <= expected:
+            return str(config.get("family") or "BYD-odor"), str(spec.get("label") or "")
+    return str(config.get("family") or "BYD-odor"), ""
+
+
 def parse_docx(path: str | Path) -> ReportData:
     path = Path(path)
     with zipfile.ZipFile(path) as zf:
@@ -458,7 +504,7 @@ def parse_docx(path: str | Path) -> ReportData:
 
     basis = summary.get("检验依据", "")
     item = summary.get("检验项目", "")
-    template_family = "BYD-odor" if ("Q/BYDQ" in basis or "气味" in item) else "generic"
+    template_family, template_variant = identify_template(basis, item, page_totals)
 
     return ReportData(
         file_name=path.name,
@@ -497,6 +543,7 @@ def parse_docx(path: str | Path) -> ReportData:
         test_end=test_end,
         approval_date=approval_date,
         template_family=template_family,
+        template_variant=template_variant,
         toc_entries=toc_entries,
         font_sizes=font_sizes,
         font_names=font_names,

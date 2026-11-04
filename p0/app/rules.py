@@ -405,7 +405,8 @@ def r10_signature(data: ReportData) -> Finding:
 
 def r11_template(data: ReportData) -> Finding:
     if data.template_family == "BYD-odor":
-        return _pass("R11", "模板识别", "识别为比亚迪气味报告模板", f"basis={data.basis[:80]}")
+        variant = data.template_variant or "变体未识别"
+        return _pass("R11", "模板识别", f"识别为比亚迪气味报告模板（{variant}）", f"basis={data.basis[:80]}")
     return Finding("R11", "模板识别", "warn", "low", "未识别为已知模板", f"basis={data.basis[:80]}", "确认主机厂模板")
 
 

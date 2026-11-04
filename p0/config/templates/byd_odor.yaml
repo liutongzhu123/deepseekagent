@@ -1,0 +1,28 @@
+# BYD odor report template (POC sample). No customer values, only field/variant mapping.
+family: BYD-odor
+label: 比亚迪气味
+match:
+  basis_any:
+    - Q/BYDQ
+    - 比亚迪
+  item_any:
+    - 气味
+variants:
+  OTS:
+    label: OTS
+    page_totals: [5]
+  MOBAN:
+    label: 摸底
+    page_totals: [4]
+fields:
+  - {key: cover_number, label: 报告编号, required: true}
+  - {key: sample_no, label: 样品编号, required: true}
+  - {key: client, label: 委托单位, required: true}
+  - {key: sample_name, label: 样品名称, required: true}
+  - {key: sample_qty, label: 样品数量, required: true}
+  - {key: item, label: 检验项目, required: true}
+  - {key: basis, label: 检验依据, required: true}
+  - {key: test_start, label: 检验开始日期, required: true}
+  - {key: test_end, label: 检验结束日期, required: true}
+  - {key: device_valid, label: 设备溯源有效期, required: false}
+  - {key: judgment, label: 符合性判定, required: true}
