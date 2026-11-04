@@ -41,12 +41,15 @@ def audit_markdown(result: dict, meta: dict | None = None, decisions: dict[str, 
     findings = result.get("findings", [])
     file_name = result.get("file", meta.get("file_name", ""))
     template = result.get("template", "")
+    audit_mode = "R01–R11 确定性规则 + X01–X04 跨文档"
+    if result.get("stage2"):
+        audit_mode += " + 部分规则 + 规则 DSL + 语义审核"
 
     lines = [
         f"# 报告审核报告：{file_name}",
         "",
         f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"- 审核方式：R01–R11 确定性规则 + X01–X04 跨文档 + 部分规则 + 规则 DSL + 语义审核（P0，不替代授权签字人）",
+        f"- 审核方式：{audit_mode}（P0，不替代授权签字人）",
         f"- 模板识别：{template or '未识别'}",
         "",
         "## 1. 审核结论",
