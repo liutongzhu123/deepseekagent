@@ -133,7 +133,7 @@
 > 阶段 2 目标：接 DeepSeek，补 8 条部分可测规则；门禁：语义召回 ≥80%、误报 ≤15%；业务可自建 10 条规则。
 
 ### T201 · DeepSeek 语义审核（2.1）
-- **状态**：`pr-open`  **依赖**：T110  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
+- **状态**：`merged`  **依赖**：T110  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 覆盖 4 类语义检查：错别字/病句、产品名称异常、结论表述、项目对应
   - 严格 JSON schema（findings: rule_id/severity/evidence/suggestion），非法 JSON/超时/5xx/未配置时降级为 skip 或 error，**不得 pass**
@@ -186,7 +186,7 @@
 | T108 | `merged` | #49 | 绿 | 定位/筛选/复核/导出 |
 | T109 | `merged` | #50 | 绿 | 12 草稿 + 4 记录 + 16 变异 |
 | T110 | `merged` | #51 | 绿 | 指标评测（基线） |
-| T201 | `pr-open` | #56 | pending | DeepSeek 语义审核（4 类） |
+| T201 | `merged` | #56 | 绿 | DeepSeek 语义审核（4 类） |
 | T202 | `todo` | — | — | 8 条部分规则 |
 | T203 | `todo` | — | — | 规则 DSL + 10 条 |
 | T204 | `blocked` | — | — | 缺第二主机厂样例 |
