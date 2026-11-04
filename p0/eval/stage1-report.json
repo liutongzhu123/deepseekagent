@@ -1,0 +1,149 @@
+{
+  "drafts": {
+    "files": 12,
+    "reproduced": 12,
+    "ok": true
+  },
+  "records": {
+    "clean_findings": 0,
+    "mutants_total": 16,
+    "mutants_detected": 16,
+    "ok": true,
+    "misses": []
+  },
+  "draft_details": [
+    {
+      "file": "e1dca493929a",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "dfc991952dcf",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "8c347b8591bc",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "c22e2ac55cee",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "bcf835f00172",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "e1cb43e902bc",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "50d49fa66c28",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "7d4618b2c5cf",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "35826d4a22c7",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "3cf69e965f80",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "6f794d18ad61",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    },
+    {
+      "file": "22c512e894f2",
+      "rules_failed": [
+        "R01",
+        "R02",
+        "R03",
+        "R04",
+        "R09",
+        "R10"
+      ]
+    }
+  ],
+  "ok": true
+}
