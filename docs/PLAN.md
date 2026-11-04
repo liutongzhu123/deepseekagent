@@ -93,7 +93,7 @@
 - **涉及**：`p0/app/rules.py`、`p0/app/report_writer.py`
 
 ### T107 · Excel/CSV 适配收尾（四类 + 失败清单 + 幂等）
-- **状态**：`pr-open`  **依赖**：无（基线已合入 #30）  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
+- **状态**：`merged`  **依赖**：无（基线已合入 #30）  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 任务单 / 原始记录 / 样品 / 设备 四类导入，按业务主键（任务单号/样品编号/报告编号）幂等去重
   - 导入结果产出 `success / skipped / failed` 清单，失败行给出行号与原因
@@ -101,7 +101,7 @@
 - **涉及**：`p0/app/report_inputs.py`、`p0/app/rules.py`
 
 ### T108 · 审核工作台（问题定位 / 复核 / 批量 / 导出）
-- **状态**：`todo`  **依赖**：T106  **分支**：`feat/T108-workbench`
+- **状态**：`pr-open`  **依赖**：T106  **分支**：`agent/acceptance-gap-plan-bca950f1a022`
 - **验收标准**：
   - 列表页展示问题、按严重级别筛选；详情定位到页/段/单元格
   - 支持「采纳 / 忽略 / 误报」并留痕；批量导出 Excel
@@ -140,8 +140,8 @@
 | T104 | `merged` | #41 | 绿 | PDF 文本层/OCR + R01–R04 skip |
 | T105 | `blocked` | — | — | 缺 XG/第二主机厂样例 |
 | T106 | `merged` | #46 | 绿 | 页/段/单元格定位 + Markdown 定位列 |
-| T107 | `pr-open` | #47 | pending | 幂等导入 + 失败清单 |
-| T108 | `todo` | — | — | — |
+| T107 | `merged` | #47 | 绿 | 幂等导入 + 失败清单 |
+| T108 | `pr-open` | #49 | pending | 定位/筛选/复核/导出 |
 | T109 | `todo` | — | — | 阶段门禁 |
 | T110 | `todo` | — | — | 阶段门禁 |
 
