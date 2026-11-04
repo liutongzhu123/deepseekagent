@@ -97,3 +97,34 @@ def read_source(report_id: str, base_dir: Path | None = None) -> bytes:
     if not path.exists():
         raise KeyError(report_id)
     return path.read_bytes()
+
+
+_REVIEWS_FILE = "reviews.json"
+_REVIEW_STATUSES = {"accepted", "ignored", "false_positive"}
+
+
+def load_reviews(report_id: str, base_dir: Path | None = None) -> dict:
+    """Load per-finding human review decisions for one report."""
+    try:
+        directory = _dir(report_id, base_dir)
+    except KeyError:
+        return {}
+    path = directory / _REVIEWS_FILE
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    reviews = data.get("reviews") if isinstance(data, dict) else None
+    return reviews if isinstance(reviews, dict) else {}
+
+
+def save_reviews(report_id: str, reviews: dict, base_dir: Path | None = None) -> dict:
+    directory = _dir(report_id, base_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = {"version": 1, "reviews": reviews}
+    temporary = directory / (_REVIEWS_FILE + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    temporary.replace(directory / _REVIEWS_FILE)
+    return reviews

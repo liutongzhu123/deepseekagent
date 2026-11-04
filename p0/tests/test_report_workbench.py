@@ -181,3 +181,34 @@ def test_project_isolation_filters_history_and_detail(auth_env):
     assert rev2.get(f"/api/v1/reports/{p1.json()['report_id']}/export.xlsx").status_code == 403
     assert rev2.get(f"/api/v1/reports/{p1.json()['report_id']}/source.docx").status_code == 403
     assert rev1.get(f"/api/v1/reports/{p2.json()['report_id']}").status_code == 403
+
+
+def test_report_review_actions_and_coverage(report_env):
+    client = report_env.client
+    data = client.post("/api/v1/reports/audit", files={"file": ("气味报告.docx", b"fake-docx")}).json()
+    report_id = data["report_id"]
+    rule_id = data["findings"][1]["rule_id"]
+
+    response = client.post(
+        f"/api/v1/reports/{report_id}/reviews",
+        json={"rule_id": rule_id, "status": "accepted", "note": "已核对原始记录"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reviews"][rule_id]["status"] == "accepted"
+    assert payload["review_coverage"]["reviewed"] == 1
+
+    detail = client.get(f"/api/v1/reports/{report_id}").json()
+    assert detail["reviews"][rule_id]["note"] == "已核对原始记录"
+    assert detail["review_coverage"]["total"] == len(detail["result"]["findings"])
+
+    bad = client.post(
+        f"/api/v1/reports/{report_id}/reviews",
+        json={"rule_id": rule_id, "status": "unknown"},
+    )
+    assert bad.status_code == 400
+    missing = client.post(
+        f"/api/v1/reports/{report_id}/reviews",
+        json={"rule_id": "R99", "status": "accepted"},
+    )
+    assert missing.status_code == 404

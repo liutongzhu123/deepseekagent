@@ -44,3 +44,15 @@ def test_report_panel_has_data_readiness_card():
     js = read("ui.js")
     for marker in ("function loadReportInputs", "api/v1/reports/inputs/status", "reportInputsPill", "reportInputsBody"):
         assert marker in js
+
+
+def test_report_workbench_has_review_controls():
+    js = read("ui.js")
+    for marker in (
+        "function reviewFinding",
+        "findingSeverityFilter",
+        "data-review-status",
+        "data-review-rule",
+        "review_coverage",
+    ):
+        assert marker in js

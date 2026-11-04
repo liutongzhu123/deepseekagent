@@ -536,21 +536,46 @@ function findingStatus(status) {
   if (status === 'pass') return { tone: 'success', text: '通过' };
   return { tone: 'neutral', text: '未检查' };
 }
-function renderFinding(finding) {
+const REVIEW_LABELS = { accepted: '已采纳', ignored: '已忽略', false_positive: '误报' };
+const REVIEW_TONES = { accepted: 'success', ignored: 'neutral', false_positive: 'warn' };
+function reviewLabel(review) {
+  return review && review.status ? (REVIEW_LABELS[review.status] || review.status) : '待复核';
+}
+function reviewTone(review) {
+  return review && review.status ? (REVIEW_TONES[review.status] || 'neutral') : 'neutral';
+}
+function renderFinding(finding, review, reportId) {
   const status = findingStatus(finding.status);
+  const location = finding.location || {};
+  const locationText = [location.page ? `p${location.page}` : '', location.section || '', location.cell || '']
+    .filter(Boolean).join(' / ');
+  const actions = reportId ? `<div class="review-actions">
+      <button type="button" class="btn btn-secondary btn-sm" data-review-status="accepted" data-review-rule="${escapeHtml(finding.rule_id || '')}" data-review-report="${escapeHtml(reportId)}">采纳</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-review-status="ignored" data-review-rule="${escapeHtml(finding.rule_id || '')}" data-review-report="${escapeHtml(reportId)}">忽略</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-review-status="false_positive" data-review-rule="${escapeHtml(finding.rule_id || '')}" data-review-report="${escapeHtml(reportId)}">误报</button>
+    </div>` : '';
   return `<div class="finding ${escapeHtml(finding.status || 'skip')}">
     <span class="finding-rule">${escapeHtml(finding.rule_id || '—')}</span>
     <div class="finding-body">
-      <div class="finding-title"><b>${escapeHtml(finding.title || '')}</b><span class="pill ${status.tone}">${status.text}</span></div>
+      <div class="finding-title"><b>${escapeHtml(finding.title || '')}</b><span class="pill ${status.tone}">${status.text}</span><span class="pill ${reviewTone(review)}">${reviewLabel(review)}</span></div>
+      ${locationText ? `<div class="finding-location"><b>定位：</b>${escapeHtml(locationText)}</div>` : ''}
       <p class="finding-msg">${escapeHtml(finding.message || '')}</p>
       ${finding.evidence ? `<div class="finding-evidence"><b>证据：</b>${escapeHtml(finding.evidence)}</div>` : ''}
       ${finding.suggestion ? `<div class="finding-suggestion"><b>建议：</b>${escapeHtml(finding.suggestion)}</div>` : ''}
+      ${actions}
     </div>
   </div>`;
 }
 function renderReport(data) {
+  state.currentReportData = data;
   const summary = data.summary || {};
   const findings = data.findings || [];
+  const reviews = data.reviews || {};
+  const coverage = data.review_coverage || {
+    reviewed: findings.filter((finding) => reviews[finding.rule_id]).length,
+    total: findings.length,
+  };
+  const severityFilter = state.reportSeverityFilter || '';
   const groups = [
     { key: 'fail', label: '需要处理' },
     { key: 'warn', label: '建议确认' },
@@ -561,13 +586,18 @@ function renderReport(data) {
     .filter((group) => summary[group.key])
     .map((group) => `<span class="pill ${findingStatus(group.key).tone}">${findingStatus(group.key).text} ${summary[group.key]}</span>`)
     .join('');
+  const visible = severityFilter ? findings.filter((finding) => finding.severity === severityFilter) : findings;
   const findingGroups = groups.map((group) => {
-    const items = findings.filter((finding) => finding.status === group.key);
+    const items = visible.filter((finding) => finding.status === group.key);
     if (!items.length) return '';
     return `<div class="finding-group">
       <div class="group-head"><span>${group.label}</span><span class="count">${items.length}</span></div>
-      <div class="finding-list">${items.map(renderFinding).join('')}</div>
+      <div class="finding-list">${items.map((finding) => renderFinding(finding, reviews[finding.rule_id], data.report_id)).join('')}</div>
     </div>`;
+  }).join('') || '<div class="muted pad-8">当前筛选下没有问题</div>';
+  const severityOptions = ['high', 'medium', 'low', 'info'].map((value) => {
+    const label = { high: '高', medium: '中', low: '低', info: '提示' }[value];
+    return `<option value="${value}"${severityFilter === value ? ' selected' : ''}>${label}</option>`;
   }).join('');
   const meta = [
     data.project ? `项目 ${data.project}` : '',
@@ -586,6 +616,11 @@ function renderReport(data) {
       <div class="summary-pills">${pills}</div>
     </div>
     ${actions}
+    <div class="review-toolbar">
+      <label class="muted">严重级别 <select id="findingSeverityFilter"><option value="">全部</option>${severityOptions}</select></label>
+      <span class="pill ${coverage.covered ? 'success' : 'warn'}">复核 ${coverage.reviewed}/${coverage.total}</span>
+      <span class="muted">每条问题需人工状态：采纳 / 忽略 / 误报</span>
+    </div>
     <div class="kpi-grid">
       ${kpi(summary.pass ?? 0, '通过', 'success', 'check')}
       ${kpi(summary.warn ?? 0, '提示', 'warn', 'alert')}
@@ -704,6 +739,19 @@ async function loadReportInputs() {
     pill.textContent = '检查失败';
     body.innerHTML = `<p class="muted">${escapeHtml(error.message || '无法读取数据状态')}</p>`;
   }
+}
+async function reviewFinding(reportId, ruleId, status) {
+  const data = await jsonFetch(`api/v1/reports/${encodeURIComponent(reportId)}/reviews`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rule_id: ruleId, status }),
+  });
+  if (state.currentReportData) {
+    state.currentReportData.reviews = data.reviews || {};
+    state.currentReportData.review_coverage = data.review_coverage;
+    renderReport(state.currentReportData);
+  }
+  toast(`已标记 ${ruleId}：${REVIEW_LABELS[status] || status}`, 'info');
 }
 async function loadReports() {
   const data = await jsonFetch('api/v1/reports?limit=20');
@@ -1817,9 +1865,19 @@ function bindEvents() {
       window.location = `api/v1/reports/batch/${encodeURIComponent(batchButton.dataset.batchExport)}/export.xlsx`;
       return;
     }
+    const reviewButton = event.target.closest('[data-review-status]');
+    if (reviewButton) {
+      reviewFinding(reviewButton.dataset.reviewReport, reviewButton.dataset.reviewRule, reviewButton.dataset.reviewStatus).catch(showError);
+      return;
+    }
     const item = event.target.closest('[data-report-id]');
     if (!item) return;
     loadReport(item.dataset.reportId).catch(showError);
+  });
+  $('reportResult').addEventListener('change', (event) => {
+    if (event.target.id !== 'findingSeverityFilter') return;
+    state.reportSeverityFilter = event.target.value;
+    if (state.currentReportData) renderReport(state.currentReportData);
   });
   $('recordsSample').addEventListener('click', () => {
     $('records').value = SAMPLE_RECORDS;
