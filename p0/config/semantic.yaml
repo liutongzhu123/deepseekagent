@@ -1,0 +1,12 @@
+# DeepSeek semantic review (stage 2.1). Disabled by default: no report text
+# leaves the host until D5 compliance is confirmed and the env key is set.
+enabled: false
+base_url: https://api.deepseek.com
+model: deepseek-chat
+timeout_seconds: 20
+max_chars: 12000
+checks:
+  S01: 错别字/病句
+  S02: 产品名称异常
+  S03: 结论表述
+  S04: 项目对应
