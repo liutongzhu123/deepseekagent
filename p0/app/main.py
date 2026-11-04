@@ -34,7 +34,7 @@ from . import admin_config
 from . import auth
 from . import quote as quote_service
 from . import crm, monitoring, quote_store, store, task_worker
-from . import feedback_store, oidc, report_store, report_writer, report_inputs, standard_parse, standard_qa, standard_store, weknora
+from . import feedback_store, oidc, report_store, report_writer, report_inputs, partial_rules, rule_dsl, semantic_audit, standard_parse, standard_qa, standard_store, weknora
 from . import xlsx_writer
 from .store import tasks
 from .docx_parser import parse_docx
@@ -620,6 +620,8 @@ def get_effective_config(request: Request) -> dict:
     result = admin_config.describe()
     result.pop("path", None)
     result.pop("sections", None)
+    if isinstance(result.get("config"), dict):
+        result["config"]["stage2"] = _stage2_catalog()
     return result
 
 
@@ -764,6 +766,30 @@ def index() -> FileResponse:
 # ---------------------------------------------------------------------------
 # Increment 1: report review
 # ---------------------------------------------------------------------------
+def _stage2_catalog() -> dict:
+    """Read-only stage-2 rule metadata for the workbench and rules API."""
+    pack = rule_dsl.load_pack()
+    semantic = semantic_audit.load_config()
+    return {
+        "partial": {
+            "rules": partial_rules.partial_rule_catalog(),
+            "total": len(partial_rules.PARTIAL_RULES),
+        },
+        "dsl": {
+            "version": pack.version,
+            "total": len(pack.rules),
+            "rules": rule_dsl.rule_catalog(pack),
+            "errors": rule_dsl.validate_pack(),
+        },
+        "semantic": {
+            "enabled": bool(semantic.enabled and semantic.api_key),
+            "configured": bool(semantic.api_key),
+            "model": semantic.model,
+            "checks": semantic.checks,
+        },
+    }
+
+
 @app.get("/api/v1/rules")
 def list_rules(request: Request) -> dict:
     _require_permission(request, "rules:read")
@@ -772,6 +798,7 @@ def list_rules(request: Request) -> dict:
         "rules": rules,
         "enabled": sum(1 for rule in rules if rule["enabled"]),
         "total": len(rules),
+        "stage2": _stage2_catalog(),
     }
 
 
@@ -838,7 +865,7 @@ def _audit_report_bytes(
         parsed.file_name = filename
         if inputs is None:
             inputs = _load_report_inputs()
-        result = audit_report(parsed, config.get("report") or {}, inputs=inputs)
+        result = audit_report(parsed, config.get("report") or {}, inputs=inputs, stage2=True)
     finally:
         if tmp_path:
             Path(tmp_path).unlink(missing_ok=True)
@@ -914,7 +941,7 @@ async def audit_report_markdown(request: Request, file: UploadFile = File(...)) 
             tmp_path = tmp.name
         parsed = parse_docx(tmp_path)
         parsed.file_name = file.filename
-        result = audit_report(parsed, admin_config.report_config(), inputs=_load_report_inputs())
+        result = audit_report(parsed, admin_config.report_config(), inputs=_load_report_inputs(), stage2=True)
         _audit_event(request, user, "report_audited_markdown", file_name=file.filename)
         return PlainTextResponse(
             report_writer.audit_markdown(result, {"file_name": file.filename}),

@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Iterable
 
+from . import rule_dsl, semantic_audit
 from .docx_parser import ReportData, fields_for_consistency, parse_date
 
 
@@ -24,6 +25,7 @@ class Finding:
     evidence: str = ""
     suggestion: str = ""
     location: dict = field(default_factory=dict)
+    layer: str = "deterministic"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -628,11 +630,170 @@ def _location_for(rule_id: str, data: ReportData) -> dict:
     return location
 
 
-def audit_report(data: ReportData, config: dict | None = None, inputs: object | None = None) -> dict:
+def report_text(data: ReportData) -> str:
+    """Return the searchable report text (paragraphs plus table cells).
+
+    The semantic layer receives text only; no file, image or path is sent.
+    """
+    parts = [text.strip() for text in data.paragraphs if text and text.strip()]
+    for table in data.tables:
+        for row in table:
+            cells = [cell.text.strip() for cell in row if cell and cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def _semantic_finding(status: str, severity: str, message: str, evidence: str = "", suggestion: str = "") -> Finding:
+    return Finding(
+        "SEM",
+        "语义审核",
+        status,
+        severity,
+        message,
+        evidence,
+        suggestion,
+        {"page": 0, "section": "语义审核", "cell": ""},
+        "semantic",
+    )
+
+
+def _finding_from_dict(item: dict) -> Finding:
+    return Finding(
+        str(item.get("rule_id") or ""),
+        str(item.get("title") or ""),
+        str(item.get("status") or "skip"),
+        str(item.get("severity") or "info"),
+        str(item.get("message") or ""),
+        str(item.get("evidence") or ""),
+        str(item.get("suggestion") or ""),
+        dict(item.get("location") or {}),
+        str(item.get("layer") or "deterministic"),
+    )
+
+
+def _stage2_findings(
+    data: ReportData,
+    inputs: object | None,
+    semantic_config: object | None,
+    semantic_post: object | None,
+) -> tuple[list[Finding], dict]:
+    """Run T201/T202/T203 layers and return their findings plus a status block."""
+    from .partial_rules import evaluate_partial_rules  # local import: avoids a rules<->partial cycle
+
+    findings: list[Finding] = []
+
+    partial = evaluate_partial_rules(data, inputs)
+    findings.extend(partial)
+    partial_meta = {
+        "count": len(partial),
+        "statuses": {
+            status: sum(1 for item in partial if item.status == status)
+            for status in ("fail", "warn", "pass", "skip")
+        },
+    }
+
+    pack = rule_dsl.load_pack()
+    report_context = {
+        "client": data.client,
+        "sample_qty": data.sample_qty,
+        "sample_no": data.sample_no,
+        "sample_name": data.sample_name,
+        "basis": data.basis,
+        "item": data.item,
+        "judgment": data.judgment,
+        "conclusion": data.conclusion,
+        "reported_mean": data.reported_mean,
+        "limit": data.limit,
+        "template": data.template_family,
+        "toc_first_page": (data.toc_entries[0].get("page") if data.toc_entries else None),
+    }
+    context: dict = {"report": report_context}
+    sources = {"report"}
+    if inputs is not None:
+        task_orders = inputs.find("task_orders", "report_no", data.cover_number)  # type: ignore[attr-defined]
+        if not task_orders:
+            task_orders = inputs.datasets.get("task_orders", [])  # type: ignore[attr-defined]
+        if task_orders:
+            context["inputs"] = dict(task_orders[0])
+            sources.add("inputs")
+    dsl_findings = [_finding_from_dict(item) for item in pack.evaluate(context, available_sources=sources)]
+    findings.extend(dsl_findings)
+    for rule_id in pack.skipped:
+        rule = pack.by_id(rule_id)
+        if rule is not None:
+            findings.append(
+                Finding(
+                    rule.id,
+                    rule.name,
+                    "skip",
+                    "info",
+                    f"缺少 {rule.source} 数据，跳过规则 DSL 检查",
+                    f"source={rule.source}",
+                    "补齐对应数据后自动启用",
+                    {"page": 1, "section": "规则 DSL", "cell": rule.field},
+                    "dsl",
+                )
+            )
+    dsl_meta = {
+        "version": pack.version,
+        "rules": len(pack.rules),
+        "total": len(pack.rules),
+        "hits": pack.stats()["hits"],
+        "skipped": pack.stats()["skipped"],
+    }
+
+    semantic = semantic_audit.audit_semantics(
+        report_text(data),
+        config=semantic_config,  # type: ignore[arg-type]
+        post=semantic_post,  # type: ignore[arg-type]
+    )
+    semantic_findings = semantic.get("findings") or []
+    if semantic.get("status") == "ok":
+        if semantic_findings:
+            findings.extend(_finding_from_dict(item) for item in semantic_findings)
+        else:
+            findings.append(_semantic_finding("pass", "info", "语义审核完成，未发现明确问题"))
+    else:
+        reason = str(semantic.get("reason") or "semantic_unavailable")
+        status = "skip" if semantic.get("status") == "skipped" else "warn"
+        findings.append(
+            _semantic_finding(
+                status,
+                "info" if status == "skip" else "medium",
+                f"语义审核未完成：{reason}",
+                suggestion="完成 D5 合规确认并配置 DeepSeek 后自动启用；当前结果不代表语义通过",
+            )
+        )
+    semantic_meta = {
+        "status": semantic.get("status", "skipped"),
+        "reason": semantic.get("reason", ""),
+        "model": semantic.get("model", ""),
+        "findings": len(semantic_findings),
+    }
+
+    return findings, {
+        "partial": partial_meta,
+        "dsl": dsl_meta,
+        "semantic": semantic_meta,
+    }
+
+
+def audit_report(
+    data: ReportData,
+    config: dict | None = None,
+    inputs: object | None = None,
+    *,
+    stage2: bool = False,
+    semantic_config: object | None = None,
+    semantic_post: object | None = None,
+) -> dict:
     """Run the enabled report rules with the configured thresholds/severity.
 
     When a local inbox snapshot is supplied, append the data-driven
-    ``X01``–``X03`` cross-document checks; without it the result is unchanged.
+    ``X01``–``X04`` cross-document checks.  ``stage2=True`` additionally runs
+    the T202 partial rules, the T203 rule DSL and the T201 semantic layer;
+    the default keeps the stage-1 result unchanged for regression baselines.
     """
     meta, tolerance, expected_notices = _rule_meta(config)
     findings = []
@@ -647,7 +808,13 @@ def audit_report(data: ReportData, config: dict | None = None, inputs: object | 
         finding.location = _location_for(rule_id, data)
         findings.append(finding)
     if inputs is not None:
-        findings.extend(crosscheck_report(data, inputs))
+        for finding in crosscheck_report(data, inputs):
+            finding.layer = "crosscheck"
+            findings.append(finding)
+    stage2_meta: dict | None = None
+    if stage2:
+        extra, stage2_meta = _stage2_findings(data, inputs, semantic_config, semantic_post)
+        findings.extend(extra)
     return {
         "file": data.file_name,
         "template": data.template_family,
@@ -659,6 +826,7 @@ def audit_report(data: ReportData, config: dict | None = None, inputs: object | 
             "skip": sum(1 for f in findings if f.status == "skip"),
         },
         "findings": [f.to_dict() for f in findings],
+        "stage2": stage2_meta,
         "data": {
             "cover_number": data.cover_number,
             "sample_no": data.sample_no,

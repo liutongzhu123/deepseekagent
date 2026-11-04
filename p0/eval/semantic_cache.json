@@ -1,0 +1,954 @@
+{
+  "s01-01": {
+    "key": "8abc7195b055e296428e",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "结论中出现错别字“符和”，应为“符合”。",
+          "evidence": "结论：经检验，该样品气味的检验结果为符和委托单位提供限值的要求。",
+          "suggestion": "将“符和”改为“符合”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s01-02": {
+    "key": "0ae95134ddd0f738dc70",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "结论中出现错别字“检侧”，应为“检测”。",
+          "evidence": "结论：经检侧，该样品气味的检验结果符合委托单位提供限值的要求。",
+          "suggestion": "将“经检侧”改为“经检测”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s01-03": {
+    "key": "4e8512c75d59853c1e9b",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "检验依据中的标准名称存在错别字：“试脸方法”应为“试验方法”。",
+          "evidence": "Q/DEMO-101-2025《汽车零部件气味性试脸方法》",
+          "suggestion": "将“试脸方法”改为“试验方法”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s01-04": {
+    "key": "e092dbd69b8be6040289",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "报告编号行出现错别字“报告编好”，应为“报告编号”。",
+          "evidence": "报告编号：报告编好：QA-DEMO-2025-001",
+          "suggestion": "将“报告编好”改为“报告编号”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s01-05": {
+    "key": "c4e830870f383d378e9a",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "结论中出现错别字“委拖单位”，应为“委托单位”。",
+          "evidence": "结论：经检验，该样品的检验结果符合委拖单位提供限值的要求。",
+          "suggestion": "将“委拖单位”改为“委托单位”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s01-06": {
+    "key": "e2f7ad9c692011e0d19b",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "样品名称行出现重复且错别字，\"样品名称：样吕名称：后视镜\"中\"样吕名称\"为别字且整行重复。",
+          "evidence": "样品名称：样吕名称：后视镜",
+          "suggestion": "改为\"样品名称：后视镜\"。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s01-07": {
+    "key": "ca0858cb682e97ff13f7",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "结论句存在重复赘余导致的病句，“符合要求的要求”语义不通。",
+          "evidence": "结论：经检验，该样品气味的检验结果为符合要求的要求。",
+          "suggestion": "改为“经检验，该样品气味的检验结果符合要求。”",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s01-08": {
+    "key": "ea23a9116139ed8a042c",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "结论句中“符和合”为错别字/病句，语义不通。",
+          "evidence": "结论：经检验，该样品气味的检验结果符和合委托单位提供限值的要求。",
+          "suggestion": "改为“符合委托单位提供限值的要求”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-01": {
+    "key": "3531fad376d8894f93ad",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S02",
+          "title": "产品名称异常",
+          "status": "fail",
+          "severity": "high",
+          "message": "样品名称为“后视镜”，但检验结果中出现“安全带总成”，产品名称前后不一致。",
+          "evidence": "样品名称：后视镜；检验结果：安全带总成的气味等级为 3.0",
+          "suggestion": "核实实际样品名称，将检验结果中的“安全带总成”更正为与样品名称一致的“后视镜”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-02": {
+    "key": "617fae331fcf466f57b8",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S02",
+          "title": "产品名称异常",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的产品名称与样品名称不一致：样品名称为“保险杠”，结论中却写“该样品座椅”。",
+          "evidence": "样品名称：保险杠；结论：经检验，该样品座椅的气味检验结果符合……",
+          "suggestion": "将结论中的“座椅”改为与样品名称一致的“保险杠”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-03": {
+    "key": "65d6ef9a33dd0fa4f9e0",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S02",
+          "title": "产品名称异常",
+          "status": "fail",
+          "severity": "high",
+          "message": "样品名称为“仪表板”，但检验结果中描述为“门板”，产品名称前后不一致。",
+          "evidence": "样品名称：仪表板；检验结果：门板的气味等级为 3.0",
+          "suggestion": "将检验结果中的“门板”改为与样品名称一致的“仪表板”，或核实实际受检样品名称并统一全文表述。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-04": {
+    "key": "9fc8f11812eb67af43c1",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S02",
+          "title": "产品名称异常",
+          "status": "fail",
+          "severity": "high",
+          "message": "样品名称“001”为无法识别产品的占位符，不能指认具体产品。",
+          "evidence": "样品名称：001",
+          "suggestion": "填写可识别产品的实际样品名称。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-05": {
+    "key": "adb54777c3aa345d8900",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S02",
+          "title": "产品名称异常",
+          "status": "fail",
+          "severity": "high",
+          "message": "样品名称与检验结果中出现的产品名称不一致：样品名称为“顶棚”，检验结果中却写“地毯的气味等级为3.0”。",
+          "evidence": "样品名称：顶棚；检验结果：地毯的气味等级为 3.0，限值≤3.5",
+          "suggestion": "核实实际受检样品，将检验结果中的“地毯”改为与样品名称一致的“顶棚”，或更正样品名称。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-06": {
+    "key": "a625c280763eb303369c",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S02",
+          "title": "产品名称异常",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的产品名称与样品名称不一致：样品名称为“座椅”，结论中却写“该样品后视镜”。",
+          "evidence": "样品名称：座椅；结论：经检验，该样品后视镜的气味检验结果符合委托单位提供限值的要求。",
+          "suggestion": "将结论中的“后视镜”改为与样品名称一致的“座椅”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-07": {
+    "key": "a4278302a19aac175685",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S01",
+          "title": "错别字/病句",
+          "status": "fail",
+          "severity": "medium",
+          "message": "检验结果中出现“玻璃的气味等级”，与样品名称“密封条”不符，疑为错字/病句导致语义不通。",
+          "evidence": "样品名称：密封条；检验结果：玻璃的气味等级为 3.0",
+          "suggestion": "将“玻璃的气味等级”改为“密封条的气味等级”或“样品的气味等级”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s02-08": {
+    "key": "c0beb4dffa578eb44afc",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S02",
+          "title": "产品名称异常",
+          "status": "fail",
+          "severity": "high",
+          "message": "样品名称为“地毯”，但检验结果中出现“隔音棉”，产品名称前后不一致。",
+          "evidence": "样品名称：地毯；检验结果：隔音棉的气味等级为 3.0",
+          "suggestion": "核实实际受检样品，将检验结果中的“隔音棉”改为与样品名称一致的“地毯”，或更正样品名称。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-01": {
+    "key": "939a578f90541188994f",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“符合”，但检验结果超限值且判定为“不符合”，结论与数据及判定矛盾。",
+          "evidence": "检验结果：气味等级 3.8，限值≤3.5；结论：……符合委托单位提供限值的要求；判定：不符合",
+          "suggestion": "将结论改为“不符合委托单位提供限值的要求”，与检验结果及判定保持一致。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-02": {
+    "key": "ecdadd92e082698214ef",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“符合”，但判定为“不符合”，结论与判定矛盾。",
+          "evidence": "结论：经检验，该样品气味的检验结果符合委托单位提供限值的要求。判定：不符合",
+          "suggestion": "核实判定结果，统一结论与判定表述（如判定为不符合，结论应改为不符合）。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-03": {
+    "key": "8794ff6d9ac88500a949",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“不符合”，但判定为“符合”，且数据3.0在限值≤3.5内，结论与判定及数据矛盾。",
+          "evidence": "检验结果：气味等级 3.0，限值≤3.5；结论：……不符合委托单位提供限值的要求；判定：符合",
+          "suggestion": "核实结论，若数据符合限值应改为“符合”，并与判定保持一致。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-04": {
+    "key": "f04704c28d39b8896b3c",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“不判定”，但判定栏给出“符合”，结论与判定矛盾。",
+          "evidence": "结论：……（不判定）；判定：符合",
+          "suggestion": "统一结论与判定：若已给出判定“符合”，结论应明确写“符合”；若确需“不判定”，判定栏不应给出符合性判定。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-05": {
+    "key": "2a0d8d912bd6e4cd6c49",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“不判定”，但判定栏给出“不符合”，结论与判定矛盾。",
+          "evidence": "结论：……（不判定）；判定：不符合",
+          "suggestion": "统一结论与判定：若按限值判定，应写明符合性结论；若确为不判定，判定栏不应给出“不符合”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-06": {
+    "key": "e8f0136c324dd5401957",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“合格”，但检验数据超限值且判定为“不符合”，结论与数据及判定矛盾。",
+          "evidence": "检验结果：气味等级 3.9，限值≤3.5；结论：经检验，该样品气味的检验结果合格。；判定：不符合",
+          "suggestion": "将结论改为“不合格”或与判定“不符合”保持一致。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-07": {
+    "key": "ea6cdb87e0dcdcc0a43c",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“本次不判定”，但报告同时给出“判定：符合”，结论与判定矛盾。",
+          "evidence": "结论：……但本次不判定。 判定：符合",
+          "suggestion": "删除“本次不判定”或删除“判定：符合”，使结论与判定一致。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s03-08": {
+    "key": "dcab44473596a6a77064",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S03",
+          "title": "结论表述",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论写“符合”，但检验结果超限值且判定为“不符合”，结论与数据及判定矛盾。",
+          "evidence": "检验结果：气味等级 3.8，限值≤3.5；结论：……符合委托单位提供限值的要求；判定：不符合",
+          "suggestion": "将结论改为“不符合委托单位提供限值的要求”，与检验结果及判定保持一致。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-01": {
+    "key": "28564d28c7696309a346",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目“雾化性”与报告检验项目“气味”不一致，结论项目在结果表中无对应。",
+          "evidence": "检验项目：气味；结论：经检验，该样品雾化性的检验结果符合要求。",
+          "suggestion": "将结论中的“雾化性”改为“气味”，使结论项目与检验项目一致。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-02": {
+    "key": "47d1b40c0bc88aa379d3",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目“弯曲强度”与报告检验项目“拉伸强度”不一致，结论项目在检验项目/结果表中无对应。",
+          "evidence": "检验项目：拉伸强度；结论：经检验，该样品弯曲强度的检验结果符合要求。",
+          "suggestion": "核对结论与检验项目，统一为同一检验项目名称（如均为拉伸强度或均为弯曲强度），确保结论项目与结果表项目对应。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-03": {
+    "key": "1db778ca2f7e3833cd51",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目“耐刮擦性”与报告检验项目“燃烧特性”不一致，结论项目在结果表中无对应。",
+          "evidence": "检验项目：燃烧特性；结论：经检验，该样品耐刮擦性的检验结果符合要求。",
+          "suggestion": "将结论中的“耐刮擦性”改为与检验项目一致的“燃烧特性”，或核实并统一检验项目名称。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-04": {
+    "key": "56ba74db051851fe4f82",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目“拉伸强度”与报告检验项目“气味”不一致，结论项目在结果表中无对应。",
+          "evidence": "检验项目：气味；结论：经检验，该样品拉伸强度的检验结果符合要求。",
+          "suggestion": "将结论中的“拉伸强度”改为与检验项目一致的“气味”，或核实并统一检验项目名称。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-05": {
+    "key": "4fa6ddfab110e6ac0b0f",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目“气味”与报告检验项目“雾化”不一致，结论项目与结果表项目缺失对应。",
+          "evidence": "检验项目：雾化；结论：经检验，该样品气味的检验结果符合要求。",
+          "suggestion": "将结论中的“气味”改为“雾化”，使结论项目与检验项目一致。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-06": {
+    "key": "2312774e7b50a1b3fa7b",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目“拉伸强度”与报告检验项目“弯曲模量”不一致，结论项目在检验项目/结果表中无对应。",
+          "evidence": "检验项目：弯曲模量；结论：经检验，该样品拉伸强度的检验结果符合要求。",
+          "suggestion": "核对结论项目与检验项目，统一为同一检验项目名称（如均为弯曲模量或均为拉伸强度），并确保结果表中有对应数据。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-07": {
+    "key": "2b96b5af6aa97d55fd0a",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目“耐光老化”与报告检验项目“耐热老化”不一致。",
+          "evidence": "检验项目：耐热老化；结论：经检验，该样品耐光老化的检验结果符合要求。",
+          "suggestion": "将结论中的“耐光老化”改为与检验项目一致的“耐热老化”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "s04-08": {
+    "key": "516bd07090ff045c259d",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": [
+        {
+          "rule_id": "S04",
+          "title": "项目对应",
+          "status": "fail",
+          "severity": "high",
+          "message": "结论中的检验项目与报告检验项目不一致：报告检验项目为“密封条压缩永久变形”，结论却写“门板尺寸”。",
+          "evidence": "检验项目：密封条压缩永久变形；结论：经检验，该样品门板尺寸的检验结果符合要求。",
+          "suggestion": "将结论中的“门板尺寸”改为与检验项目一致的“密封条压缩永久变形”。",
+          "location": {
+            "page": 0,
+            "section": "语义审核",
+            "cell": ""
+          },
+          "layer": "semantic"
+        }
+      ]
+    }
+  },
+  "clean-01": {
+    "key": "563c711f585c4220386e",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-02": {
+    "key": "6ff88d83eeb562a894bf",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-03": {
+    "key": "ede8999e761a02e3aa61",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-04": {
+    "key": "cd6470e063e4f445ba3f",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-05": {
+    "key": "ba2cb4d63db88c240fed",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-06": {
+    "key": "b7d22bea6820c72350ea",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-07": {
+    "key": "dc3f114e74d0b047130b",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-08": {
+    "key": "489b093f39218fb91b64",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-09": {
+    "key": "91157fb9b87634cd4351",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-10": {
+    "key": "f5d2f25d06706eb3d689",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-11": {
+    "key": "5cf205721ddd3640a44d",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  },
+  "clean-12": {
+    "key": "e47811e1d2238a27bfbe",
+    "model": "deepseek-chat",
+    "response": {
+      "status": "ok",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "findings": []
+    }
+  }
+}

@@ -11,6 +11,13 @@ from typing import Iterable
 
 STATUS_LABEL = {"fail": "不通过", "warn": "警告", "pass": "通过", "skip": "未检查"}
 SEVERITY_LABEL = {"high": "高", "medium": "中", "low": "低", "info": "提示"}
+LAYER_LABEL = {
+    "deterministic": "确定性",
+    "crosscheck": "跨文档",
+    "partial": "部分规则",
+    "dsl": "规则 DSL",
+    "semantic": "语义",
+}
 
 
 def _cell(value: object) -> str:
@@ -34,12 +41,15 @@ def audit_markdown(result: dict, meta: dict | None = None, decisions: dict[str, 
     findings = result.get("findings", [])
     file_name = result.get("file", meta.get("file_name", ""))
     template = result.get("template", "")
+    audit_mode = "R01–R11 确定性规则 + X01–X04 跨文档"
+    if result.get("stage2"):
+        audit_mode += " + 部分规则 + 规则 DSL + 语义审核"
 
     lines = [
         f"# 报告审核报告：{file_name}",
         "",
         f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"- 审核方式：R01–R11 确定性规则 + 证据定位（P0，不替代授权签字人）",
+        f"- 审核方式：{audit_mode}（P0，不替代授权签字人）",
         f"- 模板识别：{template or '未识别'}",
         "",
         "## 1. 审核结论",
@@ -58,16 +68,41 @@ def audit_markdown(result: dict, meta: dict | None = None, decisions: dict[str, 
         lines.append("**结论：有条件通过。** 无高风险不通过项，警告项需业务确认。")
     else:
         lines.append("**结论：规则层面通过。** 仍需授权签字人完成最终签核。")
+
+    stage2 = result.get("stage2") or {}
+    if isinstance(stage2, dict) and stage2:
+        partial = stage2.get("partial") or {}
+        dsl = stage2.get("dsl") or {}
+        semantic = stage2.get("semantic") or {}
+        partial_status = partial.get("statuses") or {}
+        semantic_status = semantic.get("status") or "skipped"
+        semantic_text = {
+            "ok": "已运行",
+            "skipped": f"未启用（{semantic.get('reason') or '未配置'}）",
+            "error": f"调用失败，需人工复核（{semantic.get('reason') or '未知错误'}）",
+        }.get(semantic_status, semantic_status)
+        lines += [
+            "",
+            "### 阶段 2 检查状态",
+            "",
+            f"- 部分规则（P01–P08）：{partial.get('count', 0)} 条，"
+            f"不通过 {partial_status.get('fail', 0)} / 警告 {partial_status.get('warn', 0)} / "
+            f"通过 {partial_status.get('pass', 0)} / 未检查 {partial_status.get('skip', 0)}。",
+            f"- 规则 DSL：v{dsl.get('version', 0)}，共 {dsl.get('rules', 0)} 条，"
+            f"命中 {dsl.get('hits', {}) or '无'}。",
+            f"- 语义审核：{semantic_text}；结论不得视为语义通过。",
+        ]
     lines += [
         "",
         "## 2. 问题清单",
         "",
-        "| 规则 | 定位 | 检查项 | 状态 | 严重级 | 问题 | 证据 | 建议 |",
-        "|---|---|---|---|---|---|---|---|",
+        "| 层 | 规则 | 定位 | 检查项 | 状态 | 严重级 | 问题 | 证据 | 建议 |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for finding in findings:
         lines.append(
-            "| {rule} | {location} | {title} | {status} | {severity} | {message} | {evidence} | {suggestion} |".format(
+            "| {layer} | {rule} | {location} | {title} | {status} | {severity} | {message} | {evidence} | {suggestion} |".format(
+                layer=_cell(LAYER_LABEL.get(finding.get("layer"), finding.get("layer") or "确定性")),
                 rule=_cell(finding.get("rule_id")),
                 location=_cell(_location_text(finding.get("location"))),
                 title=_cell(finding.get("title")),

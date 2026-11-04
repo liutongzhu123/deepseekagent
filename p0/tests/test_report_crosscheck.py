@@ -141,7 +141,10 @@ def test_audit_endpoint_includes_crosschecks(tmp_path, monkeypatch):
     payload = response.json()
     statuses = {item["rule_id"]: item["status"] for item in payload["findings"]}
     assert statuses["X01"] == "pass"
-    assert payload["summary"]["total"] == 15
+    # Stage 2 appends its own findings; the R/X baseline stays 11 + 4.
+    baseline = [item for item in payload["findings"] if item["rule_id"][:1] in {"R", "X"}]
+    assert len(baseline) == 15
+    assert payload["stage2"]["partial"]["count"] == 8
 
 
 def test_crosscheck_equipment_passes(tmp_path):
