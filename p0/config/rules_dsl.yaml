@@ -1,0 +1,13 @@
+# Stage-2.3 rule DSL examples. Data sources: report / inputs.
+version: 1
+rules:
+  - {id: D01, name: 委托单位必填, source: report, field: client, op: empty, value: null, severity: high, message: 委托单位为空, suggestion: 补齐委托单位}
+  - {id: D02, name: 样品数量必填, source: report, field: sample_qty, op: empty, value: null, severity: high, message: 样品数量为空, suggestion: 补齐数量}
+  - {id: D03, name: 样品编号前缀, source: report, field: sample_no, op: not_regex, value: '^TS', severity: medium, message: 样品编号不符合 TS 前缀, suggestion: 核对编号}
+  - {id: D04, name: 检验依据, source: report, field: basis, op: not_contains, value: Q/BYDQ, severity: medium, message: 未引用比亚迪企业标准, suggestion: 确认依据}
+  - {id: D05, name: 检验项目, source: report, field: item, op: not_contains, value: 气味, severity: low, message: 检验项目非气味, suggestion: 确认项目}
+  - {id: D06, name: 判定为不符合, source: report, field: judgment, op: eq, value: 不符合, severity: low, message: 判定为不符合，请复核结论, suggestion: 复核}
+  - {id: D07, name: 均值上限, source: report, field: reported_mean, op: gt, value: 4.0, severity: medium, message: 报告均值超过 4.0, suggestion: 复核评分}
+  - {id: D08, name: 限值, source: report, field: limit, op: lte, value: 3.5, severity: low, message: 限值不高于 3.5，确认委托要求, suggestion: 确认限值}
+  - {id: D09, name: 任务单样品编号, source: inputs, field: sample_no, op: empty, value: null, severity: high, message: 任务单缺样品编号, suggestion: 补任务单}
+  - {id: D10, name: 目录页码, source: report, field: toc_first_page, op: lt, value: 1, severity: low, message: 目录首页异常, suggestion: 检查目录}
