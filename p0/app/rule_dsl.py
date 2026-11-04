@@ -16,6 +16,11 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PACK = ROOT / "config" / "rules_dsl.yaml"
+VALID_OPS = {
+    "empty", "eq", "ne", "contains", "not_contains", "regex", "not_regex",
+    "gt", "gte", "lt", "lte",
+}
+VALID_SEVERITIES = {"high", "medium", "low", "info"}
 
 
 @dataclass
@@ -42,11 +47,18 @@ class RulePack:
     version: int
     rules: list[DSLRule]
     hits: dict[str, int] = field(default_factory=dict)
+    skipped: dict[str, int] = field(default_factory=dict)
 
-    def evaluate(self, context: dict) -> list[dict]:
+    def by_id(self, rule_id: str) -> DSLRule | None:
+        return next((rule for rule in self.rules if rule.id == rule_id), None)
+
+    def evaluate(self, context: dict, available_sources: set[str] | None = None) -> list[dict]:
         findings: list[dict] = []
         for rule in self.rules:
             if not rule.enabled or not rule.in_rollout():
+                continue
+            if available_sources is not None and rule.source not in available_sources:
+                self.skipped[rule.id] = self.skipped.get(rule.id, 0) + 1
                 continue
             actual = _field(context.get(rule.source) or {}, rule.field)
             if not _match(actual, rule.op, rule.value):
@@ -62,12 +74,17 @@ class RulePack:
                     "evidence": f"{rule.source}.{rule.field}={actual}",
                     "suggestion": rule.suggestion,
                     "location": {"page": 1, "section": "规则 DSL", "cell": rule.field},
+                    "layer": "dsl",
                 }
             )
         return findings
 
     def stats(self) -> dict:
-        return {"version": self.version, "hits": dict(sorted(self.hits.items()))}
+        return {
+            "version": self.version,
+            "hits": dict(sorted(self.hits.items())),
+            "skipped": dict(sorted(self.skipped.items())),
+        }
 
 
 def _field(data: dict, path: str) -> Any:
@@ -101,15 +118,95 @@ def _match(actual: Any, op: str, expected: Any) -> bool:
     return {"gt": left > right, "gte": left >= right, "lt": left < right, "lte": left <= right}.get(op, False)
 
 
-def load_pack(path: str | Path | None = None) -> RulePack:
+def validate_pack_data(data: dict) -> list[str]:
+    """Return human-readable validation errors for one pack document."""
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return ["规则包必须是 JSON/YAML 对象"]
+    try:
+        version = int(data.get("version") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    if version < 1:
+        errors.append("version 必须是正整数")
+    rules = data.get("rules")
+    if not isinstance(rules, list) or not rules:
+        return [*errors, "rules 必须是非空数组"]
+    seen: set[str] = set()
+    for index, item in enumerate(rules, start=1):
+        if not isinstance(item, dict):
+            errors.append(f"第 {index} 条规则必须是对象")
+            continue
+        rule_id = str(item.get("id") or "").strip()
+        if not rule_id:
+            errors.append(f"第 {index} 条规则缺少 id")
+        elif rule_id in seen:
+            errors.append(f"规则 id 重复：{rule_id}")
+        seen.add(rule_id)
+        if not str(item.get("name") or "").strip():
+            errors.append(f"{rule_id or index} 缺少 name")
+        if str(item.get("source") or "") not in {"report", "inputs"}:
+            errors.append(f"{rule_id or index} source 必须是 report 或 inputs")
+        if not str(item.get("field") or "").strip():
+            errors.append(f"{rule_id or index} 缺少 field")
+        if str(item.get("op") or "") not in VALID_OPS:
+            errors.append(f"{rule_id or index} op 不支持：{item.get('op')}")
+        if str(item.get("severity") or "medium") not in VALID_SEVERITIES:
+            errors.append(f"{rule_id or index} severity 不支持：{item.get('severity')}")
+        try:
+            rollout = int(item.get("rollout", 100))
+        except (TypeError, ValueError):
+            rollout = -1
+        if not 0 <= rollout <= 100:
+            errors.append(f"{rule_id or index} rollout 必须在 0..100")
+    return errors
+
+
+def validate_pack(path: str | Path | None = None) -> list[str]:
     source = Path(path or DEFAULT_PACK)
     if not source.exists():
-        return RulePack(version=0, rules=[])
+        return [f"规则包不存在：{source}"]
+    try:
+        data = _load_document(source)
+    except Exception as exc:  # noqa: BLE001 - config boundary
+        return [f"规则包无法解析：{exc}"]
+    return validate_pack_data(data)
+
+
+def rule_catalog(pack: RulePack) -> list[dict]:
+    return [
+        {
+            "id": rule.id,
+            "title": rule.name,
+            "description": rule.message or rule.name,
+            "source": rule.source,
+            "field": rule.field,
+            "op": rule.op,
+            "severity": rule.severity,
+            "enabled": rule.enabled,
+            "rollout": rule.rollout,
+            "layer": "dsl",
+        }
+        for rule in pack.rules
+    ]
+
+
+def _load_document(source: Path) -> dict:
     text = source.read_text(encoding="utf-8")
     try:
         import yaml  # type: ignore
         data = yaml.safe_load(text) or {}
     except ImportError:
         data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("规则包必须是对象")
+    return data
+
+
+def load_pack(path: str | Path | None = None) -> RulePack:
+    source = Path(path or DEFAULT_PACK)
+    if not source.exists():
+        return RulePack(version=0, rules=[])
+    data = _load_document(source)
     rules = [DSLRule(**item) for item in data.get("rules") or []]
     return RulePack(version=int(data.get("version") or 1), rules=rules)

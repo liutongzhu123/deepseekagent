@@ -553,6 +553,7 @@ td.actions .btn { margin-right: 4px; }
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   height: 22px;
   padding: 0 6px;
   flex: none;
@@ -561,6 +562,49 @@ td.actions .btn { margin-right: 4px; }
   border-radius: 6px;
   background: #f2f4f7;
 }
+.finding-layer {
+  padding: 0 4px;
+  color: #175cd3;
+  font: 600 9px/1.6 -apple-system, "PingFang SC", sans-serif;
+  border-radius: 4px;
+  background: #eef4ff;
+}
+.finding-layer.dsl { color: #7a2e9e; background: #f6edff; }
+.finding-layer.semantic { color: #0e7a5f; background: #e8f8f2; }
+.finding-layer.crosscheck { color: #b54708; background: #fff4e5; }
+.stage2-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+.stage2-strip .stage2-item { display: inline-flex; align-items: center; gap: 4px; }
+.stage2-strip .stage2-item b { color: var(--ink); font-weight: 600; }
+.stage2-details {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.stage2-details summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+}
+.stage2-details summary::-webkit-details-marker { display: none; }
+.stage2-details .config-facts { margin: 8px 0; }
+.stage2-rule-list { max-height: 360px; }
 .finding-body { flex: 1; min-width: 0; }
 .finding-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
 .finding-msg { margin: 5px 0 0; color: var(--ink-2); font-size: 12.5px; }

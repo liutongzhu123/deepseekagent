@@ -15,6 +15,7 @@ const FIELD_NAMES = { name: '实检项目', requirement: '技术要求', method:
 const TEMPLATE_NAMES = { 'BYD-odor': '比亚迪气味报告模板', generic: '通用报告模板' };
 const SEVERITY_NAMES = { high: '高', medium: '中', low: '低', info: '提示' };
 const SEVERITY_TONES = { high: 'danger', medium: 'warn', low: 'neutral', info: 'neutral' };
+const LAYER_LABELS = { deterministic: '确定性', crosscheck: '跨文档', partial: '部分规则', dsl: '规则 DSL', semantic: '语义' };
 const QUOTE_HEADER_NAMES = { item: '试验项目', price: '单价', quantity: '数量', unit: '单位', sample: '样品名称' };
 const PERMISSIONS = {
   'report:audit': ['admin', 'reviewer'],
@@ -447,6 +448,30 @@ function renderReportModuleConfig(config) {
       </div>
     </div>`;
   }).join('') || '<div class="muted">暂无规则</div>';
+  renderStage2Catalog(config.stage2 || null);
+}
+function renderStage2Catalog(stage2) {
+  const partial = (stage2 && stage2.partial) || {};
+  const dsl = (stage2 && stage2.dsl) || {};
+  const semantic = (stage2 && stage2.semantic) || {};
+  const partialRules = partial.rules || [];
+  const dslRules = dsl.rules || [];
+  $('stage2Count').textContent = `${(partial.total || partialRules.length) + (dsl.total || dslRules.length)} 条`;
+  $('stage2Summary').innerHTML = [
+    configFact('部分规则', `${partial.total || partialRules.length} 条`),
+    configFact('规则 DSL', `v${dsl.version ?? 0} · ${dsl.total || dslRules.length} 条`),
+    configFact('语义审核', semantic.enabled ? `已启用 · ${semantic.model || ''}` : '未启用'),
+  ].join('');
+  const rows = partialRules.concat(dslRules).map((rule) => {
+    const severity = SEVERITY_NAMES[rule.severity] || rule.severity || (rule.layer === 'partial' ? '部分' : '—');
+    const tone = SEVERITY_TONES[rule.severity] || 'neutral';
+    return `<div class="rule-item">
+      <span class="finding-rule">${escapeHtml(rule.id)}<span class="finding-layer ${escapeHtml(rule.layer || '')}">${escapeHtml(LAYER_LABELS[rule.layer] || '')}</span></span>
+      <div class="rule-main"><b>${escapeHtml(rule.title)}</b><span class="desc">${escapeHtml(rule.description || rule.message || '')}${rule.requires ? ` · 需要：${escapeHtml(rule.requires)}` : ''}</span></div>
+      <div class="rule-tags"><span class="pill ${tone}">${escapeHtml(severity)}</span></div>
+    </div>`;
+  }).join('');
+  $('stage2Rules').innerHTML = rows || '<div class="muted">阶段 2 规则未加载</div>';
 }
 function renderStandardModuleConfig(config) {
   const standard = config.standard || { section_aliases: {}, fields: [] };
@@ -549,13 +574,16 @@ function renderFinding(finding, review, reportId) {
   const location = finding.location || {};
   const locationText = [location.page ? `p${location.page}` : '', location.section || '', location.cell || '']
     .filter(Boolean).join(' / ');
+  const layer = finding.layer && finding.layer !== 'deterministic'
+    ? `<span class="finding-layer ${escapeHtml(finding.layer)}">${escapeHtml(LAYER_LABELS[finding.layer] || finding.layer)}</span>`
+    : '';
   const actions = reportId ? `<div class="review-actions">
       <button type="button" class="btn btn-secondary btn-sm" data-review-status="accepted" data-review-rule="${escapeHtml(finding.rule_id || '')}" data-review-report="${escapeHtml(reportId)}">采纳</button>
       <button type="button" class="btn btn-secondary btn-sm" data-review-status="ignored" data-review-rule="${escapeHtml(finding.rule_id || '')}" data-review-report="${escapeHtml(reportId)}">忽略</button>
       <button type="button" class="btn btn-secondary btn-sm" data-review-status="false_positive" data-review-rule="${escapeHtml(finding.rule_id || '')}" data-review-report="${escapeHtml(reportId)}">误报</button>
     </div>` : '';
   return `<div class="finding ${escapeHtml(finding.status || 'skip')}">
-    <span class="finding-rule">${escapeHtml(finding.rule_id || '—')}</span>
+    <span class="finding-rule">${escapeHtml(finding.rule_id || '—')}${layer}</span>
     <div class="finding-body">
       <div class="finding-title"><b>${escapeHtml(finding.title || '')}</b><span class="pill ${status.tone}">${status.text}</span><span class="pill ${reviewTone(review)}">${reviewLabel(review)}</span></div>
       ${locationText ? `<div class="finding-location"><b>定位：</b>${escapeHtml(locationText)}</div>` : ''}
@@ -564,6 +592,21 @@ function renderFinding(finding, review, reportId) {
       ${finding.suggestion ? `<div class="finding-suggestion"><b>建议：</b>${escapeHtml(finding.suggestion)}</div>` : ''}
       ${actions}
     </div>
+  </div>`;
+}
+function renderStage2Strip(stage2) {
+  const partial = stage2.partial || {};
+  const dsl = stage2.dsl || {};
+  const semantic = stage2.semantic || {};
+  const statuses = partial.statuses || {};
+  const semanticTone = semantic.status === 'ok' ? 'success' : semantic.status === 'error' ? 'warn' : 'neutral';
+  const semanticText = semantic.status === 'ok' ? '已运行' : semantic.status === 'error' ? '调用失败' : '未启用';
+  const semanticReason = semantic.status === 'ok' ? '' : ` · ${semantic.reason || '未配置'}`;
+  return `<div class="stage2-strip">
+    <span class="pill info">阶段 2</span>
+    <span class="stage2-item"><b>部分规则</b> ${partial.count ?? 0} 条 · 未检查 ${statuses.skip ?? 0} · 失败 ${statuses.fail ?? 0}</span>
+    <span class="stage2-item"><b>规则 DSL</b> v${dsl.version ?? 0} · ${dsl.rules ?? 0} 条 · 命中 ${Object.values(dsl.hits || {}).reduce((sum, value) => sum + Number(value || 0), 0)}</span>
+    <span class="stage2-item"><span class="pill ${semanticTone}">语义${semanticText}</span><span class="muted">${escapeHtml(semanticReason)}</span></span>
   </div>`;
 }
 function renderReport(data) {
@@ -615,6 +658,7 @@ function renderReport(data) {
       <div><span class="file-name">${escapeHtml(data.file || '已上传报告')}</span><span class="file-sub">${escapeHtml(TEMPLATE_NAMES[data.template] || data.template || '报告模板')} · 共 ${escapeHtml(summary.total ?? findings.length)} 条规则${meta ? ` · ${meta}` : ''}</span></div>
       <div class="summary-pills">${pills}</div>
     </div>
+    ${data.stage2 ? renderStage2Strip(data.stage2) : ''}
     ${actions}
     <div class="review-toolbar">
       <label class="muted">严重级别 <select id="findingSeverityFilter"><option value="">全部</option>${severityOptions}</select></label>

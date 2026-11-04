@@ -1,0 +1,304 @@
+{
+  "semantic": {
+    "groups": {
+      "S01": {
+        "cases": 8,
+        "tp": 8,
+        "fp": 0,
+        "fn": 0,
+        "expected": 8,
+        "category": 8
+      },
+      "S02": {
+        "cases": 8,
+        "tp": 8,
+        "fp": 0,
+        "fn": 0,
+        "expected": 8,
+        "category": 7
+      },
+      "S03": {
+        "cases": 8,
+        "tp": 8,
+        "fp": 0,
+        "fn": 0,
+        "expected": 8,
+        "category": 8
+      },
+      "S04": {
+        "cases": 8,
+        "tp": 8,
+        "fp": 0,
+        "fn": 0,
+        "expected": 8,
+        "category": 8
+      },
+      "clean": {
+        "cases": 12,
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "expected": 0,
+        "category": 0
+      }
+    },
+    "cases_run": 44,
+    "cases_total": 44,
+    "missing_cases": 0,
+    "tp": 32,
+    "fp": 0,
+    "fn": 0,
+    "expected": 32,
+    "recall": 1.0,
+    "fp_rate": 0.0,
+    "precision": 1.0,
+    "clean_total": 12,
+    "clean_with_findings": 0,
+    "clean_fp_rate": 0.0,
+    "category_accuracy": 0.9688,
+    "gate_ok": true
+  },
+  "partial": {
+    "available": true,
+    "catalog": [
+      {
+        "id": "P01",
+        "title": "任务单编号一致",
+        "description": "报告编号/样品编号与任务单一致",
+        "requires": "任务单导出",
+        "enabled": true,
+        "layer": "partial"
+      },
+      {
+        "id": "P02",
+        "title": "目录页码完整",
+        "description": "目录页码落在 1..总页数内",
+        "requires": "目录与页脚解析",
+        "enabled": true,
+        "layer": "partial"
+      },
+      {
+        "id": "P03",
+        "title": "单项检验时间",
+        "description": "单项检验时间在汇总检验时间内",
+        "requires": "检验起止日期",
+        "enabled": true,
+        "layer": "partial"
+      },
+      {
+        "id": "P04",
+        "title": "数值单位",
+        "description": "检验结果数值单位与判定要求一致",
+        "requires": "结构化单位列",
+        "enabled": true,
+        "layer": "partial"
+      },
+      {
+        "id": "P05",
+        "title": "平行样",
+        "description": "平行样间偏差与小数位一致",
+        "requires": "平行样编号/结果",
+        "enabled": true,
+        "layer": "partial"
+      },
+      {
+        "id": "P06",
+        "title": "照片/设备标签/印章",
+        "description": "照片/设备标签/印章完整性",
+        "requires": "视觉模型（本期未接入）",
+        "enabled": true,
+        "layer": "partial"
+      },
+      {
+        "id": "P07",
+        "title": "标记符号",
+        "description": "报告不得含黄色高亮/红色字体",
+        "requires": "报告样式解析",
+        "enabled": true,
+        "layer": "partial"
+      },
+      {
+        "id": "P08",
+        "title": "第二主机厂模板",
+        "description": "第二主机厂模板正确使用",
+        "requires": "吉利/非吉利样例",
+        "enabled": true,
+        "layer": "partial"
+      }
+    ],
+    "files": 12,
+    "statuses": {
+      "P01": {
+        "skip": 12
+      },
+      "P02": {
+        "pass": 12
+      },
+      "P03": {
+        "pass": 12
+      },
+      "P04": {
+        "skip": 12
+      },
+      "P05": {
+        "skip": 12
+      },
+      "P06": {
+        "skip": 12
+      },
+      "P07": {
+        "fail": 12
+      },
+      "P08": {
+        "skip": 12
+      }
+    }
+  },
+  "dsl": {
+    "version": 1,
+    "total": 10,
+    "errors": [],
+    "rules": [
+      {
+        "id": "D01",
+        "title": "委托单位必填",
+        "description": "委托单位为空",
+        "source": "report",
+        "field": "client",
+        "op": "empty",
+        "severity": "high",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D02",
+        "title": "样品数量必填",
+        "description": "样品数量为空",
+        "source": "report",
+        "field": "sample_qty",
+        "op": "empty",
+        "severity": "high",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D03",
+        "title": "样品编号前缀",
+        "description": "样品编号不符合 TS 前缀",
+        "source": "report",
+        "field": "sample_no",
+        "op": "not_regex",
+        "severity": "medium",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D04",
+        "title": "检验依据",
+        "description": "未引用比亚迪企业标准",
+        "source": "report",
+        "field": "basis",
+        "op": "not_contains",
+        "severity": "medium",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D05",
+        "title": "检验项目",
+        "description": "检验项目非气味",
+        "source": "report",
+        "field": "item",
+        "op": "not_contains",
+        "severity": "low",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D06",
+        "title": "判定为不符合",
+        "description": "判定为不符合，请复核结论",
+        "source": "report",
+        "field": "judgment",
+        "op": "eq",
+        "severity": "low",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D07",
+        "title": "均值上限",
+        "description": "报告均值超过 4.0",
+        "source": "report",
+        "field": "reported_mean",
+        "op": "gt",
+        "severity": "medium",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D08",
+        "title": "限值",
+        "description": "限值不高于 3.5，确认委托要求",
+        "source": "report",
+        "field": "limit",
+        "op": "lte",
+        "severity": "low",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D09",
+        "title": "任务单样品编号",
+        "description": "任务单缺样品编号",
+        "source": "inputs",
+        "field": "sample_no",
+        "op": "empty",
+        "severity": "high",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      },
+      {
+        "id": "D10",
+        "title": "目录页码",
+        "description": "目录首页异常",
+        "source": "report",
+        "field": "toc_first_page",
+        "op": "lt",
+        "severity": "low",
+        "enabled": true,
+        "rollout": 100,
+        "layer": "dsl"
+      }
+    ],
+    "files": 12,
+    "hits": {
+      "D06": 12,
+      "D08": 12
+    },
+    "skipped": {
+      "D09": 12
+    }
+  },
+  "regression": {
+    "files": 12,
+    "changed": [],
+    "ok": true
+  },
+  "semantic_meta": {
+    "model": "deepseek-chat",
+    "enabled": true,
+    "cache_hits": 0,
+    "missing": [],
+    "network": true
+  }
+}

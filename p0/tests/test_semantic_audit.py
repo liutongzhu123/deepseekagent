@@ -57,3 +57,40 @@ def test_redact_personal_data():
     assert "LSVAA4187N2N12345" not in text
     assert "13800138000" not in text
     assert "a@b.com" not in text
+
+
+def test_prompt_uses_configured_criteria():
+    from app.semantic_audit import build_prompt
+
+    cfg = _config(criteria={"S01": "只报错别字", "S02": "只报产品名", "S03": "只报结论", "S04": "只报项目"})
+    system, instruction = build_prompt(cfg)
+
+    assert "只报错别字" in instruction
+    assert "只报产品名" in instruction
+    assert "没有明确缺陷时 findings 必须为空数组" in instruction
+    assert system
+
+
+def test_duplicate_rule_findings_are_collapsed():
+    content = json.dumps({"findings": [
+        {"rule_id": "S01", "status": "warn", "message": "第一条", "evidence": "a"},
+        {"rule_id": "S01", "status": "warn", "message": "第二条", "evidence": "b"},
+    ]})
+    result = audit_semantics("报告正文", config=_config(), post=_ok_post(content))
+
+    assert result["status"] == "ok"
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["layer"] == "semantic"
+
+
+def test_prompt_payload_is_redacted():
+    captured = {}
+
+    def fake_post(url, payload, headers, timeout):
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": '{"findings":[]}'}}]}
+
+    audit_semantics("VIN LSVAA4187N2N12345 电话 13800138000", config=_config(), post=fake_post)
+    text = captured["payload"]["messages"][1]["content"]
+    assert "LSVAA4187N2N12345" not in text
+    assert "13800138000" not in text
