@@ -319,6 +319,11 @@ API 返回 `sales_quote_skipped_reason`。这保证报价金额不会由模型�
 `P0_REDIS_URL` 默认 `redis://127.0.0.1:6379/0`。Redis 不可用、超时或写入失败只当缓存未命中，
 不阻断问答；`retrieval.query_rewrite.cached` 标记是否命中。
 
+**rerank 参数（T401c）**：`P0_WEKNORA_RERANK=1` 走 rerank 端点。候选召回默认 30
+（`P0_WEKNORA_RERANK_CANDIDATES`）、最终 rerank top_k 默认 15（`P0_WEKNORA_RERANK_TOP_K`），
+均比改前的 30 减半；调用方显式 `top_k` 更大时不会被压小。两者可单独回退。
+`P0_EMBEDDING_BATCH` 默认由 32 调大到 64，提升建索引/批量 embedding 吞吐（不改变单次问答结果）。
+
 
 ## 标准解析 Schema（v0.1 + P1 OCR 字段）
 

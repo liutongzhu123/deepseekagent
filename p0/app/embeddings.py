@@ -15,7 +15,7 @@ Configuration (environment variables):
 ``P0_EMBEDDING_TIMEOUT``
     Per-request timeout in seconds, default 300.
 ``P0_EMBEDDING_BATCH``
-    Number of chunks per request, default 32.
+    Number of chunks per request, default 64.
 ``P0_VECTOR_CACHE``
     Optional path of the on-disk vector cache.
 """
@@ -83,7 +83,7 @@ class OllamaEmbedder:
         self.base_url = (base_url or os.getenv("P0_EMBEDDING_URL", "http://127.0.0.1:11434")).rstrip("/")
         self.model = model or os.getenv("P0_EMBEDDING_MODEL", "bge-m3")
         self.timeout = timeout if timeout is not None else _env_float("P0_EMBEDDING_TIMEOUT", 300.0)
-        self.batch_size = max(1, batch_size if batch_size is not None else _env_int("P0_EMBEDDING_BATCH", 32))
+        self.batch_size = max(1, batch_size if batch_size is not None else _env_int("P0_EMBEDDING_BATCH", 64))
 
     def _post(self, texts: Sequence[str]) -> list[list[float]]:
         payload = json.dumps({"model": self.model, "input": list(texts)}).encode("utf-8")
