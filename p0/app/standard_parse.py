@@ -12,6 +12,7 @@ from typing import Callable
 
 from . import admin_config
 from . import ocr as ocr_service
+from . import watermark
 from .pdf_text import extract_pages
 from .standard_parser import parse_standard
 
@@ -62,6 +63,7 @@ def parse_pdf_standard(
             ocr_meta = ocr_result.meta()
         except ocr_service.OcrUnavailable as exc:
             ocr_warning = f"扫描件 OCR 未启用：{exc}"
+    pages, watermark_removed = watermark.clean_pages(pages)
     report("parse", 75)
     parsed = parse_standard(
         pages,
@@ -71,6 +73,8 @@ def parse_pdf_standard(
         ocr=ocr_meta,
         rule_config=rule_config or admin_config.standard_config(),
     )
+    if watermark_removed:
+        parsed.setdefault("warnings", []).append(f"已清洗水印碎片 {watermark_removed} 处")
     if ocr_warning:
         parsed.setdefault("warnings", []).append(ocr_warning)
     report("parsed", 90)
