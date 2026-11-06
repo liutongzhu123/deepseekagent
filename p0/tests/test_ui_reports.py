@@ -83,3 +83,15 @@ def test_report_history_has_search_and_pagination():
         assert marker in js
     assert ".report-history-tools" in read("ui.css")
 
+
+
+def test_batch_async_task_progress_is_handled():
+    js = read("ui.js")
+    for marker in (
+        "waitForReportTask",
+        "data.task_id",
+        "api/v1/tasks/",
+        "task.status === 'succeeded'",
+        "task.result",
+    ):
+        assert marker in js

@@ -1104,7 +1104,7 @@ async def audit_report_batch(
             entries.append((name, exc))
     batch_id = _new_report_id("rb_")
     uploads = [(name, payload) for name, payload in entries if isinstance(payload, bytes)]
-    if _task_switch("P0_TASKS_REPORT_BATCH_ASYNC", default="0") and len(uploads) == len(entries):
+    if _task_switch("P0_TASKS_REPORT_BATCH_ASYNC", default="1") and len(uploads) == len(entries):
         return _enqueue_report_batch(
             request, user, entries=uploads, project=project, batch_id=batch_id
         )
