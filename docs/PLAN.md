@@ -216,7 +216,8 @@
 > 模型接入必须保持可切换：测试阶段可走公网 DeepSeek，客户本地部署改用客户本地模型，切换只改配置、不改代码。
 
 #### T401 · 检索延迟优化
-- **状态**：`doing`  **依赖**：D5（已确认）
+- **状态**：`doing`（实现已合并；5 份标准 P95 待补跑）  **依赖**：D5（已确认）
+- **进度**：T401a #72、T401b #73、T401c #74 已合并；评测脚本与改写微基准见 `docs/eval-p1-latency.md`；5 份标准的端到端 P95 需在有已发布 KB / WeKnora 凭据的环境补跑。
 - **目标**：以现有 5 份标准的问答为基线，P95 首字延迟 < 8s；改前/改后对比写入 `docs/eval-p1-latency.md`。
 - **拆三个独立 PR（每个 ≤300 行）**：
   - **T401a 查询改写模型**：改写改用非 reasoning 模型（DeepSeek `deepseek-chat` 级别），新增可关闭开关；改写失败回退原问题，不阻断问答。
@@ -229,7 +230,7 @@
 - **涉及**：`p0/app/standard_qa.py`、`p0/app/query_rewrite.py`、`p0/app/weknora.py`、`p0/tests/`、`docs/eval-p1-latency.md`
 
 #### T402 · 本地模型可切换性验证
-- **状态**：`doing`  **依赖**：D5（已确认）  **不改代码**
+- **状态**：`pr-open`（#76）  **依赖**：D5（已确认）  **不改代码**
 - **验证两件事**：
   1. 语义审核把 `P0_SEMANTIC_BASE_URL` / `P0_SEMANTIC_MODEL` 指向本地 Ollama，能跑通一次语义审核；
   2. WeKnora 的 VLM 配成 Ollama 的 `qwen2.5vl`，对一份扫描件跑一次解析/问答并记录效果。
@@ -237,9 +238,10 @@
 - **涉及**：`docs/p1-model-switchability.md`（只写报告，不改代码）
 
 #### T403 · 水印预处理
-- **状态**：`todo`  **依赖**：无
+- **状态**：`merged`（#75）  **依赖**：无
 - **做什么**：清洗 PDF/扫描件文本层中的水印碎片，避免污染条款与数值抽取；处理可配置、可回退。
 - **验收标准**：单测覆盖水印碎片清洗与正常文本不误伤；既有解析/审核结论 diff 为空（除明确修复的噪声）。
+- **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；6 条单测通过。真实带水印客户 PDF 的解析 diff 待样例到位后补跑。
 - **涉及**：`p0/app/pdf_text.py`、`p0/app/ocr.py`、`p0/tests/`
 
 #### T404 · rerank 接入问答链路
@@ -279,11 +281,12 @@
 | T304 | `blocked` | — | — | XG 模板骨架，缺 D1 |
 | T305 | `blocked` | — | — | 第二主机厂适配，缺 D2 |
 | T306 | `todo` | — | — | 语义启用/阶段 2 客户验收；D5 已确认 |
-| T401a | `doing` | — | — | 查询改写换非 reasoning 模型 + 开关 |
-| T401b | `todo` | — | — | 改写结果 Redis 缓存（5 分钟） |
-| T401c | `todo` | — | — | rerank 候选 top_k 30→15、调大 BATCH_SIZE |
-| T402 | `doing` | — | — | 本地模型可切换性验证（只写报告） |
-| T403 | `todo` | — | — | 水印预处理 |
+| T401a | `merged` | #72 | 绿 | 改写换非 reasoning 模型 + 开关 |
+| T401b | `merged` | #73 | 绿 | 改写结果 Redis 缓存（5 分钟） |
+| T401c | `merged` | #74 | 绿 | rerank 30→15 + embedding batch 64 |
+| T401 评测 | `doing` | — | — | `docs/eval-p1-latency.md`；5 份标准 P95 待补跑 |
+| T402 | `pr-open` | #76 | — | 本地模型可切换性验证报告 |
+| T403 | `merged` | #75 | 绿 | PDF/OCR 水印碎片预处理 |
 | T404 | `todo` | — | — | rerank 接入问答链路 |
 
 **当前阻塞**：T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
