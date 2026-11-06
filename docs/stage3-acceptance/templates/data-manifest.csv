@@ -1,0 +1,12 @@
+data_id,dataset,class,masked_id,file_name,file_type,pages,expected_judgment,expected_fail_rules,case_kind,provided_by,provided_at,redacted,notes
+D1-001,D1,C,S3-XG-D1-001,xg-d1-001.docx,docx,3,待确认,,template,客户业务,2026-11-XX,yes,占位示例；D1 到位后替换
+D2-001,D2,D2,S3-OEM2-001,oem2-001.docx,docx,5,待确认,,template,客户业务,2026-11-XX,yes,占位示例；D2 到位后替换
+D3-001,D3,A,S3-OTS-001,ots-001.docx,docx,5,不符合,"R01;R02",defect,客户业务,2026-11-XX,yes,合成占位行；勿填真实数据
+D3-002,D3,A,S3-OTS-002,ots-002.docx,docx,5,符合,,clean,客户业务,2026-11-XX,yes,干净对照占位
+D3-003,D3,B,S3-MOBAN-001,moban-001.docx,docx,4,不符合,"R02",defect,客户业务,2026-11-XX,yes,占位
+D3-004,D3,C,S3-XG-001,xg-001.docx,docx,3,不符合,"R01",defect,客户业务,2026-11-XX,yes,C 类占位；D1 前不可用
+D4-001,D4,,,task_orders.xlsx,xlsx,,,,"task_orders",客户IT,2026-11-XX,yes,四类输入文件之一
+D4-002,D4,,,original_records.xlsx,xlsx,,,,"original_records",客户IT,2026-11-XX,yes,四类输入文件之一
+D4-003,D4,,,samples.xlsx,xlsx,,,,"samples",客户IT,2026-11-XX,yes,四类输入文件之一
+D4-004,D4,,,equipment.xlsx,xlsx,,,,"equipment",客户IT,2026-11-XX,yes,四类输入文件之一
+D5-001,D5,,,D5-书面确认.pdf,pdf,,,,compliance,项目负责人,2026-11-XX,yes,合规确认归档件
