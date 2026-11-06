@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from . import admin_config
 from . import auth
 from . import quote as quote_service
+from . import report_batch
 from . import crm, monitoring, quote_store, store, task_worker
 from . import feedback_store, oidc, report_store, report_writer, report_inputs, partial_rules, rule_dsl, semantic_audit, standard_parse, standard_qa, standard_store, weknora
 from . import xlsx_writer
@@ -1036,6 +1037,44 @@ def _report_export_name(record: dict) -> str:
     return f"{stem}-审核结果.xlsx"
 
 
+def _enqueue_report_batch(
+    request: Request,
+    user: dict,
+    *,
+    entries: list[tuple[str, bytes]],
+    project: str,
+    batch_id: str,
+) -> JSONResponse:
+    from .store import objects
+
+    payload = {"batch_id": batch_id, "project": project, "created_by": user["username"], "files": []}
+    task = tasks.create(
+        "report_batch",
+        payload,
+        created_by=user["username"],
+        project=project,
+        max_attempts=int(os.getenv("P0_TASKS_MAX_ATTEMPTS", "2")),
+    )
+    metas = []
+    with store.db.engine().begin() as conn:
+        for index, (name, data) in enumerate(entries):
+            record = objects.upsert_file(
+                conn,
+                owner_type="task",
+                owner_id=task["id"],
+                name=f"{index:03d}-{name}",
+                data=data,
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            metas.append({"file_id": record["id"], "file_name": name})
+    task = tasks.set_payload(task["id"], {**payload, "files": metas})
+    _audit_event(
+        request, user, "report_batch_queued", task_id=task["id"],
+        batch_id=batch_id, files=len(entries), project=project,
+    )
+    return _task_response(task)
+
+
 @app.post("/api/v1/reports/batch")
 async def audit_report_batch(
     request: Request, files: list[UploadFile] = File(...), project: str = Form("")
@@ -1048,10 +1087,7 @@ async def audit_report_batch(
     if len(files) > batch_max:
         raise HTTPException(status_code=400, detail=f"一次最多 {batch_max} 份报告")
     byte_limit = int(os.getenv("P0_REPORT_BATCH_MB", "100")) * 1024 * 1024
-    batch_id = _new_report_id("rb_")
-    inputs = _load_report_inputs()
-    items: list[dict] = []
-    totals = {"pass": 0, "warn": 0, "fail": 0, "skip": 0}
+    entries: list[tuple[str, bytes | Exception]] = []
     consumed = 0
     for file in files:
         name = file.filename or "report.docx"
@@ -1063,44 +1099,28 @@ async def audit_report_batch(
                     status_code=413,
                     detail=f"批次总大小超过 {byte_limit // 1024 // 1024} MB",
                 )
-            result = _audit_report_bytes(
-                data, name, user=user, project=project, batch_id=batch_id, inputs=inputs
-            )
+            entries.append((name, data))
         except HTTPException as exc:
-            items.append(
-                {"file": name, "report_id": "", "summary": {}, "ok": False, "error": str(exc.detail)}
-            )
-            continue
-        except Exception as exc:  # noqa: BLE001 - one bad file must not drop the batch
-            items.append(
-                {"file": name, "report_id": "", "summary": {}, "ok": False,
-                 "error": f"failed to parse report: {exc}"}
-            )
-            continue
-        summary = result.get("summary") or {}
-        for key in totals:
-            totals[key] += int(summary.get(key, 0) or 0)
-        items.append(
-            {"file": name, "report_id": result["report_id"], "summary": summary,
-             "ok": True, "error": ""}
+            entries.append((name, exc))
+    batch_id = _new_report_id("rb_")
+    uploads = [(name, payload) for name, payload in entries if isinstance(payload, bytes)]
+    if _task_switch("P0_TASKS_REPORT_BATCH_ASYNC", default="0") and len(uploads) == len(entries):
+        return _enqueue_report_batch(
+            request, user, entries=uploads, project=project, batch_id=batch_id
         )
-    stored = sum(1 for item in items if item["ok"])
+    result = report_batch.run_batch(
+        entries,
+        user=user,
+        project=project,
+        batch_id=batch_id,
+        audit=_audit_report_bytes,
+        inputs=_load_report_inputs(),
+    )
     _audit_event(
         request, user, "report_batch_audited", batch_id=batch_id,
-        files=len(items), stored=stored, project=project,
+        files=len(entries), stored=result["summary"]["stored"], project=project,
     )
-    return {
-        "batch_id": batch_id,
-        "project": project,
-        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "items": items,
-        "summary": {
-            "total": len(items),
-            "stored": stored,
-            "failed": len(items) - stored,
-            **totals,
-        },
-    }
+    return result
 
 
 @app.get("/api/v1/reports")

@@ -19,7 +19,7 @@ from sqlalchemy import delete, func, select, update
 
 from . import config, db
 
-KINDS = {"standard_parse", "standard_publish"}
+KINDS = {"standard_parse", "standard_publish", "report_batch"}
 STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 _ID_RE = re.compile(r"^task_[0-9]{14}_[0-9a-f]{8}$")
 

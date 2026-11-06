@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Callable
 
-from . import auth, standard_store
+from . import auth, report_batch, standard_store
 from .standard_parse import parse_pdf_standard
 from .store import db, objects, tasks
 
@@ -122,9 +122,61 @@ def _audit_failure(task: dict, error: str) -> None:
     )
 
 
+def _read_task_file(file_id: str, file_name: str) -> tuple[str, bytes]:
+    with db.engine().connect() as conn:
+        _, data = objects.read_file(conn, file_id)
+    return (file_name, data)
+
+
+def _handle_report_batch(
+    task: dict,
+    report: Callable[[str, int], None],
+    *,
+    read: Callable[[str, str], tuple[str, bytes]] | None = None,
+) -> dict:
+    """Audit an uploaded report batch; the files stay in the object store."""
+    payload = task.get("payload") or {}
+    metas = payload.get("files") or []
+    if not metas:
+        raise ValueError("批量审核任务缺少文件")
+    read = read or _read_task_file
+    report("load", 5)
+    entries = [
+        read(str(meta.get("file_id", "")), str(meta.get("file_name") or "report.docx"))
+        for meta in metas
+    ]
+    report("audit", 15)
+
+    def on_item(_name: str, _ok: bool, index: int, total: int) -> None:
+        report("audit", 15 + int(75 * (index + 1) / max(1, total)))
+
+    from .main import _audit_report_bytes  # lazy: reuse the API audit pipeline
+
+    result = report_batch.run_batch(
+        entries,
+        user={"username": str(payload.get("created_by", ""))},
+        project=str(payload.get("project", "")),
+        batch_id=str(payload.get("batch_id", "")),
+        audit=_audit_report_bytes,
+        on_item=on_item,
+    )
+    report("save", 95)
+    _audit_task(
+        task, "report_batch_audited", batch_id=result["batch_id"],
+        files=len(entries), stored=result["summary"]["stored"],
+    )
+    return {
+        "batch_id": result["batch_id"],
+        "project": result["project"],
+        "summary": result["summary"],
+        "items": result["items"],
+    }
+
+
 DEFAULT_HANDLERS: dict[str, Handler] = {
     "standard_parse": _handle_standard_parse,
     "standard_publish": _handle_standard_publish,
+    "report_batch": _handle_report_batch,
 }
 
 
