@@ -1,6 +1,6 @@
 # P1 检索延迟评测（T401）
 
-> 更新时间：2026-11-06。任务：以现有 5 份标准的问答为基线，改前/改后对比 P95 首字延迟，目标 **P95 < 8s**。
+> 更新时间：2026-11-07（补现网纯检索基线）；任务：以现有 5 份标准的问答为基线，改前/改后对比 P95 首字延迟，目标 **P95 < 8s**。
 > 口径说明：P0 的 `/api/v1/standards/ask` 是**同步 JSON**接口（没有 token 流），首字（首个可见内容）随响应到达；下文把“从请求到答案 JSON 返回”的墙钟时间称为**首结果延迟**，用它近似首字延迟。
 
 ## 1. 改前 / 改后配置
@@ -72,7 +72,7 @@ python scripts/bench_p1_latency.py --endpoint http \
   --label live-baseline --json /tmp/p1-latency-live.json
 ```
 
-**本机状态**：`/p0/health` 可访问（0.8.4，auth=on），但无现网账号/WeKnora 凭据，`/api/v1/standards/ask` 返回 401；因此现网基线数字待有凭据后补跑。脚本的 HTTP 路径已用本地 stub 单测覆盖（首字节、完整响应、命中率）。
+**本机状态（2026-11-07 更新）**：`/p0/health` 可访问（0.8.4，auth=on）；已用只读 admin 账号补跑现网纯检索基线（见 §6）。现网响应没有 `rerank` 字段，带 rerank 组仍缺 WeKnora 租户 API key 或新版部署。
 
 ## 4. 复现命令
 
@@ -115,5 +115,49 @@ PY
 | T401a 非 reasoning 改写 + 开关 | ✅ 已合并（#72）；微基准 P95 -503 ms |
 | T401b Redis 缓存（5 分钟） | ✅ 已合并（#73）；单测覆盖命中/过期/降级 |
 | T401c rerank 30→15 + batch | ✅ 已合并（#74）；请求体单测 |
-| T401 基准脚本（指定查询集 + P50/P95/首字） | ✅ 仓库内 `p0/scripts/bench_p1_latency.py`，支持本地/现网 `--endpoint http` |
-| 5 份标准 P95 < 8s | ⏳ 待跑：本机缺 5 份标准 KB / WeKnora 凭据；命令已备好 |
+| T401 基准脚本（指定查询集 + P50/P95/首字） | ✅ 仓库内 `p0/scripts/bench_p1_latency.py`，支持本地/现网 `--endpoint http`、`--insecure` 与 `--mode` |
+| 现网纯检索基线（20 次） | ✅ 2026-11-07：`mode=weknora` P50 271.4 ms / P95 299.9 ms；`mode=keyword` P50 31.1 ms / P95 34.2 ms，见 §6 |
+| 现网带 rerank 对比 | ⏳ 缺 WeKnora 租户 API key（或部署 T404 后重启 P0）；不能用现网 hybrid-search 冒充 |
+
+## 6. 现网基线与 rerank 对比状态（2026-11-07）
+
+### 6.1 环境与口径
+
+- 现网 P0 `0.8.4`，`https://zhongqi.yunanht.com/p0`，自签证书（脚本 `--insecure`）；admin 只读登录。
+- 问题集 `p0/eval/p1_latency_questions.live.json`（5 题，均引用已发布标准条款，不含正文）。
+- 5 题 × 4 次 = 20 次/组；每组先跑 1 次预热，预热不计入。
+- P0 的 `/api/v1/standards/ask` 是同步 JSON，`first_token_ms`（首字节）≈ `latency_ms`（完整响应），见 §1 口径。
+- `config` 块是**脚本侧**环境（`P0_QUERY_REWRITE=0`、`P0_WEKNORA_RERANK=0`），不是现网进程环境；现网响应没有返回 `retrieval.rerank` / `query_rewrite` 字段。
+
+### 6.2 结果
+
+| 组 | 路径 | n | 命中 | P50 首字 | P95 首字 | P50 完整 | P95 完整 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| A | 现网 `mode=weknora`（0.8.4 默认，推断 hybrid-search） | 20 | 100% | 271.4 ms | 299.9 ms | 271.8 ms | 300.6 ms |
+| B | 现网 `mode=keyword`（确定性关键词基线） | 20 | 100% | 31.1 ms | 34.2 ms | 31.4 ms | 34.7 ms |
+
+- 首字最小/最大：A 257.2–302.7 ms；B 28.8–34.7 ms。
+- 单题均值差异不大（A 262.6–300.8 ms），5 题负载稳定；P95 主要反映 WeKnora 往返抖动。
+- 现网 `weknora` 路径比关键词基线慢约 **240 ms**（P50），这是 WeKnora 检索往返的成本；按启动时间/响应字段推断，它仍是 **无 rerank** 的 hybrid-search，不是 T404 后的 knowledge-search。
+
+### 6.3 为什么没有「带 rerank」组
+
+现网 P0 进程启动于 2026-11-05，早于 T404/T401c 合并；`/api/v1/standards/ask` 的响应也没有 `retrieval.rerank` / `query_rewrite` 字段，按启动时间与响应字段推断，现网跑的是 T404 之前的代码（`weknora.search` 默认 hybrid-search，`P0_WEKNORA_RERANK=0`）。要在现网测「knowledge-search + rerank」需要二选一：
+
+1. 部署带 T404 的版本并重启 P0（现网只读约束下本工单不做）；
+2. 用 P0 的 WeKnora 租户 API key 直连 `POST /api/v1/knowledge-search`（带 rerank）与 `POST /api/v1/knowledge-bases/{kb}/hybrid-search`（无 rerank）对比。
+
+第 2 条本次未跑通：公网 `https://<host>/api/v1` 返回 502；P0 用的 WeKnora 后端（`10.220.1.6:8080`）用 `admin@zhongqi.local` 登录返回 401（按约定 3 次内停止），缺少租户 API key。**因此「带 rerank」数字仍为待补，不能用 A 组冒充。**
+
+### 6.4 复现
+
+```bash
+cd p0
+P0_QUERY_REWRITE=0 P0_WEKNORA_RERANK=0 \
+python scripts/bench_p1_latency.py --endpoint http --insecure \
+  --base-url https://zhongqi.yunanht.com/p0 \
+  --username "$P0_USERNAME" --password "$P0_PASSWORD" \
+  --questions eval/p1_latency_questions.live.json --repeat 4 \
+  --mode weknora --label live-weknora --json /tmp/p1-latency-live-weknora.json
+# 把 --mode 换成 keyword 跑 B 组；--repeat 4 × 5 题 = 20 次
+```
