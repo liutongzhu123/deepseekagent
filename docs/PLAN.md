@@ -230,7 +230,8 @@
 - **涉及**：`p0/app/standard_qa.py`、`p0/app/query_rewrite.py`、`p0/app/weknora.py`、`p0/tests/`、`docs/eval-p1-latency.md`
 
 #### T402 · 本地模型可切换性验证
-- **状态**：`merged`（#76）  **依赖**：D5（已确认）  **不改代码**
+- **状态**：`verified-deferred`（#76）  **依赖**：无  **不改代码**
+- **结论（2026-11-06 更新）**：本地 CPU 可跑通但吞吐不足——约 **5.5 tok/s**、图像约 **62 s/张**；决定暂停本地模型，继续用 DeepSeek 公网 API。客户本地部署需要 GPU 时再评估；模型接入仍保持可切换。
 - **验证两件事**：
   1. 语义审核把 `P0_SEMANTIC_BASE_URL` / `P0_SEMANTIC_MODEL` 指向本地 Ollama，能跑通一次语义审核；
   2. WeKnora 的 VLM 配成 Ollama 的 `qwen2.5vl`，对一份扫描件跑一次解析/问答并记录效果。
@@ -285,7 +286,7 @@
 | T401b | `merged` | #73 | 绿 | 改写结果 Redis 缓存（5 分钟） |
 | T401c | `merged` | #74 | 绿 | rerank 30→15 + embedding batch 64 |
 | T401 评测 | `doing` | #77 #78 | 绿 | 脚本与微基准已合并；5 份标准 P95 待补跑 |
-| T402 | `merged` | #76 | — | 本地模型可切换性验证报告 |
+| T402 | `verified-deferred` | #76 | — | 本地 CPU 可跑通但吞吐不足（5.5 tok/s、图像 62s/张）；继续 DeepSeek 公网，客户本地需 GPU 再评估 |
 | T403 | `merged` | #75 | 绿 | PDF/OCR 水印碎片预处理 |
 | T404 | `merged` | #79 | 绿 | rerank 接入问答链路，暴露 `retrieval.rerank` |
 
@@ -333,7 +334,7 @@
 
 > 本节只排顺序，不新增正式任务号；新任务由项目负责人确认后再进 §三。
 
-**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T402 验证报告（#76）、T403 水印（#75）、T404 rerank 接入（#79）；T401 评测脚本/文档（#77/#78）已合并。
+**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T403 水印（#75）、T404 rerank 接入（#79）；T402 验证报告（#76）为 **verified-deferred**（本地 CPU 约 5.5 tok/s、图像约 62 s/张，继续用 DeepSeek 公网，客户本地需 GPU 再评估）；T401 评测脚本/文档（#77/#78）已合并。
 
 **接下来按顺序**：
 
