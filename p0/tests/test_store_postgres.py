@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import auth, main, quote_store, report_store, standard_store
-from app.store import config, db, migration
+from app import auth, main, quote_store, report_store, standard_store, task_worker
+from app.store import config, db, migration, objects, tasks
 
 PG_URL = os.getenv("P0_TEST_DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(
@@ -340,6 +340,50 @@ def test_report_prune_removes_old_audits(pg):
     assert not (pg / "reports" / old_id).exists()
     assert (pg / "reports" / new_id).exists()
 
+
+def test_report_batch_queue_roundtrip(pg, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("P0_TASKS_ENABLED", "1")
+    batch_id = "rb_20261106100000_abcdef"
+    request = SimpleNamespace(
+        headers={},
+        client=SimpleNamespace(host="127.0.0.1"),
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/reports/batch"),
+    )
+
+    response = main._enqueue_report_batch(
+        request,
+        {"username": "alice"},
+        entries=[("a.docx", b"docx-a"), ("b.docx", b"docx-b")],
+        project="P1",
+        batch_id=batch_id,
+    )
+
+    assert response.status_code == 202
+    task_id = json.loads(response.body)["task_id"]
+    queued = tasks.get(task_id)
+    assert queued["kind"] == "report_batch"
+    assert queued["status"] == "queued"
+    first_file = queued["payload"]["files"][1]["file_id"]
+    with db.engine().connect() as conn:
+        assert objects.read_file(conn, first_file)[1] == b"docx-b"
+
+    monkeypatch.setattr(
+        main,
+        "_audit_report_bytes",
+        lambda data, name, **kwargs: {
+            "report_id": f"rp_{name}",
+            "summary": {"total": 1, "pass": 1, "warn": 0, "fail": 0, "skip": 0},
+        },
+    )
+    monkeypatch.setattr(task_worker.auth, "audit", lambda entry: None)
+    result = task_worker._handle_report_batch(queued, lambda stage, value: None)
+
+    assert result["batch_id"] == batch_id
+    assert result["summary"]["stored"] == 2
+    assert result["summary"]["pass"] == 2
 
 
 def test_standard_versions_unpublish_and_rollback(pg):

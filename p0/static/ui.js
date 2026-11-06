@@ -814,6 +814,20 @@ async function reviewFinding(reportId, ruleId, status) {
   }
   toast(`已标记 ${ruleId}：${REVIEW_LABELS[status] || status}`, 'info');
 }
+async function waitForReportTask(taskId) {
+  const stageLabels = { queued: '排队', load: '读取文件', audit: '审核中', save: '保存结果' };
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    const task = await jsonFetch(`api/v1/tasks/${encodeURIComponent(taskId)}`);
+    const stage = stageLabels[task.stage] || task.stage || '处理中';
+    $('reportStatus').textContent = `后台审核中：${stage} ${Number(task.progress) || 0}%`;
+    if (task.status === 'succeeded') return task.result;
+    if (task.status === 'failed' || task.status === 'cancelled') {
+      throw new Error(task.error || (task.status === 'cancelled' ? '后台审核已取消' : '后台审核失败'));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  throw new Error('后台审核超时，请稍后在审核历史查看结果');
+}
 async function loadReports() {
   const page = state.reportPage;
   const params = new URLSearchParams({
@@ -1882,8 +1896,12 @@ function bindEvents() {
         const form = new FormData();
         files.forEach((file) => form.append('files', file));
         if (project) form.append('project', project);
-        const data = await jsonFetch('api/v1/reports/batch', { method: 'POST', body: form });
+        let data = await jsonFetch('api/v1/reports/batch', { method: 'POST', body: form });
         state.currentReport = null;
+        if (data.task_id) {
+          $('reportStatus').textContent = '已提交后台审核，等待结果…';
+          data = await waitForReportTask(data.task_id);
+        }
         renderReportBatch(data);
         $('reportStatus').textContent = `完成：${data.summary.stored} 份成功，${data.summary.failed} 份失败`;
         toast(`批量审核完成：${data.summary.stored} 份`);
