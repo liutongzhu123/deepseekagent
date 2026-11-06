@@ -240,6 +240,25 @@ R01–R11 确定性规则 → X01–X04 跨文档检查（D4 到位时）→ P01
 
 **结论**：阶段 3 准备工作就绪；正式验收不能开始，缺客户数据，当前不宣称任何一类通过。
 
+## 6.1 验收自动化（T301）
+
+- `p0/eval/stage3_acceptance.py`：读 §2 清单（`templates/data-manifest.csv` 同列定义）+ 客户金标准，
+  逐份审核并按 §3.2 计算指标，生成 `acceptance-<日期>.md` 与 JSON。
+- 用法：
+
+  ```bash
+  cd p0
+  python -m eval.stage3_acceptance \
+    --manifest ../samples/stage3/manifest.csv \
+    --samples ../samples/stage3 \
+    --out ../docs/stage3-acceptance/acceptance-2026-11-20.md
+  ```
+
+- 缺文件、解析失败或样本不足时输出 `blocked` 并以非 0 退出，不生成虚假指标；`case_kind=synthetic`
+  行只做演练，不计入验收；关键规则 `skip` 记为数据缺口，不计 `pass`。
+- 语义缺陷级召回需要缺陷级金标准，当前清单未定义该列，报告显示「未评估」；D5 未确认时语义项不计入通过。
+- 阶段 3 之后的开发路线与阻塞解除后的动作见 [`next-plan.md`](next-plan.md)。
+
 ## 7. 模板文件
 
 | 文件 | 用途 |
@@ -247,7 +266,9 @@ R01–R11 确定性规则 → X01–X04 跨文档检查（D4 到位时）→ P01
 | [`templates/report-samples.md`](templates/report-samples.md) | A/B/C 三类报告的字段、页结构、合成示例与期望审核输出 |
 | [`templates/acceptance-record.md`](templates/acceptance-record.md) | 单份验收记录 + 3 类汇总 + 门禁结论 + 签字页 |
 | [`templates/data-manifest.csv`](templates/data-manifest.csv) | D1–D5 数据交付清单（列定义 + 占位示例） |
+| [`next-plan.md`](next-plan.md) | 阶段 3 执行计划与后续开发路线（T301–T306、阻塞解除动作） |
 
 ## 8. 变更记录
 
 - 2026-11-06：初版。按 `docs/PLAN.md` 阶段 3 与 T105 口径整理；等待 D1–D5。
+- 2026-11-06：新增 T301 验收自动化（`p0/eval/stage3_acceptance.py`）与 [`next-plan.md`](next-plan.md)。
