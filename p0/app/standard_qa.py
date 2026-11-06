@@ -471,6 +471,7 @@ def answer_weknora(
     min_score: float | None = None,
     top_k: int | None = None,
     cache=None,
+    rerank: bool | None = None,
 ) -> dict:
     """Answer from WeKnora retrieval with the same citation/refusal contract.
 
@@ -565,6 +566,7 @@ def answer_weknora(
         pool,
         knowledge_ids=knowledge_ids,
         top_k=max(1, top_k or DEFAULT_TOP_K),
+        rerank=rerank,
     )
     citations = result.get("citations") or []
     filtered = []
@@ -644,6 +646,7 @@ def answer(
     min_score: float | None = None,
     top_k: int | None = None,
     cache=None,
+    rerank: bool | None = None,
 ) -> dict:
     """Answer with WeKnora (default), the local vector index, or keyword mode.
 
@@ -656,6 +659,8 @@ def answer(
 
     ``cache`` is the optional query-rewrite cache (see
     ``query_rewrite.rewrite``); only WeKnora/local retrieval uses rewriting.
+    ``rerank`` overrides the WeKnora rerank switch for this call (``None`` keeps
+    the ``P0_WEKNORA_RERANK`` environment default).
     """
     if mode in {"weknora", "hybrid"}:
         mode = "auto"
@@ -669,7 +674,7 @@ def answer(
         if weknora.configured():
             try:
                 return answer_weknora(
-                    question, kbs, min_score=min_score, top_k=top_k, cache=cache
+                    question, kbs, min_score=min_score, top_k=top_k, cache=cache, rerank=rerank
                 )
             except weknora.WeKnoraUnavailable as exc:
                 if weknora.required():

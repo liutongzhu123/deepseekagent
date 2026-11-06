@@ -320,14 +320,16 @@ API 返回 `sales_quote_skipped_reason`。这保证报价金额不会由模型�
 `P0_REDIS_URL` 默认 `redis://127.0.0.1:6379/0`。Redis 不可用、超时或写入失败只当缓存未命中，
 不阻断问答；`retrieval.query_rewrite.cached` 标记是否命中。
 
-**rerank 参数（T401c）**：`P0_WEKNORA_RERANK=1` 走 rerank 端点。候选召回默认 30
+**rerank 参数（T401c）**：`P0_WEKNORA_RERANK=1`（默认）走 rerank 端点。候选召回默认 30
 （`P0_WEKNORA_RERANK_CANDIDATES`）、最终 rerank top_k 默认 15（`P0_WEKNORA_RERANK_TOP_K`），
 均比改前的 30 减半；调用方显式 `top_k` 更大时不会被压小。两者可单独回退。
 `P0_EMBEDDING_BATCH` 默认由 32 调大到 64，提升建索引/批量 embedding 吞吐（不改变单次问答结果）。
 
-**rerank 在问答链路中的位置（T404）**：`standards/ask` 的 WeKnora 路径已经使用上面的 rerank 请求；
-`P0_WEKNORA_RERANK=0`（默认）时走无 rerank 的 hybrid-search，行为与改前一致。开启后若服务端没有可用
+**问答链路走 knowledge-search（T404）**：`standards/ask` 的 WeKnora 路径默认调用
+`/knowledge-search`（带 rerank），不再走无 rerank 的裸 hybrid-search；`P0_WEKNORA_RERANK=0`
+可回退到 hybrid-search，`standard_qa.answer(..., rerank=False)` 可按单次调用回退。若服务端没有可用
 rerank 模型，WeKnora 按检索顺序返回，不阻断问答；返回的 `retrieval.rerank` 标记本次是否走了 rerank。
+命中质量对比脚本：`p0/scripts/compare_retrieval.py`（同一查询集跑 hybrid vs rerank，输出命中率/引用准确率/P95）。
 
 
 ## 标准解析 Schema（v0.1 + P1 OCR 字段）
