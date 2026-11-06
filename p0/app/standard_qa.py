@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import weknora
+from . import query_rewrite, weknora
 from .embeddings import (
     EmbeddingError,
     EmbeddingUnavailable,
@@ -329,6 +329,7 @@ def answer_vector(
     cache_path=None,
     min_score: float | None = None,
     top_k: int | None = None,
+    cache=None,
 ) -> dict:
     """bge-m3 vector retrieval with clause/standard guards and a score gate."""
     question = (question or "").strip()
@@ -396,8 +397,9 @@ def answer_vector(
             standard_filter=asked_standards,
         )
 
+    rewrite = query_rewrite.rewrite(question, cache=cache)
     index = get_vector_index(all_chunks, embedder, cache_path=cache_path)
-    query_vector = embedder.embed([question])[0]
+    query_vector = embedder.embed([rewrite.query])[0]
     scored = index.search(query_vector, top_k=top_k, chunk_ids={chunk["id"] for chunk in pool})
     if not scored:
         return _refusal("未找到相关标准内容：已发布标准中没有可检索的条款。", "vector")
@@ -409,6 +411,7 @@ def answer_vector(
         "min_score": min_score,
         "top_score": round(float(best_score), 4),
         "candidates": candidates_meta,
+        "query_rewrite": rewrite.metadata(),
     }
     if clauses:
         retrieval_base["clause_filter"] = sorted(clauses)
@@ -467,6 +470,7 @@ def answer_weknora(
     *,
     min_score: float | None = None,
     top_k: int | None = None,
+    cache=None,
 ) -> dict:
     """Answer from WeKnora retrieval with the same citation/refusal contract.
 
@@ -555,8 +559,9 @@ def answer_weknora(
         for knowledge_id in [(kb.get("weknora") or {}).get("knowledge_id")]
         if knowledge_id
     ]
+    rewrite = query_rewrite.rewrite(question, cache=cache)
     result = weknora.search(
-        question,
+        rewrite.query,
         pool,
         knowledge_ids=knowledge_ids,
         top_k=max(1, top_k or DEFAULT_TOP_K),
@@ -581,6 +586,7 @@ def answer_weknora(
             "。系统不会凭记忆或常识编造标准条款。",
             "weknora",
             kb_id=result.get("kb_id"),
+            query_rewrite=rewrite.metadata(),
         )
 
     top_score = result.get("top_score")
@@ -596,6 +602,7 @@ def answer_weknora(
             top_score=top_score,
             min_score=min_score,
             kb_id=result.get("kb_id"),
+            query_rewrite=rewrite.metadata(),
         )
 
     best = citations[0]
@@ -620,6 +627,7 @@ def answer_weknora(
             "top_score": top_score,
             "min_score": min_score,
             "knowledge_ids": knowledge_ids,
+            "query_rewrite": rewrite.metadata(),
         },
     }
 
@@ -634,6 +642,7 @@ def answer(
     cache_path=None,
     min_score: float | None = None,
     top_k: int | None = None,
+    cache=None,
 ) -> dict:
     """Answer with WeKnora (default), the local vector index, or keyword mode.
 
@@ -643,6 +652,9 @@ def answer(
       hidden behind a different knowledge base;
     * ``local`` / ``vector`` – the P1 bge-m3 local index (debug/offline);
     * ``keyword`` – the deterministic P0 baseline (comparison only).
+
+    ``cache`` is the optional query-rewrite cache (see
+    ``query_rewrite.rewrite``); only WeKnora/local retrieval uses rewriting.
     """
     if mode in {"weknora", "hybrid"}:
         mode = "auto"
@@ -653,7 +665,9 @@ def answer(
     if mode == "auto":
         if weknora.configured():
             try:
-                return answer_weknora(question, kbs, min_score=min_score, top_k=top_k)
+                return answer_weknora(
+                    question, kbs, min_score=min_score, top_k=top_k, cache=cache
+                )
             except weknora.WeKnoraUnavailable as exc:
                 if weknora.required():
                     raise VectorUnavailable(f"WeKnora 检索暂不可用：{exc}") from exc
@@ -670,6 +684,7 @@ def answer(
             cache_path=cache_path,
             min_score=min_score,
             top_k=top_k,
+            cache=cache,
         )
         if mode == "auto":
             result["retrieval"]["mode"] = "local-fallback"

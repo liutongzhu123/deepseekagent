@@ -308,6 +308,13 @@ API 返回 `sales_quote_skipped_reason`。这保证报价金额不会由模型�
 
 问答只返回条款原文与标准号/条款/页码引用；标准或条款不在库时明确回答「未找到」，不编造。
 
+**检索查询改写（T401a，默认关闭）**：`P0_QUERY_REWRITE=1` 时，问答先在检索前把口语问题改写为
+独立查询，再送 WeKnora/本地向量索引；条款号、标准号守卫仍按原问题执行。改写只用非 reasoning
+模型（`P0_QUERY_REWRITE_MODEL`，默认 `deepseek-chat`；误配 reasoning 模型会自动替换并记录原因），
+超时/失败/空输出一律回退原问题，不阻断问答。`P0_QUERY_REWRITE_API_KEY` 缺省复用
+`DEEPSEEK_API_KEY`；返回的 `retrieval.query_rewrite` 记录 `applied/cached/model/reason`。
+
+
 ## 标准解析 Schema（v0.1 + P1 OCR 字段）
 
 每条记录：
