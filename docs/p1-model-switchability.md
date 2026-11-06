@@ -1,5 +1,7 @@
 # T402 · 本地模型可切换性验证（2026-11-06）
 
+> **2026-11-06 决策更新：`verified-deferred`**。本地 CPU 可跑通，但吞吐不足——约 **5.5 tok/s**、图像约 **62 s/张**；决定暂停本地模型，继续用 DeepSeek 公网 API。客户本地部署需要 GPU 时再评估。下文的“配置级可切换”结论保留，真实模型效果不再作为当前验收项。
+
 > **结论先行**
 > 1. **语义审核 → 本地 Ollama：配置级可切换**。不改代码，设置 `P0_SEMANTIC_BASE_URL`（含 `/v1`）、`P0_SEMANTIC_MODEL`、`P0_SEMANTIC_ENABLED=1`，并用任意非空 `DEEPSEEK_API_KEY` 占位即可；客户端请求已用 OpenAI 兼容 stub 验证。
 > 2. **WeKnora VLM → Ollama `qwen2.5vl`：配置级可切换（需管理端配置）**。代码已有 `vlm_model_id` 与 Ollama 图片通道，不需要改代码；但需要 WeKnora 管理权限在模型管理里创建 `qwen2.5vl` 并绑定为 VLM，再用一份扫描件复跑。
