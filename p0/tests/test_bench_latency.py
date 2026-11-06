@@ -52,16 +52,19 @@ def test_compare_renders_delta_and_markdown():
     assert "P95 完整响应 (ms) | 2000 | 1600 | -400.0" in text
 
 
-def test_http_endpoint_measures_first_byte(tmp_path):
+def test_http_endpoint_measures_first_byte_and_forwards_mode(tmp_path):
+    seen = {}
+
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length", 0)))
-            body = json.dumps({"found": True, "retrieval": {"mode": "weknora"}}).encode()
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            seen["mode"] = json.loads(body.decode()).get("mode")
+            payload = json.dumps({"found": True, "retrieval": {"mode": "keyword"}}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(payload)
 
         def log_message(self, *args):
             return
@@ -73,8 +76,9 @@ def test_http_endpoint_measures_first_byte(tmp_path):
         path.write_text(json.dumps(["5.1 要求是什么？"]))
         report = bench_p1_latency.run(
             path, endpoint="http", base_url=f"http://127.0.0.1:{server.server_address[1]}",
-            repeat=1, label="live",
+            repeat=1, label="live", mode="keyword",
         )
+        assert seen["mode"] == "keyword"
         assert report["endpoint"] == "http"
         assert report["found_rate"] == 1.0
         assert report["first_token_ms"]["p50"] >= 0

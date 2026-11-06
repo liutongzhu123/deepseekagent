@@ -1,0 +1,11 @@
+{
+  "name": "p1-latency-live",
+  "note": "T401 现网基线问题集：只引用已发布标准的条款号，不含标准正文；配合 bench_p1_latency.py --endpoint http --repeat 4 使用（5 题 × 4 次 = 20 次/组）。",
+  "cases": [
+    {"id": "q01", "question": "Q/JLY J7111074B-2021 的 5.1.2 外观检查有什么要求？"},
+    {"id": "q02", "question": "Q/JLY J7111074B-2021 的 5.2 一般要求是什么？"},
+    {"id": "q03", "question": "Q/SQR SS8-46-2021 的 5.1.1 外观检查有什么要求？"},
+    {"id": "q04", "question": "Q/SQR SS8-46-2021 的 5.2.1 绝缘电阻要求是什么？"},
+    {"id": "q05", "question": "Q/DEMO 001-2026 的 5.2 密封性能要求是什么？"}
+  ]
+}

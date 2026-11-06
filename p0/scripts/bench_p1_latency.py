@@ -30,6 +30,7 @@ import argparse
 import http.cookiejar
 import json
 import os
+import ssl
 import statistics
 import sys
 import time
@@ -85,10 +86,20 @@ def load_questions(path: str | Path) -> list[dict]:
     return cases
 
 
-def _opener(base_url: str, timeout: float, username: str, password: str):
-    """Build an opener, logging in first when credentials are given."""
+def _opener(base_url: str, timeout: float, username: str, password: str,
+            insecure: bool = False):
+    """Build an opener, logging in first when credentials are given.
+
+    ``insecure`` skips TLS verification for the self-signed preprod host.
+    """
     jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    handlers = [urllib.request.HTTPCookieProcessor(jar)]
+    if insecure:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(*handlers)
     if username and password:
         request = urllib.request.Request(
             f"{base_url.rstrip('/')}/api/v1/auth/login",
@@ -102,14 +113,14 @@ def _opener(base_url: str, timeout: float, username: str, password: str):
 
 
 def _http_call(opener, base_url: str, question: str, timeout: float,
-               token: str = "") -> tuple[float, float, dict]:
+               token: str = "", mode: str = "weknora") -> tuple[float, float, dict]:
     """Return ``(first_byte_ms, complete_ms, payload)`` for one live ask."""
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}/api/v1/standards/ask",
-        data=json.dumps({"question": question, "mode": "weknora"}).encode("utf-8"),
+        data=json.dumps({"question": question, "mode": mode}).encode("utf-8"),
         headers=headers,
         method="POST",
     )
@@ -128,11 +139,12 @@ def _http_call(opener, base_url: str, question: str, timeout: float,
 def run(dataset_path: str | Path, *, mode: str = "weknora", repeat: int = 1,
         from_store: bool = False, label: str = "", endpoint: str = "local",
         base_url: str = "", timeout: float = 60.0,
-        username: str = "", password: str = "", token: str = "") -> dict:
+        username: str = "", password: str = "", token: str = "",
+        insecure: bool = False) -> dict:
     cases = load_questions(dataset_path)
     kbs = standard_store.published_kbs() if from_store else []
     repeat = max(1, int(repeat))
-    opener = _opener(base_url, timeout, username, password) if endpoint == "http" else None
+    opener = _opener(base_url, timeout, username, password, insecure) if endpoint == "http" else None
     results: list[dict] = []
     first_tokens: list[float] = []
     latencies: list[float] = []
@@ -144,7 +156,7 @@ def run(dataset_path: str | Path, *, mode: str = "weknora", repeat: int = 1,
             try:
                 if endpoint == "http":
                     first_byte_ms, elapsed_ms, answer = _http_call(
-                        opener, base_url, case["question"], timeout, token)
+                        opener, base_url, case["question"], timeout, token, mode)
                 else:
                     started = time.perf_counter()
                     answer = standard_qa.answer(case["question"], kbs, mode=mode)
@@ -247,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--username", default=os.getenv("P0_BENCH_USERNAME", ""))
     parser.add_argument("--password", default=os.getenv("P0_BENCH_PASSWORD", ""))
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--insecure", action="store_true",
+                        help="skip TLS verification (self-signed preprod)")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--label", default="")
     parser.add_argument("--json", dest="json_path", help="write the JSON report here")
@@ -270,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         args.questions, mode=args.mode, repeat=args.repeat, from_store=args.from_store,
         label=args.label, endpoint=args.endpoint, base_url=args.base_url,
         timeout=args.timeout, username=args.username, password=args.password,
-        token=args.token,
+        token=args.token, insecure=args.insecure,
     )
     text = markdown(report)
     print(text)
