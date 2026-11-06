@@ -176,7 +176,7 @@
 > 执行说明与后续路线见 `docs/stage3-acceptance/next-plan.md`，阻塞解除后的动作见该文 §6。
 
 ### T301 · 阶段 3 验收自动化
-- **状态**：`todo`  **依赖**：无
+- **状态**：`pr-open`（PR #64，CI 绿）  **依赖**：无
 - **做什么**：`p0/eval/stage3_acceptance.py` 读 `templates/data-manifest.csv` 同列定义清单与金标准，逐份审核并计算
   `README.md` §3.2 指标，生成 `acceptance-*.md` + JSON；缺数据输出 `blocked`，不伪造指标。
 - **验收标准**：
