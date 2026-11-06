@@ -1,4 +1,6 @@
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -31,6 +33,7 @@ def test_run_aggregates_latency_and_records_flags(tmp_path, monkeypatch):
     assert report["found_rate"] == 1.0
     assert report["config"] == {"query_rewrite": True}
     assert report["latency_ms"]["p95"] >= report["latency_ms"]["p50"] >= 0
+    assert report["first_token_ms"]["p95"] >= 0
 
 
 def test_percentile_handles_empty_and_ordered_values():
@@ -40,11 +43,44 @@ def test_percentile_handles_empty_and_ordered_values():
 
 
 def test_compare_renders_delta_and_markdown():
-    before = {"latency_ms": {"p50": 1000, "p95": 2000, "avg": 1500}, "found_rate": 1.0}
-    after = {"latency_ms": {"p50": 800, "p95": 1600, "avg": 1200}, "found_rate": 1.0}
+    before = {"latency_ms": {"p50": 1000, "p95": 2000}, "first_token_ms": {"p50": 900, "p95": 1800},
+              "found_rate": 1.0}
+    after = {"latency_ms": {"p50": 800, "p95": 1600}, "first_token_ms": {"p50": 700, "p95": 1400},
+             "found_rate": 1.0}
     text = bench_p1_latency.compare(before, after)
-    assert "P95 首结果延迟 (ms) | 2000 | 1600 | -400.0" in text
-    assert "### " not in text
+    assert "P95 首字/首字节延迟 (ms) | 1800 | 1400 | -400.0" in text
+    assert "P95 完整响应 (ms) | 2000 | 1600 | -400.0" in text
+
+
+def test_http_endpoint_measures_first_byte(tmp_path):
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = json.dumps({"found": True, "retrieval": {"mode": "weknora"}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        path = tmp_path / "q.json"
+        path.write_text(json.dumps(["5.1 要求是什么？"]))
+        report = bench_p1_latency.run(
+            path, endpoint="http", base_url=f"http://127.0.0.1:{server.server_address[1]}",
+            repeat=1, label="live",
+        )
+        assert report["endpoint"] == "http"
+        assert report["found_rate"] == 1.0
+        assert report["first_token_ms"]["p50"] >= 0
+        assert report["latency_ms"]["p50"] >= report["first_token_ms"]["p50"]
+    finally:
+        server.shutdown()
 
 
 def test_run_requires_questions(tmp_path):
