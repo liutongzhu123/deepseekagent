@@ -31,6 +31,18 @@ import httpx
 DEFAULT_TOP_K = int(os.getenv("P0_WEKNORA_TOP_K", "6"))
 DEFAULT_MIN_SCORE = float(os.getenv("P0_WEKNORA_MIN_SCORE", "0.35"))
 INDEX_WAIT_SECONDS = float(os.getenv("P0_WEKNORA_INDEX_WAIT", "30"))
+# T401c: the rerank stage used to rerank 30 candidates; 15 halves that work
+# while still giving the model a wider pool than the caller's final count.
+DEFAULT_RERANK_TOP_K = 15
+DEFAULT_RERANK_CANDIDATES = 30
+
+
+def _positive_int(value: str | None, default: int) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 _HEADER = re.compile(
     r"〔(?P<standard_no>[^|〕]+)\|\s*条款\s*(?P<clause>[^|〕]+)\|\s*第\s*(?P<page>\d+)\s*页"
@@ -584,10 +596,18 @@ def search(
     use_rerank = os.getenv("P0_WEKNORA_RERANK", "0").lower() in {"1", "true", "on", "yes"}
     if use_rerank:
         path = "/api/v1/knowledge-search"
+        rerank_top_k = max(
+            top_k, _positive_int(os.getenv("P0_WEKNORA_RERANK_TOP_K"), DEFAULT_RERANK_TOP_K)
+        )
+        candidates = max(
+            rerank_top_k,
+            _positive_int(os.getenv("P0_WEKNORA_RERANK_CANDIDATES"), DEFAULT_RERANK_CANDIDATES),
+        )
         body: dict[str, Any] = {
             "query": question,
             "knowledge_base_ids": [cfg.kb_id],
-            "match_count": top_k,
+            "match_count": candidates,
+            "rerank": {"enabled": True, "top_k": rerank_top_k},
         }
     else:
         path = f"/api/v1/knowledge-bases/{cfg.kb_id}/hybrid-search"
