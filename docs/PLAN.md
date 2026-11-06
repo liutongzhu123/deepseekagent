@@ -245,7 +245,7 @@
 - **涉及**：`p0/app/pdf_text.py`、`p0/app/ocr.py`、`p0/tests/`
 
 #### T404 · rerank 接入问答链路
-- **状态**：`todo`  **依赖**：T401c
+- **状态**：`merged`（#79）  **依赖**：T401c
 - **做什么**：把 rerank 候选与最终 `top_k` 正式接入 `standards/ask` 问答链路；保留关闭开关与无模型降级（按检索顺序返回）。
 - **验收标准**：开关关闭时与改前一致；开启时引用标准号/条款准确率不下降；P95 延迟记录进 `docs/eval-p1-latency.md`。
 - **涉及**：`p0/app/weknora.py`、`p0/app/standard_qa.py`、`p0/tests/`
@@ -291,7 +291,7 @@
 
 **当前阻塞**：T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
 
-**不依赖客户数据、可继续开发**：P1 基础设施 T401–T404（2026-11-06 起）、T301 阶段 3 验收自动化、T303 报告审核规模化；执行顺序与阻塞解除后的动作见 `docs/stage3-acceptance/next-plan.md`。
+**可继续开发**：T306 语义启用（D5 已确认，需服务器配置 `DEEPSEEK_API_KEY`/`P0_SEMANTIC_ENABLED=1`）、T302 验收演练（需本地挂载 12 草稿）；P1 基础设施后续顺序见 §七。
 
 ---
 
