@@ -93,6 +93,12 @@
           </div>
           <div class="page-actions"><span class="pill info" id="ruleHeadPill"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>确定性规则</span></div>
         </div>
+        <section class="card module-config-bar" id="reportConfigCard" aria-labelledby="reportConfigTitle">
+          <span class="mc-icon"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg></span>
+          <span class="mc-title"><b id="reportConfigTitle">审核规则</b><small id="reportConfigInline">正在加载管理端配置…</small></span>
+          <span class="pill neutral" id="reportConfigRev">—</span>
+          <button type="button" class="btn config-open-btn js-open-admin-config hidden" id="reportConfigEdit" data-config-section="report"><svg class="icon" aria-hidden="true"><use href="#i-edit"/></svg>修改配置</button>
+        </section>
         <div id="reportRoleNotice" class="banner warn hidden"></div>
         <div class="report-layout">
           <div class="stack">
@@ -180,14 +186,9 @@
           <aside class="stack">
             <section class="card card-pad">
               <div class="card-head">
-                <div><h2>审核规则</h2><p>由管理员在规则配置中维护启用状态、严重级别与阈值；停用规则仍展示以便追溯。</p></div>
+                <div><h2>规则清单</h2><p>当前生效的确定性规则；停用规则仍展示以便追溯。</p></div>
                 <span class="pill info" id="ruleCount">11</span>
               </div>
-              <div class="config-source-line">
-                <span id="reportRuleMeta">正在加载管理端配置…</span>
-                <button type="button" class="link-btn js-open-admin-config hidden" data-config-section="report">管理端配置 →</button>
-              </div>
-              <div class="config-facts" id="reportRuleFacts"></div>
               <div id="reportRules" class="rule-list"><div class="muted">正在加载规则…</div></div>
               <details class="stage2-details">
                 <summary>阶段 2 检查 <span class="pill info" id="stage2Count">—</span></summary>

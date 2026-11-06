@@ -409,8 +409,8 @@ function aliasRow(label, values) {
   return `<div class="alias-row"><span class="alias-label">${escapeHtml(label)}</span><div class="alias-values">${chips || '<span class="muted">—</span>'}</div></div>`;
 }
 function configErrorState(message) {
-  $('reportRuleMeta').textContent = message;
-  $('reportRuleFacts').innerHTML = '';
+  $('reportConfigInline').textContent = message;
+  $('reportConfigRev').textContent = '—';
   $('reportRules').innerHTML = `<div class="muted">${escapeHtml(message)}</div>`;
   ['std', 'quote'].forEach((prefix) => {
     $(`${prefix}ConfigInline`).textContent = message;
@@ -428,17 +428,21 @@ function renderReportModuleConfig(config) {
   const report = config.report || { rules: [] };
   const rules = report.rules || [];
   const enabled = rules.filter((rule) => rule.enabled !== false).length;
-  $('ruleCount').textContent = enabled;
-  $('ruleHeadPill').innerHTML = `${ic('shield')}${enabled} / ${rules.length} 条规则启用`;
-  $('reportRuleMeta').textContent = `${configMetaText(config)}${configAccessText()}`;
-  $('reportRuleFacts').innerHTML = [
-    configFact('均值容差', `${report.mean_tolerance ?? 0.05} 分`),
-    configFact('注意事项', report.expected_notices ? `${report.expected_notices} 条` : '不校验'),
-    configFact('已停用', `${rules.length - enabled} 条`),
-  ].join('');
-  $('reportRules').innerHTML = rules.map((rule) => {
+  const severityOf = (rule) => {
     const severity = SEVERITY_NAMES[rule.severity] || rule.severity || '—';
     const tone = SEVERITY_TONES[rule.severity] || 'neutral';
+    return { severity, tone };
+  };
+  $('ruleCount').textContent = enabled;
+  $('ruleHeadPill').innerHTML = `${ic('shield')}${enabled} / ${rules.length} 条规则启用`;
+  $('reportConfigRev').textContent = `v${config.revision ?? 0}`;
+  $('reportConfigInline').textContent = [
+    `均值容差 ${report.mean_tolerance ?? 0.05} 分`,
+    report.expected_notices ? `注意事项 ${report.expected_notices} 条` : '注意事项不校验',
+    `已停用 ${rules.length - enabled} 条`,
+  ].join(' · ') + configAccessText();
+  $('reportRules').innerHTML = rules.map((rule) => {
+    const { severity, tone } = severityOf(rule);
     return `<div class="rule-item ${rule.enabled === false ? 'rule-disabled' : ''}">
       <span class="finding-rule">${escapeHtml(rule.id)}</span>
       <div class="rule-main"><b>${escapeHtml(rule.title)}</b><span class="desc">${escapeHtml(rule.description)}</span></div>
