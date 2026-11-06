@@ -221,6 +221,55 @@ def test_serialisation_round_trip(tmp_path: Path):
     assert loaded["samples"] == 20
 
 
+def test_run_case_maps_findings_to_gold_standard(monkeypatch, tmp_path: Path):
+    path = tmp_path / "ots-001.docx"
+    path.write_bytes(b"stub")
+    data = ReportData(
+        file_name="ots-001.docx",
+        cover_number="S3-OTS-001",
+        judgment="不符合",
+        test_start="2026-01-05",
+        test_end="2026-01-07",
+        approval_date="2026-01-08",
+        template_family="BYD-odor",
+        template_variant="OTS",
+    )
+    result = {
+        "findings": [
+            {"rule_id": "R01", "status": "fail"},
+            {"rule_id": "R02", "status": "fail"},
+            {"rule_id": "P06", "status": "skip"},
+        ],
+        "data": {"judgment": "不符合", "template": "BYD-odor"},
+    }
+    monkeypatch.setattr(s3, "load_report", lambda _: data)
+    monkeypatch.setattr(s3, "audit_report", lambda data, config, inputs=None, stage2=True: result)
+
+    outcome = s3.run_case(_case(), tmp_path)
+
+    assert outcome.status == "ok"
+    assert outcome.actual_fail == frozenset({"R01", "R02"})
+    assert outcome.template == "BYD-odor"
+    assert outcome.variant == "OTS"
+    assert outcome.gaps == ()
+    assert outcome.set_matches is True
+    assert outcome.conclusion == "通过"
+
+
+def test_run_case_records_parse_error(monkeypatch, tmp_path: Path):
+    (tmp_path / "ots-001.docx").write_bytes(b"not a docx")
+
+    def _boom(_: Path) -> ReportData:
+        raise ValueError("坏文件")
+
+    monkeypatch.setattr(s3, "load_report", _boom)
+    outcome = s3.run_case(_case(), tmp_path)
+
+    assert outcome.status == "error"
+    assert "坏文件" in outcome.gap
+    assert outcome.conclusion == "未验收"
+
+
 def test_render_markdown_marks_blocked():
     cases = _twenty_cases()[:3]
     outcomes = _outcomes_for(cases)
