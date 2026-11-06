@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import query_rewrite, weknora
+from . import query_rewrite, rewrite_cache, weknora
 from .embeddings import (
     EmbeddingError,
     EmbeddingUnavailable,
@@ -662,6 +662,8 @@ def answer(
         raise ValueError(f"unknown retrieval mode: {mode}")
     if mode == "keyword":
         return answer_keyword(question, kbs)
+    if cache is None:
+        cache = rewrite_cache.from_env()
     if mode == "auto":
         if weknora.configured():
             try:

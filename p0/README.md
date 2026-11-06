@@ -314,6 +314,11 @@ API 返回 `sales_quote_skipped_reason`。这保证报价金额不会由模型�
 超时/失败/空输出一律回退原问题，不阻断问答。`P0_QUERY_REWRITE_API_KEY` 缺省复用
 `DEEPSEEK_API_KEY`；返回的 `retrieval.query_rewrite` 记录 `applied/cached/model/reason`。
 
+**改写结果缓存（T401b，默认关闭）**：`P0_QUERY_REWRITE_CACHE=1` 时改写结果写 Redis，
+同一 query 5 分钟内命中（`P0_QUERY_REWRITE_CACHE_TTL`，默认 300 秒），键含模型名与问题；
+`P0_REDIS_URL` 默认 `redis://127.0.0.1:6379/0`。Redis 不可用、超时或写入失败只当缓存未命中，
+不阻断问答；`retrieval.query_rewrite.cached` 标记是否命中。
+
 
 ## 标准解析 Schema（v0.1 + P1 OCR 字段）
 
