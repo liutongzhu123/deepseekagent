@@ -8,6 +8,44 @@ def test_repeated_single_letter_watermark_is_removed(monkeypatch):
     assert removed == 5
 
 
+def test_repeated_standard_number_watermark_is_removed(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    monkeypatch.delenv("P0_WATERMARK_TOKEN_MIN", raising=False)
+    token = "Q/JLY J7111074B-2021"
+    text, removed = watermark.clean_text(
+        f"技术要求 {token} 驻车基本性能 {token} 第 12 页 {token} 试验方法 {token}"
+    )
+    assert token not in text
+    assert "技术要求" in text and "驻车基本性能" in text
+    assert removed == 4
+
+
+def test_repeated_hyphen_standard_number_watermark_is_removed(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    token = "Q-JLY J7111074B"
+    text = " ".join([f"条款 A {token} 判定", token, token, token])
+    cleaned, removed = watermark.clean_text(text)
+    assert token not in cleaned
+    assert removed == 4
+
+
+def test_single_standard_number_is_kept(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    text = "依据 Q/JLY J7111074B-2021 第 5.3.11 条判定。"
+    cleaned, removed = watermark.clean_text(text)
+    assert cleaned == text
+    assert removed == 0
+
+
+def test_token_threshold_is_configurable(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    monkeypatch.setenv("P0_WATERMARK_TOKEN_MIN", "2")
+    token = "Q/JLY J7111074B-2021"
+    cleaned, removed = watermark.clean_text(f"{token} 外观 {token}")
+    assert token not in cleaned
+    assert removed == 2
+
+
 def test_one_or_two_letters_are_treated_as_real_text(monkeypatch):
     monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
     text, removed = watermark.clean_text("分为A类，另有B级")
