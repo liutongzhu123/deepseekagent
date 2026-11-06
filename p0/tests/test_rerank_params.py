@@ -23,7 +23,7 @@ def _chunks():
     ]
 
 
-def _search(monkeypatch, top_k=6):
+def _search(monkeypatch, top_k=6, rerank=None):
     captured = {}
     cfg = weknora.WeKnoraConfig(base_url="http://weknora.test", api_key="sk-test", kb_id="kb-1")
 
@@ -38,7 +38,7 @@ def _search(monkeypatch, top_k=6):
         "_client",
         lambda _cfg: httpx.Client(base_url=cfg.base_url, transport=httpx.MockTransport(handler)),
     )
-    return captured, weknora.search("5.1 外观要求", _chunks(), top_k=top_k)
+    return captured, weknora.search("5.1 外观要求", _chunks(), top_k=top_k, rerank=rerank)
 
 
 def test_rerank_request_uses_15_top_k_and_30_candidates(monkeypatch):
@@ -69,9 +69,17 @@ def test_rerank_never_asks_for_fewer_than_the_caller_wants(monkeypatch):
     assert captured["body"]["match_count"] == 15
 
 
-def test_hybrid_path_keeps_plain_match_count(monkeypatch):
+def test_default_path_is_knowledge_search_with_rerank(monkeypatch):
     monkeypatch.delenv("P0_WEKNORA_RERANK", raising=False)
     captured, result = _search(monkeypatch)
+    assert captured["path"] == "/api/v1/knowledge-search"
+    assert captured["body"]["rerank"] == {"enabled": True, "top_k": 15}
+    assert result["rerank"] is True
+
+
+def test_hybrid_path_keeps_plain_match_count(monkeypatch):
+    monkeypatch.delenv("P0_WEKNORA_RERANK", raising=False)
+    captured, result = _search(monkeypatch, rerank=False)
     assert captured["path"] == "/api/v1/knowledge-bases/kb-1/hybrid-search"
     assert captured["body"] == {"query_text": "5.1 外观要求", "match_count": 6}
     assert result["rerank"] is False

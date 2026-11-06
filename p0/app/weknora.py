@@ -581,19 +581,24 @@ def search(
     knowledge_ids: list[str] | None = None,
     top_k: int | None = None,
     cfg: WeKnoraConfig | None = None,
+    rerank: bool | None = None,
 ) -> dict:
     """Retrieve cited chunks from WeKnora for a question.
 
-    Default path is the raw hybrid-search primitive (vector + keyword, no LLM
-    rerank): it answers in a few hundred milliseconds.  Set
-    ``P0_WEKNORA_RERANK=1`` to use the rerank-enabled ``/knowledge-search``
-    endpoint instead (higher precision, but the rerank model is much slower).
+    Default path is the rerank-enabled ``/knowledge-search`` endpoint: the QA
+    chain is retrieval-first, and reranking the top candidates improves hit
+    quality without a generation step.  ``rerank=False`` (or
+    ``P0_WEKNORA_RERANK=0``) falls back to the raw hybrid-search primitive,
+    which is faster but has no rerank stage.
     """
     cfg = cfg or config_from_env()
     if cfg is None:
         raise WeKnoraUnavailable("未配置 WeKnora")
     top_k = max(1, int(top_k or DEFAULT_TOP_K))
-    use_rerank = os.getenv("P0_WEKNORA_RERANK", "0").lower() in {"1", "true", "on", "yes"}
+    if rerank is None:
+        use_rerank = os.getenv("P0_WEKNORA_RERANK", "1").lower() in {"1", "true", "on", "yes"}
+    else:
+        use_rerank = bool(rerank)
     if use_rerank:
         path = "/api/v1/knowledge-search"
         rerank_top_k = max(

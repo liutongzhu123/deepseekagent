@@ -86,7 +86,7 @@ def test_weknora_search_maps_citations(monkeypatch):
 
     monkeypatch.setattr(weknora, "config_from_env", lambda: cfg)
     monkeypatch.setattr(weknora, "_client", factory)
-    result = weknora.search("外观要求是什么", chunks)
+    result = weknora.search("外观要求是什么", chunks, rerank=False)
     assert result["top_score"] == 0.9
     citation = result["citations"][0]
     assert citation["clause"] == "5.1"
