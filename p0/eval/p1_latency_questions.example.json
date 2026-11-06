@@ -1,0 +1,11 @@
+{
+  "name": "p1-latency-example",
+  "note": "示例问题集，仅用于验证 bench_p1_latency 脚本；5 份标准的真实问题集请按同一格式另存为 eval/p1_latency_questions.json。",
+  "cases": [
+    {"id": "q01", "question": "这个条款的技术要求是什么？"},
+    {"id": "q02", "question": "外观检查的试验方法是什么？"},
+    {"id": "q03", "question": "判定要求里的限值是多少？"},
+    {"id": "q04", "question": "样品数量不足时如何判定？"},
+    {"id": "q05", "question": "报告编号为空算不算不符合？"}
+  ]
+}
