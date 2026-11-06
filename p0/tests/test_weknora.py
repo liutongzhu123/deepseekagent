@@ -150,3 +150,51 @@ def test_clause_only_question_skips_domain_guard(monkeypatch):
     result = standard_qa.answer_weknora("5.1", kbs)
     assert result["found"] is True
     assert result["citations"][0]["clause"] == "5.1"
+
+
+def test_ask_chain_uses_rerank_when_enabled(monkeypatch):
+    import json
+
+    record = _record()
+    chunks = _chunks(record)
+    kbs = [{"standard_no": "Q/TEST 123-2024", "standard_name": "测试标准", "chunks": chunks}]
+    cfg = weknora.WeKnoraConfig(base_url="http://weknora.test", api_key="sk-test", kb_id="kb-1")
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": [
+                    {
+                        "id": "chunk-1",
+                        "content": "〔Q/TEST 123-2024 | 条款 5.1 | 第 2 页 | 技术要求 | 外观检查〕\n外观应无缺陷。",
+                        "knowledge_id": "kn-1",
+                        "knowledge_title": "P0 | Q/TEST 123-2024 | 测试标准",
+                        "score": 0.8,
+                    }
+                ],
+                "meta": {"rerank": {"top_score": 0.9, "applied": True}},
+            },
+        )
+
+    monkeypatch.setattr(weknora, "config_from_env", lambda: cfg)
+    monkeypatch.setattr(
+        weknora,
+        "_client",
+        lambda _cfg: httpx.Client(
+            base_url=cfg.base_url,
+            transport=httpx.MockTransport(handler),
+            headers={"X-API-Key": cfg.api_key},
+        ),
+    )
+    monkeypatch.setenv("P0_WEKNORA_RERANK", "1")
+    result = standard_qa.answer("5.1 外观要求", kbs, mode="weknora")
+    assert result["found"] is True
+    assert captured["path"] == "/api/v1/knowledge-search"
+    assert captured["body"]["rerank"] == {"enabled": True, "top_k": 15}
+    assert captured["body"]["match_count"] == 30
+    assert result["retrieval"]["rerank"] is True

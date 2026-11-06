@@ -628,6 +628,7 @@ def answer_weknora(
             "min_score": min_score,
             "knowledge_ids": knowledge_ids,
             "query_rewrite": rewrite.metadata(),
+            "rerank": bool(result.get("rerank")),
         },
     }
 

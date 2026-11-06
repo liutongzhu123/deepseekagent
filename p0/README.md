@@ -325,6 +325,10 @@ API 返回 `sales_quote_skipped_reason`。这保证报价金额不会由模型�
 均比改前的 30 减半；调用方显式 `top_k` 更大时不会被压小。两者可单独回退。
 `P0_EMBEDDING_BATCH` 默认由 32 调大到 64，提升建索引/批量 embedding 吞吐（不改变单次问答结果）。
 
+**rerank 在问答链路中的位置（T404）**：`standards/ask` 的 WeKnora 路径已经使用上面的 rerank 请求；
+`P0_WEKNORA_RERANK=0`（默认）时走无 rerank 的 hybrid-search，行为与改前一致。开启后若服务端没有可用
+rerank 模型，WeKnora 按检索顺序返回，不阻断问答；返回的 `retrieval.rerank` 标记本次是否走了 rerank。
+
 
 ## 标准解析 Schema（v0.1 + P1 OCR 字段）
 
