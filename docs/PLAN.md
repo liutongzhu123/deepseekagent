@@ -216,8 +216,8 @@
 > 模型接入必须保持可切换：测试阶段可走公网 DeepSeek，客户本地部署改用客户本地模型，切换只改配置、不改代码。
 
 #### T401 · 检索延迟优化
-- **状态**：`doing`（实现已合并；5 份标准 P95 待补跑）  **依赖**：D5（已确认）
-- **进度**：T401a #72、T401b #73、T401c #74 已合并；评测脚本与改写微基准见 `docs/eval-p1-latency.md`；5 份标准的端到端 P95 需在有已发布 KB / WeKnora 凭据的环境补跑。
+- **状态**：`doing`（实现与基准脚本已合并；现网基线待凭据）  **依赖**：D5（已确认）
+- **进度**：T401a #72、T401b #73、T401c #74 已合并；基准脚本 #85 支持指定查询集、本地/现网与首字/完整响应 P50/P95；改写微基准见 `docs/eval-p1-latency.md`。现网 5 份标准基线需 P0/WeKnora 凭据后补跑。
 - **目标**：以现有 5 份标准的问答为基线，P95 首字延迟 < 8s；改前/改后对比写入 `docs/eval-p1-latency.md`。
 - **拆三个独立 PR（每个 ≤300 行）**：
   - **T401a 查询改写模型**：改写改用非 reasoning 模型（DeepSeek `deepseek-chat` 级别），新增可关闭开关；改写失败回退原问题，不阻断问答。
@@ -239,17 +239,18 @@
 - **涉及**：`docs/p1-model-switchability.md`（只写报告，不改代码）
 
 #### T403 · 水印预处理
-- **状态**：`merged`（#75）  **依赖**：无
+- **状态**：`merged`（#75、#83）  **依赖**：无
 - **做什么**：清洗 PDF/扫描件文本层中的水印碎片，避免污染条款与数值抽取；处理可配置、可回退。
 - **验收标准**：单测覆盖水印碎片清洗与正常文本不误伤；既有解析/审核结论 diff 为空（除明确修复的噪声）。
-- **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；6 条单测通过。真实带水印客户 PDF 的解析 diff 待样例到位后补跑。
-- **涉及**：`p0/app/pdf_text.py`、`p0/app/ocr.py`、`p0/tests/`
+- **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；已覆盖 CJK 间孤立字母、`Q/JLY J7111074B-2021` / `Q-JLY J7111074B` 类重复标准号串（同页 ≥4 次才删，单次引用保留）。10 条单测通过。**真实带水印样例不在本机**（扫描 194 份 PDF 未命中），解析 diff 待样例到位后补跑。
+- **涉及**：`p0/app/pdf_text.py`、`p0/app/ocr.py`、`p0/app/watermark.py`、`p0/tests/`
 
 #### T404 · rerank 接入问答链路
-- **状态**：`merged`（#79）  **依赖**：T401c
+- **状态**：`merged`（#79、#84）  **依赖**：T401c
 - **做什么**：把 rerank 候选与最终 `top_k` 正式接入 `standards/ask` 问答链路；保留关闭开关与无模型降级（按检索顺序返回）。
 - **验收标准**：开关关闭时与改前一致；开启时引用标准号/条款准确率不下降；P95 延迟记录进 `docs/eval-p1-latency.md`。
-- **涉及**：`p0/app/weknora.py`、`p0/app/standard_qa.py`、`p0/tests/`
+- **结果**：问答链路默认走 `/knowledge-search`（带 rerank），`P0_WEKNORA_RERANK=0` 或 `answer(..., rerank=False)` 可回退；新增 `p0/scripts/compare_retrieval.py` 对比 hybrid vs rerank 的命中率/引用准确率/拒答率/P50/P95。**现网命中质量对比未跑**：本机无 KB/凭据。
+- **涉及**：`p0/app/weknora.py`、`p0/app/standard_qa.py`、`p0/scripts/compare_retrieval.py`、`p0/tests/`
 
 ---
 
@@ -285,10 +286,10 @@
 | T401a | `merged` | #72 | 绿 | 改写换非 reasoning 模型 + 开关 |
 | T401b | `merged` | #73 | 绿 | 改写结果 Redis 缓存（5 分钟） |
 | T401c | `merged` | #74 | 绿 | rerank 30→15 + embedding batch 64 |
-| T401 评测 | `doing` | #77 #78 | 绿 | 脚本与微基准已合并；5 份标准 P95 待补跑 |
+| T401 评测 | `doing` | #77 #78 #85 | 绿 | 基准脚本支持本地/现网与首字延迟；现网基线待凭据 |
 | T402 | `verified-deferred` | #76 | — | 本地 CPU 可跑通但吞吐不足（5.5 tok/s、图像 62s/张）；继续 DeepSeek 公网，客户本地需 GPU 再评估 |
-| T403 | `merged` | #75 | 绿 | PDF/OCR 水印碎片预处理 |
-| T404 | `merged` | #79 | 绿 | rerank 接入问答链路，暴露 `retrieval.rerank` |
+| T403 | `merged` | #75 #83 | 绿 | PDF/OCR 水印 + `Q/JLY J7111074B` 类标准号水印串 |
+| T404 | `merged` | #79 #84 | 绿 | 默认 knowledge-search（带 rerank）+ 命中对比脚本 |
 
 **当前阻塞**：T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
 
@@ -334,17 +335,21 @@
 
 > 本节只排顺序，不新增正式任务号；新任务由项目负责人确认后再进 §三。
 
-**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T403 水印（#75）、T404 rerank 接入（#79）；T402 验证报告（#76）为 **verified-deferred**（本地 CPU 约 5.5 tok/s、图像约 62 s/张，继续用 DeepSeek 公网，客户本地需 GPU 再评估）；T401 评测脚本/文档（#77/#78）已合并。
+**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T401 基准脚本/文档（#77/#78/#85）、T403 水印（#75/#83）、T404 rerank 接入（#79/#84）；T402（#76）为 **verified-deferred**（本地 CPU 约 5.5 tok/s、图像约 62 s/张，继续用 DeepSeek 公网，客户本地需 GPU 再评估）。
 
 **接下来按顺序**：
 
-1. **补跑 T401 验收（P95 < 8s）**：在拥有 5 份标准已发布 KB 与 WeKnora 凭据的环境执行
-   `p0/scripts/bench_p1_latency.py --from-store`，把改前/改后结果填进 `docs/eval-p1-latency.md`。
-   当前本机缺 KB/凭据，脚本已备好。
-2. **T306 语义启用**（D5 已确认）：在服务器配置 `DEEPSEEK_API_KEY` / `P0_SEMANTIC_ENABLED=1`，
-   按 `docs/stage3-acceptance/README.md` §4 复跑语义项；切换本地模型时只改 `P0_SEMANTIC_BASE_URL` / `P0_SEMANTIC_MODEL`。
-3. **T302 验收链路演练**：挂载 12 份草稿后跑 T301，结果标“回归基线，不是验收”；T301/T303 已合并，只剩这一步。
-4. **仍 blocked（客户侧）**：T105/T304（D1）、T204/T305（D2）、阶段 3 正式验收（D3）、T107 真实数据（D4）。
+1. **现网 T401 基线**：用 #85 的 `--endpoint http` 命令（`P0_BENCH_BASE_URL/USERNAME/PASSWORD` 或 token）打现网 P0，
+   输出首字/完整响应 P50/P95；把改前/改后填进 `docs/eval-p1-latency.md`。
+2. **T404 现网命中质量对比**：同一查询集跑 `p0/scripts/compare_retrieval.py`，比较 hybrid vs knowledge-search（带 rerank）的
+   命中率/引用准确率/拒答率/P95。以上两项都缺现网账号/WeKnora 凭据，脚本已备好。
+3. **T403 真实样例**：用客户带水印 PDF 跑一遍解析 diff；本机无该样例。
+4. **T306 语义启用**（D5 已确认）：服务器配置 `DEEPSEEK_API_KEY` / `P0_SEMANTIC_ENABLED=1`，
+   按 `docs/stage3-acceptance/README.md` §4 复跑语义项。
+5. **T302 验收链路演练**：挂载 12 份草稿后跑 T301，结果标“回归基线，不是验收”。
+6. **仍 blocked（客户侧）**：T105/T304（D1）、T204/T305（D2）、阶段 3 正式验收（D3）、T107 真实数据（D4）。
+
+**本地模型**：按 2026-11-06 决定暂停，继续 DeepSeek 公网 API；模型接入保持可切换，客户本地部署需 GPU 时再评估。
 
 **更大的 P1 生产化项（P1-1 数据层、P1-2 异步任务、P1-6 监控/备份）**：依赖服务器维护窗口与数据库/对象存储权限，未排入 T40x；需要时再拆任务，不在本批硬塞。
 
