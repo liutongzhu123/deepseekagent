@@ -55,9 +55,24 @@ python scripts/bench_p1_latency.py --compare /tmp/p1-latency-before.json /tmp/p1
 
 | 指标 | 改前 | 改后 | 变化 | 目标 |
 |---|---|---|---|---|
-| P50 首结果延迟 | 待跑 | 待跑 | — | — |
-| P95 首结果延迟 | 待跑 | 待跑 | — | **< 8000 ms** |
+| P50 首字/首字节延迟 | 待跑 | 待跑 | — | — |
+| P95 首字/首字节延迟 | 待跑 | 待跑 | — | **< 8000 ms** |
 | 命中率 | 待跑 | 待跑 | — | 不下降 |
+
+### 3.1 现网基线（`--endpoint http`）
+
+脚本支持直接打现网 P0 接口，输出 `first_token_ms`（首字节/首字）与 `latency_ms`（完整响应）的 P50/P95。凭据只从参数/环境变量读，不写进仓库：
+
+```bash
+cd p0
+P0_BENCH_BASE_URL=https://zhongqi.yunanht.com/p0 \
+P0_BENCH_USERNAME=... P0_BENCH_PASSWORD=... \
+python scripts/bench_p1_latency.py --endpoint http \
+  --questions eval/p1_latency_questions.json --repeat 3 \
+  --label live-baseline --json /tmp/p1-latency-live.json
+```
+
+**本机状态**：`/p0/health` 可访问（0.8.4，auth=on），但无现网账号/WeKnora 凭据，`/api/v1/standards/ask` 返回 401；因此现网基线数字待有凭据后补跑。脚本的 HTTP 路径已用本地 stub 单测覆盖（首字节、完整响应、命中率）。
 
 ## 4. 复现命令
 
@@ -100,4 +115,5 @@ PY
 | T401a 非 reasoning 改写 + 开关 | ✅ 已合并（#72）；微基准 P95 -503 ms |
 | T401b Redis 缓存（5 分钟） | ✅ 已合并（#73）；单测覆盖命中/过期/降级 |
 | T401c rerank 30→15 + batch | ✅ 已合并（#74）；请求体单测 |
+| T401 基准脚本（指定查询集 + P50/P95/首字） | ✅ 仓库内 `p0/scripts/bench_p1_latency.py`，支持本地/现网 `--endpoint http` |
 | 5 份标准 P95 < 8s | ⏳ 待跑：本机缺 5 份标准 KB / WeKnora 凭据；命令已备好 |
