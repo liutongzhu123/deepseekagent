@@ -95,7 +95,7 @@ const state = {
   versions: [],
   selectedIndex: -1,
   reports: [],
-  reportsTotal: 0,
+  reportPage: { offset: 0, limit: 20, total: 0, query: '' },
   currentReport: null,
   quotes: [],
   quotesTotal: 0,
@@ -734,9 +734,22 @@ function renderReportBatch(data) {
 }
 function renderReportHistory() {
   const box = $('reportHistory');
-  $('reportHistoryCount').textContent = state.reportsTotal;
+  const page = state.reportPage;
+  const total = page.total;
+  const shown = state.reports.length;
+  const pages = Math.max(1, Math.ceil(total / page.limit));
+  $('reportHistoryCount').textContent = total;
+  $('reportHistoryPager').classList.toggle('hidden', total <= page.limit);
+  $('reportHistoryMeta').textContent = total
+    ? `共 ${total} 条，显示第 ${page.offset + 1}–${Math.min(page.offset + shown, total)} 条`
+    : '共 0 条';
+  $('reportHistoryPage').textContent = `${Math.floor(page.offset / page.limit) + 1} / ${pages}`;
+  $('reportHistoryPrev').disabled = page.offset <= 0;
+  $('reportHistoryNext').disabled = page.offset + page.limit >= total;
   if (!state.reports.length) {
-    box.innerHTML = `<div class="empty compact"><b>还没有审核记录</b><p>完成一次报告审核后，结果会出现在这里。</p></div>`;
+    box.innerHTML = page.query
+      ? `<div class="empty compact"><b>没有匹配的审核记录</b><p>调整关键词后重试。</p></div>`
+      : `<div class="empty compact"><b>还没有审核记录</b><p>完成一次报告审核后，结果会出现在这里。</p></div>`;
     return;
   }
   box.innerHTML = state.reports.map((report) => {
@@ -798,9 +811,16 @@ async function reviewFinding(reportId, ruleId, status) {
   toast(`已标记 ${ruleId}：${REVIEW_LABELS[status] || status}`, 'info');
 }
 async function loadReports() {
-  const data = await jsonFetch('api/v1/reports?limit=20');
+  const page = state.reportPage;
+  const params = new URLSearchParams({
+    limit: String(page.limit),
+    offset: String(page.offset),
+  });
+  if (page.query) params.set('q', page.query);
+  const data = await jsonFetch(`api/v1/reports?${params.toString()}`);
   state.reports = data.reports || [];
-  state.reportsTotal = data.total ?? state.reports.length;
+  page.total = data.total ?? state.reports.length;
+  page.offset = data.offset ?? page.offset;
   renderReportHistory();
 }
 async function loadReport(reportId) {
@@ -1880,7 +1900,10 @@ function bindEvents() {
         $('reportStatus').textContent = `完成：${data.summary.fail} 项需要处理`;
         toast('报告审核完成');
       }
-      if (can('report:read')) await loadReports();
+      if (can('report:read')) {
+        state.reportPage.offset = 0;
+        await loadReports();
+      }
     } catch (error) {
       $('reportStatus').textContent = '审核失败';
       showError(error);
@@ -1892,6 +1915,26 @@ function bindEvents() {
     const item = event.target.closest('[data-report-id]');
     if (!item) return;
     loadReport(item.dataset.reportId).catch(showError);
+  });
+  $('reportHistorySearch').addEventListener('click', () => {
+    state.reportPage.query = $('reportHistoryQuery').value.trim();
+    state.reportPage.offset = 0;
+    loadReports().catch(showError);
+  });
+  $('reportHistoryQuery').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    state.reportPage.query = $('reportHistoryQuery').value.trim();
+    state.reportPage.offset = 0;
+    loadReports().catch(showError);
+  });
+  $('reportHistoryPrev').addEventListener('click', () => {
+    state.reportPage.offset = Math.max(0, state.reportPage.offset - state.reportPage.limit);
+    loadReports().catch(showError);
+  });
+  $('reportHistoryNext').addEventListener('click', () => {
+    state.reportPage.offset += state.reportPage.limit;
+    loadReports().catch(showError);
   });
   $('reportResult').addEventListener('click', (event) => {
     const exportButton = event.target.closest('[data-report-export]');

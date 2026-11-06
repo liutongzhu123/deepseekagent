@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import insert, select
+from sqlalchemy import delete, insert, select
 
 from . import config, db, objects
 
@@ -162,3 +163,36 @@ def read_source(report_id: str) -> bytes:
             raise KeyError(report_id)
         _, data = objects.read_file(conn, row[0])
     return data
+
+
+def prunable_ids(cutoff: datetime) -> list[str]:
+    """Report ids audited before ``cutoff`` (UTC datetime)."""
+    db.ensure_schema()
+    with db.engine().connect() as conn:
+        rows = conn.execute(
+            select(db.report_audits.c.id).where(db.report_audits.c.created_at < cutoff)
+        )
+        return [str(row[0]) for row in rows]
+
+
+def prune_before(cutoff: datetime) -> int:
+    """Delete audits older than ``cutoff`` with their source file and mirror."""
+    db.ensure_schema()
+    removed = 0
+    with db.engine().begin() as conn:
+        ids = [
+            str(row[0])
+            for row in conn.execute(
+                select(db.report_audits.c.id).where(db.report_audits.c.created_at < cutoff)
+            )
+        ]
+        for report_id in ids:
+            objects.delete_files(conn, "report", report_id)
+            conn.execute(delete(db.report_audits).where(db.report_audits.c.id == report_id))
+            removed += 1
+    for report_id in ids:
+        try:
+            shutil.rmtree(_mirror_dir(report_id))
+        except OSError:
+            pass
+    return removed

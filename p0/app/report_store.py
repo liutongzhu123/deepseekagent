@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import store
@@ -118,6 +120,55 @@ def load_reviews(report_id: str, base_dir: Path | None = None) -> dict:
         return {}
     reviews = data.get("reviews") if isinstance(data, dict) else None
     return reviews if isinstance(reviews, dict) else {}
+
+
+def _parse_time(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def prunable_ids(cutoff: datetime, base_dir: Path | None = None) -> list[str]:
+    """Report ids created before ``cutoff``; missing timestamps are kept."""
+    if store.config.postgres_enabled():
+        return store.reports.prunable_ids(cutoff)
+    root = base_dir or REPORT_DIR
+    if not root.exists():
+        return []
+    ids: list[str] = []
+    for path in sorted(root.glob("*/meta.json")):
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(meta, dict) or not meta.get("id"):
+            continue
+        created = _parse_time(meta.get("created_at"))
+        if created is not None and created < cutoff:
+            ids.append(str(meta["id"]))
+    return ids
+
+
+def prune_before(cutoff: datetime, base_dir: Path | None = None) -> int:
+    """Delete report records older than ``cutoff``; return the removed count."""
+    if store.config.postgres_enabled():
+        return store.reports.prune_before(cutoff)
+    root = base_dir or REPORT_DIR
+    removed = 0
+    for report_id in prunable_ids(cutoff, root):
+        try:
+            directory = _dir(report_id, root)
+        except KeyError:
+            continue
+        if directory.is_dir():
+            shutil.rmtree(directory)
+            removed += 1
+    return removed
 
 
 def save_reviews(report_id: str, reviews: dict, base_dir: Path | None = None) -> dict:
