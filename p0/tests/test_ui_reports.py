@@ -56,3 +56,30 @@ def test_report_workbench_has_review_controls():
         "review_coverage",
     ):
         assert marker in js
+
+
+def test_report_history_has_search_and_pagination():
+    html = read("index.html")
+    for element in (
+        "reportHistoryQuery",
+        "reportHistorySearch",
+        "reportHistoryPager",
+        "reportHistoryPrev",
+        "reportHistoryNext",
+        "reportHistoryPage",
+        "reportHistoryMeta",
+    ):
+        assert f'id="{element}"' in html
+    js = read("ui.js")
+    for marker in (
+        "reportPage",
+        "api/v1/reports?",
+        "reportHistoryQuery",
+        "reportHistorySearch",
+        "reportHistoryPrev",
+        "reportHistoryNext",
+        "state.reportPage.offset = 0",
+    ):
+        assert marker in js
+    assert ".report-history-tools" in read("ui.css")
+

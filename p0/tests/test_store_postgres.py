@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -302,6 +303,42 @@ def test_report_audit_roundtrip(pg):
     assert rows[0]["batch_id"] == batch_id
     assert rows[0]["summary"]["fail"] == 1
     assert (pg / "reports" / report_id / "source.docx").read_bytes() == b"fake-docx"
+
+
+def test_report_prune_removes_old_audits(pg):
+    old_id = "rp_20200101010101_abcdef"
+    new_id = "rp_20261103010101_abcdef"
+    result = {"file": "demo.docx", "template": "BYD-odor", "findings": []}
+    for report_id, created_at in (
+        (old_id, "2020-01-01T00:00:00+00:00"),
+        (new_id, "2026-11-03T01:01:01+00:00"),
+    ):
+        report_store.create(
+            {
+                "id": report_id,
+                "batch_id": "",
+                "project": "P1",
+                "created_by": "alice",
+                "created_at": created_at,
+                "file_name": "demo.docx",
+                "file_size": 9,
+                "file_sha256": "0" * 64,
+                "template": "BYD-odor",
+                "summary": {},
+            },
+            result,
+            b"fake-docx",
+        )
+
+    cutoff = datetime(2021, 1, 1, tzinfo=timezone.utc)
+    assert report_store.prunable_ids(cutoff) == [old_id]
+    assert report_store.prune_before(cutoff) == 1
+
+    with pytest.raises(KeyError):
+        report_store.load(old_id)
+    assert report_store.read_source(new_id) == b"fake-docx"
+    assert not (pg / "reports" / old_id).exists()
+    assert (pg / "reports" / new_id).exists()
 
 
 

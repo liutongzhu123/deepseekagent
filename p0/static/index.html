@@ -136,7 +136,22 @@
                 <div><h2>审核历史</h2><p>审核结果已留存；点击记录回看问题清单，可导出 Excel 或下载原文。</p></div>
                 <span class="pill info" id="reportHistoryCount">0</span>
               </div>
+              <div class="report-history-tools">
+                <div class="search-box small">
+                  <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+                  <input id="reportHistoryQuery" type="text" placeholder="搜索文件名或项目" autocomplete="off">
+                </div>
+                <button class="btn btn-secondary btn-sm" id="reportHistorySearch">查询</button>
+              </div>
               <div id="reportHistory" class="report-history"><div class="muted">正在加载…</div></div>
+              <div class="pagination hidden" id="reportHistoryPager">
+                <span id="reportHistoryMeta">—</span>
+                <div class="row">
+                  <button class="btn btn-secondary btn-sm" id="reportHistoryPrev">上一页</button>
+                  <span id="reportHistoryPage" class="page-indicator">1 / 1</span>
+                  <button class="btn btn-secondary btn-sm" id="reportHistoryNext">下一页</button>
+                </div>
+              </div>
             </section>
             <details class="card advanced" id="recordsCard">
               <summary>

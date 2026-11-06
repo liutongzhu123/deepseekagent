@@ -513,6 +513,9 @@ td.actions .btn { margin-right: 4px; }
 .report-actions-meta { color: var(--muted); font-size: 11.5px; }
 .report-actions .grow { flex: 1; }
 .report-history { display: flex; flex-direction: column; gap: 6px; }
+.report-history-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.report-history-tools .search-box { flex: 1; }
+.report-history-tools .search-box.small { width: auto; }
 .report-history-item {
   display: flex;
   align-items: center;
