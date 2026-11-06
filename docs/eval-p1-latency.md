@@ -116,8 +116,11 @@ PY
 | T401b Redis 缓存（5 分钟） | ✅ 已合并（#73）；单测覆盖命中/过期/降级 |
 | T401c rerank 30→15 + batch | ✅ 已合并（#74）；请求体单测 |
 | T401 基准脚本（指定查询集 + P50/P95/首字） | ✅ 仓库内 `p0/scripts/bench_p1_latency.py`，支持本地/现网 `--endpoint http`、`--insecure` 与 `--mode` |
+| 直连 WeKnora 基准脚本 | ✅ `p0/scripts/bench_weknora_retrieval.py`：JWT 登录 + `knowledge-search`（rerank）/ `hybrid-search`（无 rerank） |
 | 现网纯检索基线（20 次） | ✅ 2026-11-07：`mode=weknora` P50 271.4 ms / P95 299.9 ms；`mode=keyword` P50 31.1 ms / P95 34.2 ms，见 §6 |
-| 现网带 rerank 对比 | ⏳ 缺 WeKnora 租户 API key（或部署 T404 后重启 P0）；不能用现网 hybrid-search 冒充 |
+| 直连 WeKnora hybrid vs rerank（10 次/组） | ✅ 2026-11-07：hybrid 首字 P50 255.7 ms；rerank 首字 P50 52,136.2 ms，见 §6.5 |
+| P95 < 8s（P0 语义路径） | ✅ 299.9 ms |
+| P95 < 8s（直连 rerank） | ❌ 54,594.8 ms，远高于 8 s；瓶颈是本地 rerank 模型对 50 个候选打分 |
 
 ## 6. 现网基线与 rerank 对比状态（2026-11-07）
 
@@ -133,21 +136,20 @@ PY
 
 | 组 | 路径 | n | 命中 | P50 首字 | P95 首字 | P50 完整 | P95 完整 |
 |---|---|---:|---:|---:|---:|---:|---:|
-| A | 现网 `mode=weknora`（0.8.4 默认，推断 hybrid-search） | 20 | 100% | 271.4 ms | 299.9 ms | 271.8 ms | 300.6 ms |
+| A | 现网 `mode=weknora`（P0 语义检索路径，不经 rerank） | 20 | 100% | 271.4 ms | 299.9 ms | 271.8 ms | 300.6 ms |
 | B | 现网 `mode=keyword`（确定性关键词基线） | 20 | 100% | 31.1 ms | 34.2 ms | 31.4 ms | 34.7 ms |
 
 - 首字最小/最大：A 257.2–302.7 ms；B 28.8–34.7 ms。
 - 单题均值差异不大（A 262.6–300.8 ms），5 题负载稳定；P95 主要反映 WeKnora 往返抖动。
-- 现网 `weknora` 路径比关键词基线慢约 **240 ms**（P50），这是 WeKnora 检索往返的成本；按启动时间/响应字段推断，它仍是 **无 rerank** 的 hybrid-search，不是 T404 后的 knowledge-search。
+- 现网 `weknora` 路径走 P0 的 `mode=semantic`，本身**不经 rerank**；它是 P0 路径基线，不是 WeKnora 的 hybrid-search。hybrid vs rerank 的直连对比见 §6.5。
 
-### 6.3 为什么没有「带 rerank」组
+### 6.3 为什么 P0 响应里没有 rerank
 
-现网 P0 进程启动于 2026-11-05，早于 T404/T401c 合并；`/api/v1/standards/ask` 的响应也没有 `retrieval.rerank` / `query_rewrite` 字段，按启动时间与响应字段推断，现网跑的是 T404 之前的代码（`weknora.search` 默认 hybrid-search，`P0_WEKNORA_RERANK=0`）。要在现网测「knowledge-search + rerank」需要二选一：
+现网 P0 `0.8.4` 的 knowledge-chat 走 `mode=semantic`，本身**不过 rerank**；WeKnora `0.9.0` 已部署 `WeKnora-rerank` / `bge-reranker-v2-m3`，`builtin-local-rerank` 是默认 rerank 模型。因此：
 
-1. 部署带 T404 的版本并重启 P0（现网只读约束下本工单不做）；
-2. 用 P0 的 WeKnora 租户 API key 直连 `POST /api/v1/knowledge-search`（带 rerank）与 `POST /api/v1/knowledge-bases/{kb}/hybrid-search`（无 rerank）对比。
-
-第 2 条本次未跑通：公网 `https://<host>/api/v1` 返回 502；P0 用的 WeKnora 后端（`10.220.1.6:8080`）用 `admin@zhongqi.local` 登录返回 401（按约定 3 次内停止），缺少租户 API key。**因此「带 rerank」数字仍为待补，不能用 A 组冒充。**
+- 不能根据 P0 的响应字段判断 WeKnora 是否启用 rerank；
+- hybrid vs rerank 对比必须直连 WeKnora 的 `/api/v1/knowledge-search`，见 §6.5；
+- 认证是 `POST /api/v1/auth/login` 换 JWT，不是租户 API key；之前公网 `/api/v1` 的 502 是 frontend nginx 缓存了旧容器 IP，重启后 `/api/v1/health` 返回 401（正常）。
 
 ### 6.4 复现
 
@@ -160,4 +162,38 @@ python scripts/bench_p1_latency.py --endpoint http --insecure \
   --questions eval/p1_latency_questions.live.json --repeat 4 \
   --mode weknora --label live-weknora --json /tmp/p1-latency-live-weknora.json
 # 把 --mode 换成 keyword 跑 B 组；--repeat 4 × 5 题 = 20 次
+```
+
+### 6.5 直连 WeKnora：hybrid-search vs knowledge-search（rerank）
+
+> 2026-11-07 补测。P0 的 `mode=weknora` 是 P0 语义检索路径；WeKnora 0.9.0 的 rerank 要直连 `/api/v1/knowledge-search`。
+
+- 认证：`POST /api/v1/auth/login` `{"email": "...", "password": "..."}` → `.token`（JWT）；登录 200。不是租户 API key。
+- 知识库：`0680bc21-1696-454d-b2c6-eec316a8874b`；rerank 模型 `builtin-local-rerank`（`bge-reranker-v2-m3`）。
+- 端点与请求：
+  - hybrid：`POST /api/v1/knowledge-bases/{kb}/hybrid-search`，`{"query_text": "...", "match_count": 6}`
+  - rerank：`POST /api/v1/knowledge-search`，`{"query": "...", "knowledge_base_ids": [kb], "match_count": 30, "rerank": {"enabled": true, "top_k": 15}}`
+- 问题集 `p0/eval/p1_latency_questions.live.json`（5 题，不含正文）；5 题 × 2 次 = **10 次/组**；脚本 `p0/scripts/bench_weknora_retrieval.py`。
+
+| 组 | n | 命中 | P50 首字 | P95 首字 | P50 完整 | P95 完整 |
+|---|---:|---:|---:|---:|---:|---:|
+| hybrid-search（无 rerank） | 10 | 100% | 255.7 ms | 469.5 ms | 2,367.0 ms | 3,434.4 ms |
+| knowledge-search（rerank） | 10 | 100% | 52,136.2 ms | 54,594.8 ms | 53,645.7 ms | 55,151.3 ms |
+
+- 首字范围：hybrid 239.2–469.5 ms；rerank 50,674.1–54,594.8 ms。
+- rerank meta：`model=builtin-local-rerank`、`candidate_count=50`、`result_count=11`、`top_score=0.999`。
+- **结论**：rerank 首字 P50 **52.1 s** / P95 **54.6 s**，比 hybrid 的 255.7 ms 慢约 **204 倍**；远高于 T401 的 **P95 < 8 s** 目标。瓶颈是本地 rerank 模型对 50 个候选打分，不是检索/网络。
+- **风险**：P0 的 `P0_WEKNORA_TIMEOUT` 默认 60 s，P95 54.6 s 只剩约 5.4 s 余量；在线路径启用 rerank 有 502 风险。
+- **建议**：质量收益未量化前不要把 rerank 作为默认在线路径；要试先把候选池降到 10–15、换 GPU/量化模型或异步预计算，再复测 P95。
+
+复现：
+
+```bash
+cd p0
+WEKNORA_BASE_URL=https://zhongqi.yunanht.com \
+WEKNORA_ADMIN_EMAIL=... WEKNORA_ADMIN_PASSWORD=... \
+WEKNORA_KB_ID=... \
+python scripts/bench_weknora_retrieval.py --insecure \
+  --questions eval/p1_latency_questions.live.json --repeat 2 \
+  --json /tmp/weknora-retrieval-live.json
 ```
