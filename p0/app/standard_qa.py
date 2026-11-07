@@ -660,7 +660,7 @@ def answer(
     ``cache`` is the optional query-rewrite cache (see
     ``query_rewrite.rewrite``); only WeKnora/local retrieval uses rewriting.
     ``rerank`` overrides the WeKnora rerank switch for this call (``None`` keeps
-    the ``P0_WEKNORA_RERANK`` environment default).
+    the ``P0_WEKNORA_RERANK`` environment default, which is off unless set to 1).
     """
     if mode in {"weknora", "hybrid"}:
         mode = "auto"

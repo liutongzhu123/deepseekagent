@@ -13,6 +13,7 @@
 | embedding 批大小 | `P0_EMBEDDING_BATCH=32` | `P0_EMBEDDING_BATCH=64` |
 
 > 如果生产当前是 `P0_WEKNORA_RERANK=0`，再补一组“无 rerank”基线，避免把“开 rerank”的增量算到 T401c 头上。
+> 应用默认自 T405（2026-11-07）起为 `P0_WEKNORA_RERANK=0`（opt-in）；上表是 T401 评测时的显式配置，不是当前默认。
 
 ## 2. 已实测：改写模型选择（2026-11-06）
 
@@ -121,6 +122,7 @@ PY
 | 直连 WeKnora hybrid vs rerank（10 次/组） | ✅ 2026-11-07：hybrid 首字 P50 255.7 ms；rerank 首字 P50 52,136.2 ms，见 §6.5 |
 | P95 < 8s（P0 语义路径） | ✅ 299.9 ms |
 | P95 < 8s（直连 rerank） | ❌ 54,594.8 ms，远高于 8 s；瓶颈是本地 rerank 模型对 50 个候选打分 |
+| T405 rerank 候选 10/15（2 s 门槛） | ❌ 15/10 候选 P50 约 37.8 s/24.9 s，均 >2 s；结论「不能接」，见 `docs/eval-p1-rerank-budget.md` |
 
 ## 6. 现网基线与 rerank 对比状态（2026-11-07）
 
@@ -184,7 +186,7 @@ python scripts/bench_p1_latency.py --endpoint http --insecure \
 - rerank meta：`model=builtin-local-rerank`、`candidate_count=50`、`result_count=11`、`top_score=0.999`。
 - **结论**：rerank 首字 P50 **52.1 s** / P95 **54.6 s**，比 hybrid 的 255.7 ms 慢约 **204 倍**；远高于 T401 的 **P95 < 8 s** 目标。瓶颈是本地 rerank 模型对 50 个候选打分，不是检索/网络。
 - **风险**：P0 的 `P0_WEKNORA_TIMEOUT` 默认 60 s，P95 54.6 s 只剩约 5.4 s 余量；在线路径启用 rerank 有 502 风险。
-- **建议**：质量收益未量化前不要把 rerank 作为默认在线路径；要试先把候选池降到 10–15、换 GPU/量化模型或异步预计算，再复测 P95。
+- **建议**：质量收益未量化前不要把 rerank 作为默认在线路径；要试先把候选池降到 10–15、换 GPU/量化模型或异步预计算，再复测 P95。**T405 已实测（2026-11-07）**：同一 CPU reranker 上 10/15 候选 P50 约 24.9 s / 37.8 s，仍远高于 2 s，结论「不能接」；且 WeKnora 0.9.0 候选池硬编码 50，不能按请求降到 10/15，详见 `docs/eval-p1-rerank-budget.md`。
 
 复现：
 
