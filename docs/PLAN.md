@@ -242,7 +242,7 @@
 - **状态**：`merged`（#75、#83）  **依赖**：无
 - **做什么**：清洗 PDF/扫描件文本层中的水印碎片，避免污染条款与数值抽取；处理可配置、可回退。
 - **验收标准**：单测覆盖水印碎片清洗与正常文本不误伤；既有解析/审核结论 diff 为空（除明确修复的噪声）。
-- **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；已覆盖 CJK 间孤立字母、`Q/JLY J7111074B-2021` / `Q-JLY J7111074B` 类重复标准号串（同页 ≥4 次才删，单次引用保留）。10 条单测通过。**2026-11-07 真实样例已到位**：`/opt/dsh-agent/samples/watermark-sample.pdf` 每页 4 组 `TO/OF/BY/AT` 浅粉斜排水印（33 页共 132 组），文本层可按块精确删除；OCR 去水印前后 3 页对比见 `docs/t403-watermark-ocr.md`，策略待确认（文本层块删除为主、图像颜色掩膜作扫描件兜底）。
+- **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；已覆盖 CJK 间孤立字母、`Q/JLY J7111074B-2021` / `Q-JLY J7111074B` 类重复标准号串（同页 ≥4 次才删，单次引用保留）。10 条单测通过。**2026-11-07 真实样例已到位并确认策略**：`/opt/dsh-agent/samples/watermark-sample.pdf` 每页 4 组 `TO/OF/BY/AT` 浅粉斜排水印（33 页共 132 组）；文本层块删除为主（#91，`P0_WATERMARK_BLOCK_MIN=4`，132 组全删、正文/页眉保留），扫描件浅粉掩膜兜底 + 非水印内容行校验（`P0_OCR_WATERMARK_MASK=1`，缺失则回退原图并写复核 warning），对比与配置见 `docs/t403-watermark-ocr.md`。
 - **涉及**：`p0/app/pdf_text.py`、`p0/app/ocr.py`、`p0/app/watermark.py`、`p0/tests/`
 
 #### T404 · rerank 接入问答链路

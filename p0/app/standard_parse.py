@@ -75,6 +75,19 @@ def parse_pdf_standard(
     )
     if watermark_removed:
         parsed.setdefault("warnings", []).append(f"已清洗水印碎片 {watermark_removed} 处")
+    if ocr_meta:
+        fallback_pages = ocr_meta.get("watermark_mask_fallback_pages") or []
+        if fallback_pages:
+            pages_text = "、".join(str(page) for page in fallback_pages)
+            parsed.setdefault("warnings", []).append(
+                f"第 {pages_text} 页去水印后校验发现内容行缺失，已回退原图，请复核"
+            )
+        review_pages = ocr_meta.get("watermark_mask_review_pages") or []
+        if review_pages:
+            pages_text = "、".join(str(page) for page in review_pages)
+            parsed.setdefault("warnings", []).append(
+                f"第 {pages_text} 页去水印后内容行数/字符数减少，请复核"
+            )
     if ocr_warning:
         parsed.setdefault("warnings", []).append(ocr_warning)
     report("parsed", 90)

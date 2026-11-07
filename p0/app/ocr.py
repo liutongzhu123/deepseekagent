@@ -10,11 +10,16 @@ turns those into per-field review flags.
 """
 from __future__ import annotations
 
+import difflib
+import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable
 from io import BytesIO
 from typing import Any
+
+from . import watermark
 
 
 class OcrUnavailable(RuntimeError):
@@ -44,18 +49,22 @@ class OcrPage:
     page: int
     lines: list[OcrLine]
     confidence: float
+    watermark_mask: dict | None = None
 
     @property
     def text(self) -> str:
         return "\n".join(line.text for line in self.lines)
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "page": self.page,
             "confidence": round(self.confidence, 4),
             "text": self.text,
             "lines": [line.to_dict() for line in self.lines],
         }
+        if self.watermark_mask is not None:
+            payload["watermark_mask"] = self.watermark_mask
+        return payload
 
 
 @dataclass
@@ -73,6 +82,33 @@ class OcrResult:
 
     def meta(self) -> dict:
         low_pages = [page.page for page in self.pages if page.confidence < 0.9]
+        masked_pages = [
+            page.page for page in self.pages
+            if (page.watermark_mask or {}).get("applied")
+        ]
+        fallback_pages = [
+            page.page for page in self.pages
+            if (page.watermark_mask or {}).get("fallback")
+        ]
+        review_pages = []
+        for page in self.pages:
+            mask = page.watermark_mask or {}
+            if not mask.get("applied"):
+                continue
+            before_lines = mask.get("before_content_lines")
+            after_lines = mask.get("after_content_lines")
+            before_chars = mask.get("before_chars")
+            after_chars = mask.get("after_chars")
+            line_loss = (
+                before_lines is not None and after_lines is not None
+                and after_lines < before_lines
+            )
+            char_loss = (
+                before_chars is not None and after_chars is not None
+                and before_chars > 0 and after_chars < before_chars * 0.95
+            )
+            if line_loss or char_loss:
+                review_pages.append(page.page)
         return {
             "engine": self.engine,
             "dpi": self.dpi,
@@ -81,6 +117,9 @@ class OcrResult:
             "low_confidence_pages": low_pages,
             "elapsed_ms": self.elapsed_ms,
             "line_count": sum(len(page.lines) for page in self.pages),
+            "watermark_mask_pages": masked_pages,
+            "watermark_mask_fallback_pages": fallback_pages,
+            "watermark_mask_review_pages": review_pages,
         }
 
     def page_texts(self) -> list[str]:
@@ -132,6 +171,102 @@ def _lines_from_raw(raw: Any, min_line_confidence: float = 0.35) -> list[OcrLine
     # keep split headings and body lines in document order.
     lines.sort(key=lambda line: (round(line.top / 14), line.left))
     return [line for line in lines if line.confidence >= min_line_confidence]
+
+
+_WATERMARK_LINE = re.compile(
+    r"^\s*(?:[T1]\s*[O0]|[O0]\s*F|[B8]\s*Y|[A4]\s*[T7])\s*[：:]", re.IGNORECASE
+)
+
+
+def _is_watermark_line(text: str) -> bool:
+    # OCR sometimes reads TO as T0/1o and AT as A T; treat those as watermark
+    # labels so they do not look like content loss during validation.
+    return bool(_WATERMARK_LINE.match(text or ""))
+
+
+def _normalise_line(text: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", (text or "").lower())
+
+
+def _line_matches(normalised: str, after_lines: list[str], threshold: float = 0.82) -> bool:
+    for candidate in after_lines:
+        if not candidate:
+            continue
+        if normalised in candidate or candidate in normalised:
+            return True
+        if difflib.SequenceMatcher(None, normalised, candidate).ratio() >= threshold:
+            return True
+    return False
+
+
+def _missing_content_lines(before: list[OcrLine], after: list[OcrLine],
+                           min_chars: int = 8) -> list[str]:
+    """Before-OCR content lines that the masked OCR no longer contains.
+
+    Watermark lines and very short fragments are ignored; comparison is on a
+    whitespace/punctuation-free form with a fuzzy ratio, so OCR spacing and
+    single-character variants do not count as loss.  A non-empty result makes
+    the caller fall back to the original image.
+    """
+    after_lines = [_normalise_line(line.text) for line in after]
+    missing: list[str] = []
+    for line in before:
+        if _is_watermark_line(line.text):
+            continue
+        normalised = _normalise_line(line.text)
+        if len(normalised) < min_chars:
+            continue
+        if not _line_matches(normalised, after_lines):
+            missing.append(line.text)
+    return missing
+
+
+def _watermark_mask_enabled() -> bool:
+    return os.getenv("P0_OCR_WATERMARK_MASK", "1").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+
+
+def _recognise(image, recognizer, min_line_confidence: float):
+    import numpy as np
+    raw, _elapse = recognizer(np.asarray(image))
+    return raw, _lines_from_raw(raw, min_line_confidence)
+
+
+def _masked_page(image, recognizer, min_line_confidence: float):
+    """Return ``(raw, lines, mask_meta)`` for one rendered page.
+
+    A page with watermark-like pink pixels is OCR'd twice: original and masked.
+    If any non-watermark content line disappears, the original result wins and
+    ``fallback`` is recorded for the review warning.  Clean pages (no pink
+    area) keep the single-OCR path.
+    """
+    try:
+        masked, stats = watermark.mask_light_pink(image)
+    except Exception:  # noqa: BLE001 - an optional preprocessing step must not fail OCR
+        return None, None, {"applied": False, "fallback": False, "error": "mask unavailable"}
+    if masked is None:
+        return None, None, stats
+    raw_before, lines_before = _recognise(image, recognizer, min_line_confidence)
+    raw_after, lines_after = _recognise(masked, recognizer, min_line_confidence)
+    missing = _missing_content_lines(lines_before, lines_after)
+    before_content = [line for line in lines_before if not _is_watermark_line(line.text)]
+    after_content = [line for line in lines_after if not _is_watermark_line(line.text)]
+    meta = {
+        **stats,
+        "before_lines": len(lines_before),
+        "after_lines": len(lines_after),
+        "before_content_lines": len(before_content),
+        "after_content_lines": len(after_content),
+        "before_chars": sum(len(line.text) for line in before_content),
+        "after_chars": sum(len(line.text) for line in after_content),
+        "missing_lines": missing[:5],
+    }
+    if missing:
+        meta.update({"applied": False, "fallback": True})
+        return raw_before, lines_before, meta
+    meta.update({"applied": True, "fallback": False})
+    return raw_after, lines_after, meta
 
 
 def ocr_image(
@@ -241,15 +376,23 @@ def ocr_pdf(
     for index in range(limit):
         page = document[index]
         image = page.render(scale=dpi / 72.0).to_pil()
-        raw, _elapse = recognizer(np.array(image))
-        lines = _lines_from_raw(raw, min_line_confidence)
+        raw = lines = None
+        mask_meta = None
+        if _watermark_mask_enabled():
+            raw, lines, mask_meta = _masked_page(image, recognizer, min_line_confidence)
+        if raw is None:
+            raw, _elapse = recognizer(np.array(image))
+            lines = _lines_from_raw(raw, min_line_confidence)
         confidence_pool = lines or _lines_from_raw(raw, 0.0)
         confidence = (
             sum(line.confidence for line in confidence_pool) / len(confidence_pool)
             if confidence_pool
             else 0.0
         )
-        pages.append(OcrPage(page=index + 1, lines=lines, confidence=confidence))
+        pages.append(OcrPage(
+            page=index + 1, lines=lines, confidence=confidence,
+            watermark_mask=mask_meta,
+        ))
         if progress is not None:
             progress(index + 1, limit)
 
