@@ -12,7 +12,7 @@ from openpyxl import Workbook, load_workbook
 
 from app import admin_config, auth, main, quote, standard_store
 from app.docx_parser import ReportData
-from app.rules import audit_report
+from app.rules import RULES, audit_report
 from app.standard_parser import parse_standard
 
 
@@ -86,7 +86,7 @@ def test_defaults_and_admin_only_access(env):
     data = response.json()
     config = data["config"]
     assert config["revision"] == 0
-    assert len(config["report"]["rules"]) == 11
+    assert len(config["report"]["rules"]) == len(RULES)
     assert len(config["standard"]["fields"]) == 8
     assert config["quote"]["default_discount"] == 60
     assert len(config["quote"]["crm_columns"]) == 11
@@ -102,7 +102,7 @@ def test_effective_config_is_readable_by_module_pages(env):
     data = response.json()
     assert "path" not in data
     config = data["config"]
-    assert len(config["report"]["rules"]) == 11
+    assert len(config["report"]["rules"]) == len(RULES)
     assert len(config["standard"]["fields"]) == 8
     assert config["quote"]["default_discount"] == 60
     assert data["warning"] == ""
@@ -143,7 +143,7 @@ def test_report_rule_update_changes_audit_behaviour(env):
     assert by_id["R02"]["title"] == "均值复核（自定义）"
 
     catalog = admin.get("/api/v1/rules").json()
-    assert catalog["enabled"] == 10
+    assert catalog["enabled"] == len(RULES) - 1
     assert {rule["id"]: rule for rule in catalog["rules"]}["R08"]["enabled"] is False
 
     events = admin.get("/api/v1/audit/events?limit=20").json()["events"]
