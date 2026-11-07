@@ -4,6 +4,7 @@ import pytest
 
 from app.docx_parser import ReportData, identify_template, parse_docx
 from app.rules import audit_report
+from eval import report_files
 
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLES = ROOT / "samples" / "byd"
@@ -35,10 +36,10 @@ def test_r11_reports_variant():
     assert "OTS" in finding["message"]
 
 
-@pytest.mark.skipif(len(list(SAMPLES.glob("*.docx"))) != 12, reason="12 BYD drafts not mounted")
+@pytest.mark.skipif(len(report_files(SAMPLES)) != 12, reason="12 BYD drafts not mounted")
 def test_twelve_drafts_are_classified():
     variants = []
-    for path in sorted(SAMPLES.glob("*.docx")):
+    for path in report_files(SAMPLES):
         data = parse_docx(path)
         assert data.template_family == "BYD-odor"
         assert data.template_variant in {"OTS", "摸底"}

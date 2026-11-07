@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.rules import RecordInput
+from eval import report_files
 from eval.stage1_regression import run_draft_regression, run_record_regression
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,9 +37,19 @@ def test_record_regression_is_deterministic():
     assert first == second
 
 
-@pytest.mark.skipif(len(list(SAMPLES.glob("*.docx"))) != 12, reason="12 BYD drafts not mounted")
+@pytest.mark.skipif(len(report_files(SAMPLES)) != 12, reason="12 BYD drafts not mounted")
 def test_draft_regression_reproduces_six_rules():
     result = run_draft_regression(SAMPLES)
 
     assert result["ok"] is True
     assert result["reproduced"] == 12
+
+
+def test_report_files_ignores_appledouble_and_lock_files(tmp_path):
+    (tmp_path / "draft-01.docx").write_bytes(b"x")
+    (tmp_path / "._draft-01.docx").write_bytes(b"x")
+    (tmp_path / "~$draft-01.docx").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_text("x")
+
+    assert [path.name for path in report_files(tmp_path)] == ["draft-01.docx"]
+    assert report_files(tmp_path / "missing") == []

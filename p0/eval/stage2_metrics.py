@@ -31,6 +31,7 @@ from app import rule_dsl, semantic_audit  # noqa: E402
 from app.docx_parser import parse_docx  # noqa: E402
 from app.partial_rules import PARTIAL_RULES, evaluate_partial_rules, partial_rule_catalog  # noqa: E402
 from app.rules import audit_report  # noqa: E402
+from eval import report_files  # noqa: E402
 
 CASES_PATH = ROOT / "eval" / "semantic_cases.json"
 CACHE_PATH = ROOT / "eval" / "semantic_cache.json"
@@ -175,7 +176,7 @@ def compute_semantic_metrics(cases: list[dict], responses: dict) -> dict:
 
 
 def _draft_paths(samples: Path) -> list[Path]:
-    return sorted(samples.glob("*.docx")) if samples.is_dir() else []
+    return report_files(samples)
 
 
 def partial_metrics(samples: Path) -> dict:
