@@ -242,7 +242,7 @@
 - **状态**：`merged`（#75、#83、#88、#91–#93）  **依赖**：无
 - **做什么**：清洗 PDF/扫描件文本层中的水印碎片，避免污染条款与数值抽取；处理可配置、可回退。
 - **验收标准**：单测覆盖水印碎片清洗与正常文本不误伤；既有解析/审核结论 diff 为空（除明确修复的噪声）。
-- **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；已覆盖 CJK 间孤立字母、`Q/JLY J7111074B-2021` / `Q-JLY J7111074B` 类重复标准号串（同页 ≥4 次才删，单次引用保留）。10 条单测通过。**2026-11-07 真实样例已到位并确认策略**：`/opt/dsh-agent/samples/watermark-sample.pdf` 每页 4 组 `TO/OF/BY/AT` 浅粉斜排水印（33 页共 132 组）；文本层块删除为主（#91，`P0_WATERMARK_BLOCK_MIN=4`，132 组全删、正文/页眉保留），扫描件浅粉掩膜兜底 + 非水印内容行校验（`P0_OCR_WATERMARK_MASK=1`，缺失则回退原图并写复核 warning），对比与配置见 `docs/t403-watermark-ocr.md`。
+- **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；已覆盖 CJK 间孤立字母与 `TO/OF/BY/AT` 四行块；标准号整串规则已于 2026-11-07 移除（同页重复 ≥4 次会误删正文引用标准号，曾致 23/44 条「满足中…」缺主语），同一 33 页样例回归断言清理开/关 44 条逐条一致。17 条水印单测通过（含真实样例回归，未挂载时跳过）。**2026-11-07 真实样例已到位并确认策略**：`/opt/dsh-agent/samples/watermark-sample.pdf` 每页 4 组 `TO/OF/BY/AT` 浅粉斜排水印（33 页共 132 组）；文本层块删除为主（#91，`P0_WATERMARK_BLOCK_MIN=4`，132 组全删、正文/页眉保留），扫描件浅粉掩膜兜底 + 非水印内容行校验（`P0_OCR_WATERMARK_MASK=1`，缺失则回退原图并写复核 warning），对比与配置见 `docs/t403-watermark-ocr.md`。
 - **涉及**：`p0/app/pdf_text.py`、`p0/app/ocr.py`、`p0/app/watermark.py`、`p0/tests/`
 
 #### T404 · rerank 接入问答链路
@@ -350,7 +350,7 @@
 1. **现网 T401 基线**：用 #85 的 `--endpoint http` 命令（`P0_BENCH_BASE_URL/USERNAME/PASSWORD` 或 token）打现网 P0，
    输出首字/完整响应 P50/P95；把改前/改后填进 `docs/eval-p1-latency.md`。
 2. **T405 结论落地**：rerank 不能接（10/15 候选仍 >2 s，且 WeKnora 0.9.0 候选池硬编码 50）。要重启该方向，先在 WeKnora 侧做候选池可配置 + GPU/更小模型，再用 T401 5 题跑命中质量对比；在此之前问答默认 hybrid-search。
-3. **T403 真实样例**：用客户带水印 PDF 跑一遍解析 diff；本机无该样例。
+3. **T403 真实样例**：已用 33 页样例跑通并修复标准号误伤（见 `docs/t403-watermark-ocr.md` §3.2）；下一步用客户扫描件复跑 OCR 掩膜。
 4. **T306 语义启用**（D5 已确认）：服务器配置 `DEEPSEEK_API_KEY` / `P0_SEMANTIC_ENABLED=1`，
    按 `docs/stage3-acceptance/README.md` §4 复跑语义项。
 5. **T302 验收链路演练**：挂载 12 份草稿后跑 T301，结果标“回归基线，不是验收”。

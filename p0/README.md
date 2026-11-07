@@ -259,7 +259,7 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 5. 章节标题按中英文名称识别（含「技术条件／检验方法／测试方法」等近义词，管理端可增删别名）；扫描件只有中文标题时也参与识别；
 6. 只有「试验方法」或只有「技术要求」一个章节的标准（如纯测定方法标准），按该章节的下级条款生成候选项目，缺失字段与项目名称进入人工复核，不再直接判 0 项；
 7. 每条记录保留 `clause/method_clause/page/method_page`，可回溯原文；OCR 结果另带 `confidence_detail/review_fields/review_required`，名称相似度匹配与单章节候选项目也标 `review_required`/`review_fields`；管理端标记为必填的字段缺失时同样加入 `review_fields`。
-8. 水印预处理：解析前统一清洗 PDF 文本层/OCR 页文本中的水印碎片。仅当一页出现 ≥3 个「CJK 之间的孤立拉丁字母」才判定为水印并删除（一两个保留为正文，如「分为A类」）；`Q/JLY J7111074B-2021`、`Q-JLY J7111074B` 这类标准号水印串仅在**同一页重复 ≥4 次**时删除（单次引用保留，`P0_WATERMARK_TOKEN_MIN` 可调）；`P0_WATERMARK_TERMS` 可配客户水印词，`P0_WATERMARK_CLEAN=0` 可整体关闭；清洗数量写入解析结果 `warnings`，入库/发布使用清洗后的文本。
+8. 水印预处理：解析前统一清洗 PDF 文本层/OCR 页文本中的水印碎片。仅当一页出现 ≥3 个「CJK 之间的孤立拉丁字母」才判定为水印并删除（一两个保留为正文，如「分为A类」）；客户样例的 `TO/OF/BY/AT` 四行块在同页重复 ≥4 次时整块删除（`P0_WATERMARK_BLOCK_MIN` 可调）。**标准号不按出现次数删除**：正文里的 `Q/JLY J7110440E-2021` 等引用标准号重复是正常内容，删掉会让条款缺主语；`P0_WATERMARK_TERMS` 可配客户水印词，`P0_WATERMARK_CLEAN=0` 可整体关闭；清洗数量写入解析结果 `warnings`，入库/发布使用清洗后的文本。
 
 ### 报价助手
 

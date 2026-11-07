@@ -1,9 +1,9 @@
 """PDF/OCR watermark pre-processing (T403).
 
 Watermarks exported into the PDF text layer show up as isolated Latin letters
-between CJK glyphs ("外A观B应C无D缺E陷"), as a repeated standard-number-like string
-("Q/JLY J7111074B-2021" / "Q-JLY J7111074B"), as a repeated four-line recipient
-block ("TO/OF/BY/AT"), or as a configured customer mark.
+between CJK glyphs ("外A观B应C无D缺E陷"), as a repeated four-line recipient block
+("TO/OF/BY/AT"), or as a configured customer mark; a watermark block can also
+repeat the document's own standard number.
 Left in place they pollute clause/number extraction, table values and the
 content published into WeKnora.
 
@@ -16,9 +16,10 @@ The cleaner is deliberately conservative and reversible:
 * isolated single Latin letters *between CJK characters* are removed only when a
   page has at least ``min_fragments`` of them — one or two matches are treated
   as real text (``分为A类``);
-* a standard-number-like token is removed only when the same token repeats at
-  least ``P0_WATERMARK_TOKEN_MIN`` times on the page (default 4), so a single
-  citation survives;
+* standard numbers are **never** removed token-by-token: a standard cited in
+  the body can repeat many times in a requirement table (for example
+  "满足 Q/JLY J7110440E-2021 中真空密封性规定"), and that is content.  The
+  four-line block rule above is the only text-layer standard-watermark rule;
 * ``P0_WATERMARK_CLEAN=0`` turns the whole step off.
 
 Both PDF text and OCR text run through it in ``standard_parse`` before parsing,
@@ -39,13 +40,7 @@ _RECIPIENT_BLOCK = re.compile(
     r"BY\s*[：:][^\r\n]*\r?\n"
     r"AT\s*[：:][^\r\n]*\r?\n?"
 )
-#: ``Q/JLY J7111074B-2021`` and ``Q-JLY J7111074B`` — standard numbers used as
-#: diagonal watermarks.  Removal is gated by repetition, never by shape alone.
-_STANDARD_TOKEN = re.compile(
-    r"(?i)\bQ[-/][A-Z]{2,6}\s?[A-Z]?\d{2,}[A-Z]?(?:-\d{2,4})?\b"
-)
 DEFAULT_MIN_FRAGMENTS = 3
-DEFAULT_TOKEN_MIN = 4
 DEFAULT_BLOCK_MIN = 4
 
 
@@ -135,9 +130,11 @@ def _remove_repeated_blocks(text: str, threshold: int) -> tuple[str, int]:
 def clean_text(text: str, *, min_fragments: int | None = None) -> tuple[str, int]:
     """Return ``(cleaned_text, removed_count)``.
 
-    ``removed_count`` counts removed recipient blocks, single-letter fragments,
-    repeated standard tokens and configured terms, so callers can report that
-    the page was touched.
+    ``removed_count`` counts removed recipient blocks, single-letter fragments
+    and configured terms, so callers can report that the page was touched.
+    Standard numbers are never removed here: a cited standard repeated in a
+    requirement table is content, and the four-line block rule already covers
+    the customer watermark.
     """
     if not text or not enabled():
         return text or "", 0
@@ -150,12 +147,6 @@ def clean_text(text: str, *, min_fragments: int | None = None) -> tuple[str, int
         count = value.count(term)
         if count:
             value = value.replace(term, "")
-            removed += count
-
-    token_min = max(1, _env_int("P0_WATERMARK_TOKEN_MIN", DEFAULT_TOKEN_MIN))
-    for token, count in collections.Counter(_STANDARD_TOKEN.findall(value)).items():
-        if count >= token_min:
-            value = value.replace(token, "")
             removed += count
 
     threshold = DEFAULT_MIN_FRAGMENTS if min_fragments is None else max(1, int(min_fragments))
