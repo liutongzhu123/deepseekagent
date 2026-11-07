@@ -4,6 +4,8 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from app.docx_parser import parse_docx
 from app.rules import audit_report
 
@@ -76,3 +78,41 @@ def test_insufficient_body_samples_skip(tmp_path):
     assert finding["status"] == "skip"
     assert "样本不足" in finding["message"]
     assert parse_docx(path).paragraph_styles[0]["font"] == "宋体"
+
+
+SAMPLE = Path("/opt/dsh-agent/samples/byd/ots-250717(1)__ots-250717__袋子-100L.docx")
+
+
+def test_cover_and_toc_are_excluded(tmp_path):
+    path = tmp_path / "front-matter.docx"
+    body = _p("地    址:天津市东丽区先锋东路68号", "宋体", 14)
+    body += _p("检验结论………………………………(1)", "宋体", 14)
+    body += "".join(_p(BODY, "宋体", 12) for _ in range(6))
+    _make_docx(path, body)
+
+    finding = _r17(path)
+
+    assert finding["status"] == "pass"
+    assert "地    址" not in finding["message"]
+    assert "……" not in finding["message"]
+
+
+def test_note_paragraph_is_excluded(tmp_path):
+    path = tmp_path / "note.docx"
+    body = "".join(_p(BODY, "宋体", 12) for _ in range(6))
+    body += _p("注：评价结果采用各位评价员结果的平均值。", "宋体", 9)
+    _make_docx(path, body)
+
+    finding = _r17(path)
+
+    assert finding["status"] == "pass"
+    assert "注：" not in finding["message"]
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="real draft not mounted")
+def test_real_draft_cover_toc_note_not_flagged():
+    finding = _r17(SAMPLE)
+
+    assert "地    址" not in finding["message"]
+    assert "……" not in finding["message"]
+    assert "注：" not in finding["message"]

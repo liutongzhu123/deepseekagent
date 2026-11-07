@@ -181,7 +181,13 @@ def r14_empty_cells(data: ReportData):
                     continue
                 scanned += 1
                 checks: list[tuple[int, str]] = []
-                if row_index == 0 and len(grid) > 1:
+                header_row = (
+                    row_index == 0
+                    and len(grid) > 1
+                    and len(row) >= 2
+                    and all(not cell.strip() or _norm_cell(cell) in _REQUIRED_LABELS for cell in row)
+                )
+                if header_row:
                     checks.extend(
                         (rj + 1, grid[rj][column_index])
                         for rj in range(1, len(grid))
@@ -230,12 +236,13 @@ def _numbered_items(data: ReportData):
     parens: list[tuple[int, int]] = []
     for index, raw in enumerate(data.paragraphs, start=1):
         text = raw.strip()
-        if not text or len(text) > 40:
+        if not text:
             continue
-        match = _SECTION_RE.match(text)
-        if match and _heading_ok(match.group(2)):
-            sections.append(([int(part) for part in match.group(1).split(".")], index))
-            continue
+        if len(text) <= 40:
+            match = _SECTION_RE.match(text)
+            if match and _heading_ok(match.group(2)):
+                sections.append(([int(part) for part in match.group(1).split(".")], index))
+                continue
         match = _SINGLE_RE.match(text)
         if match and _heading_ok(match.group(2)):
             singles.append((int(match.group(1)), index))
@@ -328,11 +335,49 @@ def r16_units(data: ReportData):
     )
 
 
+_TOC_LEADER = re.compile(r"(?:…{2,}|\.{4,}|·{4,})")
+_NOTE_PREFIXES = ("注：", "注:", "备注：", "备注:", "说明：", "说明:", "注 ")
+_COVER_LABELS = (
+    "报告编号", "地址", "电话", "传真", "邮编", "邮政编码", "委托单位", "样品名称",
+    "生产企业", "检验类别", "试验类型", "检验依据", "检验项目", "检验结论",
+    "签发日期", "批准", "审核", "主检", "商标", "规格型号",
+)
+
+
+def _toc_like(text: str) -> bool:
+    return bool(_TOC_LEADER.search(text))
+
+
+def _cover_like(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return False
+    if _toc_like(text):
+        return True
+    if re.search(r"\S\s{3,}\S", text) and ("：" in text or ":" in text):
+        return True
+    if len(compact) <= 30 and any(compact.startswith(label) for label in _COVER_LABELS):
+        return True
+    return False
+
+
+def _body_start(styles: list[dict]) -> int:
+    for item in styles:
+        text = item["text"]
+        if item["paragraph"] >= 10 and len(text) >= 40 and not _toc_like(text) and not _cover_like(text) and re.search(r"[。；，]", text):
+            return item["paragraph"]
+    return 0
+
+
 def r17_fonts(data: ReportData):
     title = "字体字号一致"
+    body_start = _body_start([item for item in data.paragraph_styles if item.get("font") and item.get("size")])
     styles = [
         item for item in data.paragraph_styles
         if item.get("font") and item.get("size") and len(item["text"]) >= 20 and not item.get("bold")
+        and not _toc_like(item["text"]) and not _cover_like(item["text"])
+        and not item["text"].lstrip().startswith(_NOTE_PREFIXES)
+        and not (body_start and item["paragraph"] < body_start)
         and not (_SECTION_RE.match(item["text"]) or _SINGLE_RE.match(item["text"]) or _PAREN_RE.match(item["text"]))
     ]
     if len(styles) < 5:

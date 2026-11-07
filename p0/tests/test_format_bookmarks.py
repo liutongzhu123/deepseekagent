@@ -4,6 +4,8 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from app.docx_parser import parse_docx
 from app.rules import audit_report
 
@@ -82,3 +84,31 @@ def test_no_bookmarks_skips(tmp_path):
 
     assert finding["status"] == "skip"
     assert "未识别到书签" in finding["message"]
+
+
+SAMPLE = Path("/opt/dsh-agent/samples/byd/ots-250717(1)__ots-250717__袋子-100L.docx")
+
+
+def test_bookmark_end_outside_paragraph_is_collected(tmp_path):
+    path = tmp_path / "outside.docx"
+    body = (
+        '<w:p><w:bookmarkStart w:id="1" w:name="OLE_LINK1"/><w:r><w:t>正文</w:t></w:r></w:p>'
+        '<w:bookmarkEnd w:id="1"/>'
+    )
+    _make_docx(path, body)
+
+    data = parse_docx(path)
+    finding = _r13(path)
+
+    assert data.bookmark_ends == ["1"]
+    assert finding["status"] == "pass"
+
+
+@pytest.mark.skipif(not SAMPLE.exists(), reason="real draft not mounted")
+def test_real_draft_bookmark_ends_outside_paragraphs():
+    data = parse_docx(SAMPLE)
+    finding = _r13(SAMPLE)
+
+    assert len(data.bookmarks) == 31
+    assert len(data.bookmark_ends) == 31
+    assert "未闭合" not in finding["message"]

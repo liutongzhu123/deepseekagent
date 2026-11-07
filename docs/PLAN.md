@@ -265,6 +265,12 @@
 - **验收标准**：配置默认关闭且可覆盖；缺文件/坏 YAML 回退默认；不改变现有审核结果。
 - **涉及**：`p0/config/xg_report_number.yaml`、`p0/app/xg_rules.py`、`p0/tests/test_xg_rules.py`
 
+### T510 · 真实草稿 R13/R17 误报修复
+- **状态**：`pr-open`  **依赖**：T508  **分支**：`agent/T510-format-fp-fixes`
+- **做什么**：R13 全文档收集 bookmarkEnd；R17 排除封面/目录/说明段；顺带修 R14 标签值表空行、R15 长行编号误报。
+- **验收标准**：真实 12 份草稿 R13/R17 12/12 pass；R14 仅报真实占位符；新增段落外 bookmarkEnd、封面/目录/注、长行编号回归测试。
+- **涉及**：`p0/app/docx_parser.py`、`p0/app/format_rules.py`、`p0/tests/test_format_bookmarks.py`、`p0/tests/test_format_fonts.py`、`p0/tests/test_format_empty_cells.py`、`p0/tests/test_format_numbering.py`
+
 ### T509 · format_checks 拆分（方案 2，下一批检查前）
 - **状态**：`todo`  **依赖**：T501–T508 合并  **分支**：待开
 - **做什么**：把 `p0/app/format_rules.py` 拆成 `p0/app/format_checks/<检查>.py` + 注册表；后续新增检查不再改同一个大文件，降低并行 PR 冲突。
@@ -370,6 +376,7 @@
 | T507 | `pr-open` | #114 | — | A7 注意事项必填项（R08 扩展） |
 | T508 | `pr-open` | #115 | — | A8 XG 编号规则（预留，仅配置） |
 | T509 | `todo` | — | — | 方案 2：format_checks 拆分（下一批检查前） |
+| T510 | `pr-open` | #117 | — | 真实草稿 R13/R17 误报修复 |
 
 **当前阻塞**：T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
 
