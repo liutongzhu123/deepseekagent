@@ -84,6 +84,9 @@ class ReportData:
     tables: list[list[list[Cell]]] = field(default_factory=list)
     # Rendered-page split (explicit/lastRendered page breaks); used by R12.
     pages: list[dict] = field(default_factory=list)
+    bookmarks: list[dict] = field(default_factory=list)
+    bookmark_ends: list[str] = field(default_factory=list)
+    bookmark_refs: list[dict] = field(default_factory=list)
 
 
 DATE_RE = re.compile(r"(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})日?")
@@ -173,6 +176,33 @@ def _iter_pages(root: ET.Element) -> list[dict]:
     while len(pages) > 1 and not pages[-1]["lines"] and not pages[-1]["images"]:
         pages.pop()
     return pages
+
+
+def _parse_bookmarks(root: ET.Element) -> tuple[list[dict], list[str], list[dict]]:
+    """Collect bookmark definitions, end ids and internal references with paragraph index."""
+    starts: list[dict] = []
+    ends: list[str] = []
+    refs: list[dict] = []
+    for index, paragraph in enumerate(root.iter(_q("p")), start=1):
+        snippet = _text(paragraph)[:60]
+        for start in paragraph.iter(_q("bookmarkStart")):
+            name = (start.attrib.get(_q("name")) or "").strip()
+            if name:
+                starts.append({"name": name, "id": start.attrib.get(_q("id")), "paragraph": index, "text": snippet})
+        for end in paragraph.iter(_q("bookmarkEnd")):
+            ends.append(end.attrib.get(_q("id")) or "")
+        for link in paragraph.iter(_q("hyperlink")):
+            anchor = (link.attrib.get(_q("anchor")) or "").strip()
+            if anchor:
+                refs.append({"name": anchor, "paragraph": index, "text": snippet, "kind": "hyperlink"})
+        for field in paragraph.iter(_q("fldSimple")):
+            instr = field.attrib.get(_q("instr")) or ""
+            for name in re.findall(r"\b(?:REF|PAGEREF)\s+([^\s\\]+)", instr):
+                refs.append({"name": name, "paragraph": index, "text": snippet, "kind": "field"})
+        instr_text = "".join(node.text or "" for node in paragraph.iter(_q("instrText")))
+        for name in re.findall(r"\b(?:REF|PAGEREF)\s+([^\s\\]+)", instr_text):
+            refs.append({"name": name, "paragraph": index, "text": snippet, "kind": "field"})
+    return starts, ends, refs
 
 
 def _count_markup(root: ET.Element) -> tuple[int, int]:
@@ -539,6 +569,7 @@ def parse_docx(path: str | Path) -> ReportData:
     toc_entries = _parse_toc(paragraphs)
     font_sizes, font_names = _style_summary(root)
     pages = _iter_pages(root)
+    bookmarks, bookmark_ends, bookmark_refs = _parse_bookmarks(root)
     external_images = xml_text.count("INCLUDEPICTURE")
 
     basis = summary.get("检验依据", "")
@@ -589,6 +620,9 @@ def parse_docx(path: str | Path) -> ReportData:
         paragraphs=paragraphs,
         tables=tables,
         pages=pages,
+        bookmarks=bookmarks,
+        bookmark_ends=bookmark_ends,
+        bookmark_refs=bookmark_refs,
     )
 
 

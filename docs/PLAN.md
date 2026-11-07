@@ -223,6 +223,12 @@
 - **验收标准**：合成 docx 覆盖空白页/页码断档/乱码/干净四类；无法分段时 `skip` 并注明；不改变 R01–R11 结论。
 - **涉及**：`p0/app/docx_parser.py`、`p0/app/format_rules.py`、`p0/app/rules.py`、`p0/tests/test_format_pages.py`
 
+### T502 · A2 书签完整性（R13）
+- **状态**：`pr-open`  **依赖**：T501  **分支**：`agent/T502-format-bookmarks`
+- **做什么**：解析书签开始/结束与目录超链接、REF/PAGEREF 域；检测未闭合、重名与指向失效。
+- **验收标准**：单测覆盖有效、失效引用、未闭合、重名、无书签五类；问题带书签名与段落位置。
+- **涉及**：`p0/app/docx_parser.py`、`p0/app/format_rules.py`、`p0/tests/test_format_bookmarks.py`
+
 ---
 
 ### P1 基础设施（T401 起，2026-11-06 新增）
@@ -314,6 +320,7 @@
 | T405 | `merged` | #94 | 绿 | 10/15 候选实测仍远高于 2 s，结论「不能接」；rerank 默认关 |
 | T406 | `merged` | #95 #97 #98 | 绿 | 三档选型：公网 API+CPU 够用（检索 P95 0.3 s、OCR 2.25 s/页）；本地 CPU 语义审核单次 P50 24.1 s（短文本），要交互速度或上 rerank 才需 GPU；rerank CPU P95 54.6 s（空闲；带负载 126.4 s）不可用，须 GPU 或缩池后重测；GPU/公网 API 待实测 |
 | T501 | `pr-open` | #106 | — | A1 空白页/窜页/乱码（R12） |
+| T502 | `pr-open` | #108 | — | A2 书签完整性（R13） |
 
 **当前阻塞**：T302（真实 12 草稿/4 记录未挂载，非客户数据；链路演练已完成）；T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
 
