@@ -318,6 +318,8 @@
 
 > D1–D5 的详细交付物、验收口径、3 类报告验收标准和样例/记录/清单模板见 `docs/stage3-acceptance/README.md`。
 
+> 客户方非技术人员可直接转发的**一页登记表**见 `docs/data-request-checklist.md`（T407）。
+
 ---
 
 ## 五（续）、阶段 3 试点验收准备
