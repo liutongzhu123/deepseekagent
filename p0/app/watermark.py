@@ -65,6 +65,52 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def mask_light_pink(image, *, min_ratio: float | None = None):
+    """Remove light-pink watermark pixels from one rendered page.
+
+    The customer sample uses a pale pink diagonal mark.  Only pixels with
+    ``R > 180`` and a red-green/red-blue gap are set to white, so black/grey
+    text is untouched.  Returns ``(masked_image, stats)``; ``masked_image`` is
+    ``None`` when the pink area is below ``P0_OCR_WATERMARK_MIN_RATIO`` (default
+    0.002), which keeps clean scans on the cheaper single-OCR path.
+    """
+    try:
+        import numpy as np
+    except ImportError as exc:  # pragma: no cover - optional OCR dependency
+        raise RuntimeError("未安装 numpy，无法做水印掩膜") from exc
+    rgb = np.asarray(image.convert("RGB")).astype(int)
+    pink = (
+        (rgb[..., 0] > 180)
+        & ((rgb[..., 0] - rgb[..., 1]) > 8)
+        & ((rgb[..., 0] - rgb[..., 2]) > 8)
+    )
+    ratio = float(pink.mean())
+    threshold = (
+        _env_float("P0_OCR_WATERMARK_MIN_RATIO", 0.002)
+        if min_ratio is None
+        else float(min_ratio)
+    )
+    stats = {
+        "masked_pixels": int(pink.sum()),
+        "ratio": round(ratio, 6),
+        "threshold": threshold,
+        "applied": ratio >= threshold,
+    }
+    if not stats["applied"]:
+        return None, stats
+    masked = np.asarray(image.convert("RGB")).copy()
+    masked[pink] = 255
+    from PIL import Image
+    return Image.fromarray(masked), stats
+
+
 def _normalise_block(block: str) -> str:
     return block.replace("\r\n", "\n").strip()
 

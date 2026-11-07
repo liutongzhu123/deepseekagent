@@ -129,3 +129,30 @@ def test_recipient_block_handles_crlf_and_fullwidth_colon(monkeypatch):
     cleaned, removed = watermark.clean_text(text)
     assert "TO：" not in cleaned and "技术要求" in cleaned
     assert removed == 4
+
+
+def test_mask_light_pink_removes_pink_but_keeps_dark_text(monkeypatch):
+    from PIL import Image
+
+    monkeypatch.delenv("P0_OCR_WATERMARK_MIN_RATIO", raising=False)
+    image = Image.new("RGB", (40, 40), "white")
+    for x in range(10, 20):
+        for y in range(10, 20):
+            image.putpixel((x, y), (252, 223, 226))
+    for x in range(5, 35):
+        for y in range(25, 30):
+            image.putpixel((x, y), (0, 0, 0))
+    masked, stats = watermark.mask_light_pink(image)
+    assert stats["applied"] is True
+    assert stats["masked_pixels"] == 100
+    assert masked.getpixel((15, 15)) == (255, 255, 255)
+    assert masked.getpixel((20, 27)) == (0, 0, 0)
+
+
+def test_mask_light_pink_skips_clean_page(monkeypatch):
+    from PIL import Image
+
+    monkeypatch.delenv("P0_OCR_WATERMARK_MIN_RATIO", raising=False)
+    masked, stats = watermark.mask_light_pink(Image.new("RGB", (40, 40), "white"))
+    assert masked is None
+    assert stats["applied"] is False
