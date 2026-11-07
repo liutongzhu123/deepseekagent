@@ -50,6 +50,7 @@ _REPORT_SEVERITY = {
     "R09": "medium",
     "R10": "high",
     "R11": "low",
+    "R12": "medium",
 }
 
 DEFAULT_REPORT_RULES = [
@@ -268,8 +269,10 @@ def _validate_report(section: dict[str, Any]) -> dict[str, Any]:
             "severity": severity,
         }
     missing = [rule_id for rule_id in known if rule_id not in seen]
-    if missing:
-        raise ConfigError(f"缺少审核规则：{', '.join(missing)}")
+    for rule_id in missing:
+        # Older saved configs predate newly added rules; keep their custom
+        # settings and append the new rule with its default metadata.
+        seen[rule_id] = copy.deepcopy(known[rule_id])
     return {
         "mean_tolerance": _number(
             section.get("mean_tolerance", 0.05), "均值容差", low=0, high=1

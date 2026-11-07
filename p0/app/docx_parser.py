@@ -82,6 +82,8 @@ class ReportData:
     font_names: list[str] = field(default_factory=list)
     paragraphs: list[str] = field(default_factory=list)
     tables: list[list[list[Cell]]] = field(default_factory=list)
+    # Rendered-page split (explicit/lastRendered page breaks); used by R12.
+    pages: list[dict] = field(default_factory=list)
 
 
 DATE_RE = re.compile(r"(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})日?")
@@ -135,6 +137,42 @@ def _iter_paragraphs(root: ET.Element) -> list[str]:
         if text:
             out.append(text)
     return out
+
+
+def _iter_pages(root: ET.Element) -> list[dict]:
+    """Approximate rendered pages from w:br/page and lastRenderedPageBreak."""
+    body = root.find(_q("body"))
+    if body is None:
+        return []
+    pages: list[dict] = [{"index": 1, "chars": 0, "images": 0, "lines": []}]
+
+    def walk(element: ET.Element) -> None:
+        if element.tag in {_q("p"), _q("tbl")}:
+            text = _text(element)
+            page = pages[-1]
+            if text:
+                page["lines"].append(text)
+                page["chars"] += len(re.sub(r"\s+", "", text))
+            page["images"] += len(list(element.iter(_q("drawing")))) + len(
+                list(element.iter(_q("pict")))
+            )
+            broken = any(
+                (br.attrib.get(_q("type")) or "").lower() == "page"
+                for br in element.iter(_q("br"))
+            ) or any(True for _ in element.iter(_q("lastRenderedPageBreak")))
+            if broken:
+                pages.append({"index": len(pages) + 1, "chars": 0, "images": 0, "lines": []})
+        elif element.tag == _q("sdt"):
+            content = element.find(_q("sdtContent"))
+            if content is not None:
+                for child in list(content):
+                    walk(child)
+
+    for child in list(body):
+        walk(child)
+    while len(pages) > 1 and not pages[-1]["lines"] and not pages[-1]["images"]:
+        pages.pop()
+    return pages
 
 
 def _count_markup(root: ET.Element) -> tuple[int, int]:
@@ -500,6 +538,7 @@ def parse_docx(path: str | Path) -> ReportData:
     highlights, red_runs = _count_markup(root)
     toc_entries = _parse_toc(paragraphs)
     font_sizes, font_names = _style_summary(root)
+    pages = _iter_pages(root)
     external_images = xml_text.count("INCLUDEPICTURE")
 
     basis = summary.get("检验依据", "")
@@ -549,6 +588,7 @@ def parse_docx(path: str | Path) -> ReportData:
         font_names=font_names,
         paragraphs=paragraphs,
         tables=tables,
+        pages=pages,
     )
 
 

@@ -13,6 +13,7 @@ from typing import Iterable
 
 from . import rule_dsl, semantic_audit
 from .docx_parser import ReportData, fields_for_consistency, parse_date
+from .format_rules import FORMAT_RULES, evaluate_format_rules
 
 
 @dataclass
@@ -56,7 +57,7 @@ RULES: list[tuple[str, str, str]] = [
     ("R09", "标记符号", "报告不得含黄色高亮/红色字体"),
     ("R10", "签名/印章完整", "签名姓名与印章图片应完整嵌入"),
     ("R11", "模板识别", "按检验依据/项目识别报告模板"),
-]
+] + list(FORMAT_RULES)
 
 
 DEFAULT_MEAN_TOLERANCE = 0.05
@@ -805,7 +806,13 @@ def audit_report(
         else:
             finding = globals()[function_name](data)
         finding = _apply_rule_meta(finding, meta.get(rule_id))
-        finding.location = _location_for(rule_id, data)
+        if not finding.location:
+            finding.location = _location_for(rule_id, data)
+        findings.append(finding)
+    for finding in evaluate_format_rules(data):
+        finding = _apply_rule_meta(finding, meta.get(finding.rule_id))
+        if not finding.location:
+            finding.location = _location_for(finding.rule_id, data)
         findings.append(finding)
     if inputs is not None:
         for finding in crosscheck_report(data, inputs):

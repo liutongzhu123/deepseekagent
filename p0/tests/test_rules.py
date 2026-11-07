@@ -1,5 +1,5 @@
 from app.docx_parser import ReportData
-from app.rules import RecordInput, audit_report, validate_records
+from app.rules import RULES, RecordInput, audit_report, validate_records
 
 
 def data(**kwargs) -> ReportData:
@@ -80,7 +80,7 @@ def test_record_validation():
 def test_all_findings_have_structured_location():
     result = audit_report(data())
 
-    assert len(result["findings"]) == 11
+    assert len(result["findings"]) == len(RULES)
     for finding in result["findings"]:
         location = finding["location"]
         assert location["page"] >= 1

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app import main, report_store
 from app.docx_parser import ReportData
 from app.report_inputs import load_inputs
-from app.rules import audit_report
+from app.rules import RULES, audit_report
 
 
 def _write(path: Path, text: str) -> None:
@@ -70,7 +70,7 @@ def test_crosscheck_passes_with_matching_inputs(tmp_path):
     assert statuses["X02"] == "pass"
     assert statuses["X03"] == "pass"
     assert statuses["X04"] == "skip"
-    assert result["summary"]["total"] == 15
+    assert result["summary"]["total"] == len(RULES) + 4
 
 
 def test_crosscheck_flags_task_order_mismatch(tmp_path):
@@ -104,10 +104,10 @@ def test_crosscheck_flags_record_date_outside_range(tmp_path):
     assert "检验日期" in finding["evidence"]
 
 
-def test_no_inputs_keeps_eleven_rules():
+def test_no_inputs_keeps_deterministic_rules():
     result = audit_report(_report())
 
-    assert result["summary"]["total"] == 11
+    assert result["summary"]["total"] == len(RULES)
     assert all(item["rule_id"].startswith("R") for item in result["findings"])
 
 
@@ -143,7 +143,7 @@ def test_audit_endpoint_includes_crosschecks(tmp_path, monkeypatch):
     assert statuses["X01"] == "pass"
     # Stage 2 appends its own findings; the R/X baseline stays 11 + 4.
     baseline = [item for item in payload["findings"] if item["rule_id"][:1] in {"R", "X"}]
-    assert len(baseline) == 15
+    assert len(baseline) == len(RULES) + 4
     assert payload["stage2"]["partial"]["count"] == 8
 
 
