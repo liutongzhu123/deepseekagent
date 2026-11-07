@@ -187,8 +187,16 @@ def _section_number(
     alias_list = tuple(aliases) if aliases else _SECTION_ALIASES.get(keyword, (keyword,))
     for alias in alias_list:
         for heading in headings:
-            if heading.num.count(".") == 0 and alias in heading.name:
-                return heading.num
+            if heading.num.count(".") != 0:
+                continue
+            if alias == "要求":
+                # A bare "要求" is its own section; substring matching would
+                # wrongly select "4 一般要求"/"4 通用要求".
+                if heading.name.strip() != alias:
+                    continue
+            elif alias not in heading.name:
+                continue
+            return heading.num
     return None
 
 
@@ -382,10 +390,15 @@ def _parse_single_section_items(
     candidates = [
         h for h in section if h.num != section_num and h.num.count(".") == 1
     ]
+    leaves = [
+        h for h in section if h.num != section_num and _is_leaf(h, section)
+    ]
     if not candidates:
-        candidates = [
-            h for h in section if h.num != section_num and _is_leaf(h, section)
-        ]
+        candidates = leaves
+    elif len(leaves) >= 10 and len(leaves) >= 3 * len(candidates):
+        # Level-1 headings are grouping containers (5.1 一般条件 / 5.2 功能检测
+        # / 5.3 环境试验); the real test clauses are the leaves.
+        candidates = leaves
     label = "技术要求" if kind == "requirement" else "试验方法"
     populated = "requirement" if kind == "requirement" else "method"
     missing = "method" if kind == "requirement" else "requirement"
@@ -436,6 +449,81 @@ def _parse_single_section_items(
                 "review_fields": review_fields,
                 "reviewed": False,
                 "references": _find_references(requirement, method),
+            }
+        )
+    return items
+
+
+_CHAPTER_TECH_NAMES = ("技术要求", "技术条件", "性能要求")
+_CHAPTER_METHOD_NAMES = ("试验方法", "检验方法", "测试方法")
+
+
+def _parse_chapter_items(
+    lines: list[_Line], headings: list[_Heading]
+) -> list[dict]:
+    """Extract one item per chapter that has x.1 技术要求 / x.2 试验方法."""
+    items: list[dict] = []
+    seen: set[str] = set()
+    for chapter in headings:
+        if chapter.num.count(".") != 0 or chapter.num in {"1", "2", "3"}:
+            continue
+        if chapter.num in seen:
+            # Table rows and figure legends repeat a chapter number.
+            continue
+        name = chapter.name.strip()
+        if not name or re.match(r"^[A-Za-z0-9ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]", name):
+            continue
+        if re.search(r"\d", re.sub(r"[（(][^）)]*[）)]", "", name)):
+            # A bare numeric token outside the item code means a data row or
+            # a figure legend, not a chapter heading.
+            continue
+        seen.add(chapter.num)
+        children = [
+            heading
+            for heading in headings
+            if heading.num.count(".") == 1
+            and heading.num.split(".")[0] == chapter.num
+        ]
+        tech = next(
+            (
+                heading
+                for heading in children
+                if any(name in heading.name for name in _CHAPTER_TECH_NAMES)
+            ),
+            None,
+        )
+        method = next(
+            (
+                heading
+                for heading in children
+                if any(name in heading.name for name in _CHAPTER_METHOD_NAMES)
+            ),
+            None,
+        )
+        if tech is None or method is None or tech is method:
+            continue
+        requirement = _section_text(lines, headings, tech)
+        method_text = _section_text(lines, headings, method)
+        if not requirement and not method_text:
+            continue
+        name = _chinese_name(chapter.text).strip() or chapter.num
+        items.append(
+            {
+                "seq": len(items) + 1,
+                "name": name,
+                "name_auto": name,
+                "group": "",
+                "clause": tech.num,
+                "requirement": requirement,
+                "method_clause": method.num,
+                "method": method_text,
+                "page": tech.page,
+                "method_page": method.page,
+                "confidence": 0.75,
+                "review_required": True,
+                "review_fields": [],
+                "reviewed": False,
+                "references": _find_references(requirement, method_text),
             }
         )
     return items
@@ -644,6 +732,11 @@ def _parse_table_items(
                 )
                 if "试验项目" not in header or "试验方法" not in header:
                     continue
+                if "出厂检验" in header or "型式检验" in header:
+                    # An inspection schedule (试验项目/技术要求/试验方法/
+                    # 出厂检验/型式检验) has a different column layout from the
+                    # merged-cell performance tables this fallback targets.
+                    continue
                 for row in table[2:] if len(table) > 2 else table[1:]:
                     if not row:
                         continue
@@ -724,20 +817,26 @@ def _parse_table_items(
     return items
 
 
-_SCAN_CLAUSE_RE = re.compile(r"^(5(?:\.\d+){1,4})\s*(.*)$")
-_SCAN_TOC_RE = re.compile(r"^(5(?:\.\d+){2})(?:\s*(.*))?$")
+_COMBINED_SECTION_TITLES = (
+    "试验方法和性能要求",
+    "试验方法和技术要求",
+    "技术要求和试验方法",
+    "试验方法和要求",
+)
 _FIELD_LABELS = (
     "试验目的",
     "试验方法",
     "试验步骤",
     "试验条件",
+    "试验参数",
     "试验要求",
     "试验设备",
     "试验程序",
     "判定要求",
+    "技术要求",
 )
 _METHOD_LABELS = ("试验方法", "试验步骤", "试验程序")
-_REQUIREMENT_LABELS = ("试验要求", "判定要求")
+_REQUIREMENT_LABELS = ("试验要求", "判定要求", "技术要求")
 
 
 def _field_label(text: str) -> str:
@@ -746,6 +845,25 @@ def _field_label(text: str) -> str:
         if compact == label or compact.startswith(label):
             return label
     return ""
+
+
+def _combined_section_start(lines: list[_Line]) -> tuple[int, str] | None:
+    """Locate the body heading of a combined method/requirements chapter."""
+    found: tuple[int, str] | None = None
+    for index, line in enumerate(lines):
+        text = line.text.strip()
+        if "...." in text or "……" in text:
+            continue
+        for title in _COMBINED_SECTION_TITLES:
+            position = text.find(title)
+            if position < 0:
+                continue
+            number = text[:position].strip()
+            if not re.fullmatch(r"\d{1,2}", number):
+                continue
+            found = (index, number)
+            break
+    return found
 
 
 def _merge_split_ocr_headings(lines: list[_Line]) -> list[_Line]:
@@ -810,13 +928,16 @@ def _join_ocr_lines(values: list[str], limit: int = 1200) -> tuple[str, bool]:
     return text, truncated
 
 
-def _parse_toc_names(lines: list[_Line]) -> dict[str, str]:
+def _parse_toc_names(lines: list[_Line], section_num: str = "5") -> dict[str, str]:
     """Read item numbers from the table of contents (OCR pages 1-5)."""
     toc: dict[str, str] = {}
+    pattern = re.compile(
+        rf"^({re.escape(section_num)}(?:\.\d+){{2}})(?:\s*(.*))?$"
+    )
     for index, line in enumerate(lines):
         if line.page > 5:
             continue
-        match = _SCAN_TOC_RE.match(line.text.strip())
+        match = pattern.match(line.text.strip())
         if not match:
             continue
         number, rest = match.group(1), (match.group(2) or "").strip()
@@ -849,77 +970,89 @@ def _parse_combined_items(
     page_confidence: list[float] | None,
     ocr_meta: dict | None,
 ) -> list[dict]:
-    """Parse a scanned standard whose chapter 5 is a combined
-    "试验方法和性能要求" section (combined-section layout).
-
-    Item headings are depth-3 clauses (5.x.y); depth-4 clauses are the
-    试验目的/试验方法/试验要求 subsections.  OCR sometimes splits a bare
-    number and its name onto separate lines; ``_merge_split_ocr_headings``
-    has already joined those.
-    """
-    starts = [
-        index
-        for index, line in enumerate(lines)
-        if re.match(r"^5\s*试验方法和性能要求", line.text.strip())
-        or "试验方法和性能要求" in line.text
-    ]
-    if not starts:
+    """Parse 5 试验方法和性能要求 / 5 试验方法和技术要求 combined chapters."""
+    start = _combined_section_start(lines)
+    if start is None:
         return []
-    # The table of contents mentions the section first; the body heading is
-    # the last occurrence before the item clauses.
-    start_index = starts[-1]
+    start_index, section_num = start
+    clause_pattern = re.compile(
+        rf"^({re.escape(section_num)}(?:\.\d+){{1,4}})\s*(.*)$"
+    )
 
-    toc = _parse_toc_names(lines)
+    toc = _parse_toc_names(lines, section_num)
     items: list[dict] = []
     current: dict | None = None
     parent = ""
+    parent_heading: _Heading | None = None
     label = "body"
+
+    def create_item(number: str, name: str, source: str, page: int) -> dict:
+        item = {
+            "num": number,
+            "name": name,
+            "name_source": source,
+            "page": page,
+            "parent": parent,
+            "sections": {},
+            "method_clause": "",
+            "method_page": None,
+        }
+        items.append(item)
+        return item
+
     for line in lines[start_index + 1 :]:
         text = line.text.strip()
         if not text:
             continue
         if re.match(r"^附\s*录", text):
             break
-        match = _SCAN_CLAUSE_RE.match(text)
+        match = clause_pattern.match(text)
         if match:
             number, rest = match.group(1), match.group(2).strip()
             depth = len(number.split("."))
             field = _field_label(rest)
             if depth <= 2:
-                parent = rest
+                if not rest:  # bare number in a table, not a heading
+                    continue
+                parent = _chinese_name(rest).strip() or rest
+                parent_heading = _Heading(
+                    num=number, text=rest, page=line.page, line_idx=line.idx
+                )
                 label = "body"
                 current = None
                 continue
             if field:
+                if current is None and depth == 3 and parent_heading is not None:
+                    # 5.4/5.5/5.7 place 试验目的… directly under the group;
+                    # the group heading itself is the item.
+                    current = create_item(
+                        parent_heading.num,
+                        _chinese_name(parent_heading.text).strip()
+                        or parent_heading.num,
+                        "heading",
+                        parent_heading.page,
+                    )
                 label = field
                 if current is not None:
-                    if depth >= 4 and field in _METHOD_LABELS and not current["method_clause"]:
+                    if field in _METHOD_LABELS and not current["method_clause"]:
                         current["method_clause"] = number
                         current["method_page"] = line.page
                 continue
             if depth == 3:
-                if number not in toc:
+                if not rest and number not in toc:  # table row, not heading
+                    continue
+                if toc and number not in toc:
                     # A depth-3 clause outside the TOC is usually a table row
                     # or a mis-numbered subheading; keep it as body text.
                     if current is not None:
                         current["sections"].setdefault(label, []).append(text)
                     continue
                 name = rest or toc.get(number, "")
-                name_source = "heading" if rest else "toc"
+                source = "heading" if rest else "toc"
                 if not name:
                     name = number
-                    name_source = "fallback"
-                current = {
-                    "num": number,
-                    "name": name,
-                    "name_source": name_source,
-                    "page": line.page,
-                    "parent": parent,
-                    "sections": {},
-                    "method_clause": "",
-                    "method_page": None,
-                }
-                items.append(current)
+                    source = "fallback"
+                current = create_item(number, name, source, line.page)
                 label = "body"
                 continue
             if depth >= 4:
@@ -1151,8 +1284,8 @@ def parse_standard(
         items = combined_items
         source = "combined-sections"
         warnings.append(
-            "扫描件使用「试验方法和性能要求」合并章节抽取：项目=5.x.y，"
-            "试验方法/试验要求=5.x.y.z，置信度低或缺失的字段已标出"
+            "使用「试验方法和性能要求/技术要求」合并章节抽取：项目=5.x.y，"
+            "试验方法/技术要求=5.x.y.z，缺失的字段已标出"
         )
 
     tech_sec = _section_number(headings, "技术要求", section_aliases.get("技术要求"))
@@ -1160,10 +1293,21 @@ def parse_standard(
     if tech_sec is not None and tech_sec == method_sec:
         # A single combined "技术要求和试验方法" section cannot be split into
         # two clause streams; treat it as a method section for human review.
-        warnings.append(
-            "「技术要求」与「试验方法」指向同一章节，已按试验方法章节抽取待复核项目"
-        )
+        if not items:
+            warnings.append(
+                "「技术要求」与「试验方法」指向同一章节，已按试验方法章节抽取待复核项目"
+            )
         tech_sec = None
+
+    if not items and tech_sec is None and method_sec is None:
+        chapter_items = _parse_chapter_items(lines, headings)
+        if chapter_items:
+            items = chapter_items
+            source = "chapter-items"
+            warnings.append(
+                "未识别到统一的「技术要求/试验方法」章节，已按各检测章的"
+                "「技术要求/试验方法」子条款抽取项目，需人工复核名称与限值"
+            )
 
     if not items:
         if tech_sec is not None and method_sec is not None:
@@ -1273,7 +1417,11 @@ def parse_standard(
     # PP/PE material standards keep the item list in merged-cell
     # performance tables rather than in headings.  Prefer the table result
     # whenever it recovers more items than the heading heuristic.
-    if pdf_bytes and method_sec is not None and source not in {"item-table", "combined-sections"}:
+    if pdf_bytes and method_sec is not None and source not in {
+        "item-table",
+        "combined-sections",
+        "chapter-items",
+    }:
         table_items = _parse_table_items(pdf_bytes, lines, headings, method_sec)
         if len(table_items) > len(items):
             items = table_items
