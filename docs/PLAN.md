@@ -265,6 +265,12 @@
 - **验收标准**：配置默认关闭且可覆盖；缺文件/坏 YAML 回退默认；不改变现有审核结果。
 - **涉及**：`p0/config/xg_report_number.yaml`、`p0/app/xg_rules.py`、`p0/tests/test_xg_rules.py`
 
+### T509 · format_checks 拆分（方案 2，下一批检查前）
+- **状态**：`todo`  **依赖**：T501–T508 合并  **分支**：待开
+- **做什么**：把 `p0/app/format_rules.py` 拆成 `p0/app/format_checks/<检查>.py` + 注册表；后续新增检查不再改同一个大文件，降低并行 PR 冲突。
+- **验收标准**：拆分前后 R12–R17 finding 逐条一致；`pytest p0/tests -q` 全绿；单检查文件 ≤150 行。
+- **涉及**：`p0/app/format_checks/`、`p0/app/format_rules.py`、`p0/app/rules.py`
+
 ---
 
 ### P1 基础设施（T401 起，2026-11-06 新增）
@@ -363,6 +369,7 @@
 | T506 | `pr-open` | #113 | — | A6 字体字号一致（R17） |
 | T507 | `pr-open` | #114 | — | A7 注意事项必填项（R08 扩展） |
 | T508 | `pr-open` | #115 | — | A8 XG 编号规则（预留，仅配置） |
+| T509 | `todo` | — | — | 方案 2：format_checks 拆分（下一批检查前） |
 
 **当前阻塞**：T302（真实 12 草稿/4 记录未挂载，非客户数据；链路演练已完成）；T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
 

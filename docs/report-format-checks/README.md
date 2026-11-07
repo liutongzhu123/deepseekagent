@@ -178,3 +178,10 @@
 | ![before](before-report.png) | ![after](after-report.png) |
 
 ![R14 finding](after-r14.png)
+
+
+## 后续结构优化（T509）
+
+当前阶段 A 的 6 条检查集中在 `p0/app/format_rules.py`；按负责人 2026-11-07 指示，先按方案 1
+逐个 PR 合并出货，**下一批检查开始前**按方案 2 拆成 `p0/app/format_checks/<检查>.py` + 注册表，
+避免后续 PR 修改同一文件产生冲突。已记入 `docs/PLAN.md` T509（待办）。
