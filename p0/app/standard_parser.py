@@ -24,6 +24,8 @@ from difflib import SequenceMatcher
 from io import BytesIO
 from typing import Iterable
 
+from .standard_extract.conditions import apply_conditions
+
 SCHEMA_VERSION = "standard-v0.1"
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -1308,6 +1310,8 @@ def parse_standard(
                 "判定要求需人工补充"
             )
 
+    conditions_summary = apply_conditions(items)
+
     if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
 
@@ -1351,6 +1355,7 @@ def parse_standard(
         "review_required_items": review_required,
         "review_fields": sum(len(item.get("review_fields", [])) for item in items),
         "parse_ms": elapsed_ms,
+        **conditions_summary,
     }
     if ocr:
         summary["ocr_pages"] = ocr.get("pages", len(pages))
