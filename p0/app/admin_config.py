@@ -55,6 +55,7 @@ _REPORT_SEVERITY = {
     "R14": "medium",
     "R15": "medium",
     "R16": "medium",
+    "R17": "medium",
 }
 
 DEFAULT_REPORT_RULES = [

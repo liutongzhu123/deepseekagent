@@ -87,6 +87,7 @@ class ReportData:
     bookmarks: list[dict] = field(default_factory=list)
     bookmark_ends: list[str] = field(default_factory=list)
     bookmark_refs: list[dict] = field(default_factory=list)
+    paragraph_styles: list[dict] = field(default_factory=list)
 
 
 DATE_RE = re.compile(r"(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})日?")
@@ -369,6 +370,49 @@ def _style_summary(root: ET.Element) -> tuple[list[float], list[str]]:
     return sorted(sizes), sorted(names)
 
 
+def _paragraph_styles(root: ET.Element) -> list[dict]:
+    """Dominant explicit font/size per paragraph; used by R17."""
+    styles: list[dict] = []
+    for index, paragraph in enumerate(root.iter(_q("p")), start=1):
+        text = _text(paragraph)
+        if not text:
+            continue
+        fonts: dict[str, int] = {}
+        sizes: dict[float, int] = {}
+        bold = False
+        for run in paragraph.iter(_q("r")):
+            rpr = run.find(_q("rPr"))
+            if rpr is None:
+                continue
+            fonts_element = rpr.find(_q("rFonts"))
+            if fonts_element is not None:
+                for key in ("eastAsia", "ascii", "hAnsi"):
+                    value = fonts_element.attrib.get(_q(key))
+                    if value:
+                        fonts[value] = fonts.get(value, 0) + 1
+                        break
+            size = rpr.find(_q("sz"))
+            if size is not None:
+                try:
+                    points = int(size.attrib.get(_q("val"), "0")) / 2
+                except ValueError:
+                    points = 0
+                if points:
+                    sizes[points] = sizes.get(points, 0) + 1
+            if rpr.find(_q("b")) is not None:
+                bold = True
+        styles.append(
+            {
+                "paragraph": index,
+                "text": text[:80],
+                "font": max(fonts, key=fonts.get) if fonts else "",
+                "size": max(sizes, key=sizes.get) if sizes else None,
+                "bold": bold,
+            }
+        )
+    return styles
+
+
 def _part_texts(zf: zipfile.ZipFile, prefix: str) -> list[str]:
     """Read header/footer parts in numeric order (header1, header2, ...)."""
     names = [name for name in zf.namelist() if name.startswith(prefix) and name.endswith(".xml")]
@@ -568,6 +612,7 @@ def parse_docx(path: str | Path) -> ReportData:
     highlights, red_runs = _count_markup(root)
     toc_entries = _parse_toc(paragraphs)
     font_sizes, font_names = _style_summary(root)
+    paragraph_styles = _paragraph_styles(root)
     pages = _iter_pages(root)
     bookmarks, bookmark_ends, bookmark_refs = _parse_bookmarks(root)
     external_images = xml_text.count("INCLUDEPICTURE")
@@ -623,6 +668,7 @@ def parse_docx(path: str | Path) -> ReportData:
         bookmarks=bookmarks,
         bookmark_ends=bookmark_ends,
         bookmark_refs=bookmark_refs,
+        paragraph_styles=paragraph_styles,
     )
 
 

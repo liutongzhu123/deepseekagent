@@ -15,6 +15,7 @@ FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
     ("R14", "空缺项未填写", "表格必填项空值或占位符（___/XX）视为漏填；明确杠掉（/、—、不适用）视为合理留空"),
     ("R15", "章节/项目编号", "章节号（1、2；5.1、5.2）与项目编号序列检测断档与重复"),
     ("R16", "计量单位规范", "数值后的单位按白名单与大小写规则校验（MPa/kPa/℃/N·m 等）"),
+    ("R17", "字体字号一致", "段落级字体/字号统计，找出偏离正文主体的段落并报出字体、字号与段落位置"),
 )
 
 _PAGE_TEXT_MIN = 2
@@ -327,9 +328,48 @@ def r16_units(data: ReportData):
     )
 
 
+def r17_fonts(data: ReportData):
+    title = "字体字号一致"
+    styles = [
+        item for item in data.paragraph_styles
+        if item.get("font") and item.get("size") and len(item["text"]) >= 20 and not item.get("bold")
+        and not (_SECTION_RE.match(item["text"]) or _SINGLE_RE.match(item["text"]) or _PAREN_RE.match(item["text"]))
+    ]
+    if len(styles) < 5:
+        return _finding("R17", title, "skip", "info", f"正文样式样本不足（{len(styles)} 段），无法判定主体字体/字号")
+    font_counts: dict[str, int] = {}
+    size_counts: dict[float, int] = {}
+    for item in styles:
+        font_counts[item["font"]] = font_counts.get(item["font"], 0) + 1
+        size_counts[item["size"]] = size_counts.get(item["size"], 0) + 1
+    font_mode = max(font_counts, key=font_counts.get)
+    size_mode = max(size_counts, key=size_counts.get)
+    deviations = [
+        item for item in styles
+        if item["font"] != font_mode or abs(item["size"] - size_mode) > 0.5
+    ]
+    if deviations:
+        detail = "；".join(
+            f"段落{item['paragraph']}「{item['text'][:12]}」{item['font']} {item['size']:g}pt"
+            for item in deviations[:5]
+        )
+        return _finding(
+            "R17", title, "warn", "medium",
+            f"{len(deviations)} 段偏离正文主体（{font_mode} {size_mode:g}pt）：{detail}",
+            f"正文样本={len(styles)}; 主体={font_mode} {size_mode:g}pt; 偏离={len(deviations)}",
+            "统一正文段落字体/字号；标题、表格、强调文字如刻意不同需人工确认",
+            section="字体/字号", cell=f"段落 {deviations[0]['paragraph']}",
+        )
+    return _finding(
+        "R17", title, "pass", "info",
+        f"正文 {len(styles)} 段字体/字号一致（{font_mode} {size_mode:g}pt）",
+        section="字体/字号", cell="正文",
+    )
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts}
