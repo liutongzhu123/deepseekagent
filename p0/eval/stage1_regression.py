@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
 
 from app.docx_parser import parse_docx  # noqa: E402
 from app.rules import RecordInput, audit_report, validate_records  # noqa: E402
+from eval import report_files  # noqa: E402
 
 DRAFT_FAIL_RULES = ("R01", "R02", "R03", "R04", "R09", "R10")
 MUTANT_RULES = ("mean", "judgment", "date", "duplicate")
@@ -116,7 +117,7 @@ def run_record_regression(records: list[RecordInput]) -> dict:
 
 
 def run_draft_regression(samples_dir: str | Path) -> dict:
-    files = sorted(Path(samples_dir).glob("*.docx"))
+    files = report_files(samples_dir)
     if len(files) != 12:
         return {"files": len(files), "ok": False, "reason": "expected 12 BYD drafts", "per_file": []}
     per_file: list[dict] = []

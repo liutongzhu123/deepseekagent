@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.rules import RecordInput
+from eval import report_files
 from eval.stage1_metrics import KEY_RULES, compute_metrics, render_markdown
 from eval.stage1_regression import load_records
 
@@ -19,7 +20,7 @@ def _records() -> list[RecordInput]:
     ]
 
 
-@pytest.mark.skipif(len(list(SAMPLES.glob("*.docx"))) != 12, reason="12 BYD drafts not mounted")
+@pytest.mark.skipif(len(report_files(SAMPLES)) != 12, reason="12 BYD drafts not mounted")
 def test_metrics_key_rules_have_full_recall():
     metrics = compute_metrics(SAMPLES, _records())
 

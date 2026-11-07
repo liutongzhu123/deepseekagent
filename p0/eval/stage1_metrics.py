@@ -15,6 +15,7 @@ from typing import Iterable
 
 from app.docx_parser import parse_docx
 from app.rules import RULES, RecordInput, audit_report, validate_records
+from eval import report_files
 from eval.stage1_regression import DRAFT_FAIL_RULES, load_records
 
 DRAFT_RULES = tuple(rule for rule, _, _ in RULES)
@@ -24,7 +25,7 @@ KEY_RULES = {"R01": "编号", "R04": "日期", "R06": "结论", "REC-03": "判�
 
 def _draft_cases(samples_dir: str | Path) -> list[tuple[str, set[str], set[str]]]:
     cases = []
-    for index, path in enumerate(sorted(Path(samples_dir).glob("*.docx")), start=1):
+    for index, path in enumerate(report_files(samples_dir), start=1):
         result = audit_report(parse_docx(path))
         predicted = {item["rule_id"] for item in result["findings"] if item["status"] == "fail"}
         cases.append((f"draft-{index:02d}", set(DRAFT_FAIL_RULES), predicted))
@@ -34,7 +35,7 @@ def _draft_cases(samples_dir: str | Path) -> list[tuple[str, set[str], set[str]]
 def _draft_r06_cases(samples_dir: str | Path) -> list[tuple[str, set[str], set[str]]]:
     """Synthetic conclusion mutants: 12 drafts all judge 不符合, flip to 符合."""
     cases = []
-    for index, path in enumerate(sorted(Path(samples_dir).glob("*.docx")), start=1):
+    for index, path in enumerate(report_files(samples_dir), start=1):
         data = parse_docx(path)
         mutated = dataclasses.replace(data, judgment="符合", conclusion="经检验，该样品符合要求")
         predicted = {item["rule_id"] for item in audit_report(mutated)["findings"] if item["status"] == "fail"}
