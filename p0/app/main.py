@@ -36,6 +36,7 @@ from . import quote as quote_service
 from . import report_batch
 from . import crm, monitoring, quote_store, store, task_worker
 from . import feedback_store, oidc, report_store, report_writer, report_inputs, partial_rules, rule_dsl, semantic_audit, standard_parse, standard_qa, standard_store, weknora
+from . import visual_checks
 from . import xlsx_writer
 from .store import tasks
 from .docx_parser import parse_docx
@@ -925,6 +926,24 @@ async def audit_report_file(
         fail=summary.get("fail", 0), pass_count=summary.get("pass", 0),
     )
     return result
+
+
+@app.post("/api/v1/reports/visual-check")
+async def report_visual_check(request: Request, file: UploadFile = File(...)) -> dict:
+    """Photo-dependent checks (duplicate photos / equipment label state).
+
+    Off by default: set P0_VISUAL_CHECKS=1. Equipment-label detection additionally
+    needs P0_VISUAL_LABEL_ENDPOINT and customer sample photos; until then it reports
+    skipped:model_not_configured instead of pretending to pass.
+    """
+    _require_permission(request, "report:audit")
+    if not file.filename or not file.filename.lower().endswith(".docx"):
+        raise HTTPException(status_code=400, detail="only .docx reports are supported in this slice")
+    data = await file.read()
+    try:
+        return visual_checks.check_docx(data)
+    except Exception as exc:  # noqa: BLE001 - API boundary
+        raise HTTPException(status_code=422, detail=f"visual check failed: {exc}") from exc
 
 
 @app.post("/api/v1/reports/audit.md")
