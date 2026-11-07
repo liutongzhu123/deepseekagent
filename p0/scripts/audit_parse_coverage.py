@@ -35,31 +35,49 @@ def _shingles(text: str, n: int = GRAM) -> set[str]:
     return {compact[i:i + n] for i in range(max(0, len(compact) - n + 1))}
 
 
-def _table_stats(pdf_bytes: bytes, item_text: str) -> dict:
+def _table_stats(pdf_bytes: bytes, item_text: str, entries: list[dict]) -> dict:
     try:
         import pdfplumber
     except ImportError:  # pragma: no cover - optional dependency
         return {"tables": 0, "table_chars": 0, "table_coverage": 0.0,
                 "large_tables": 0, "large_table_chars": 0,
-                "large_table_coverage": 0.0, "large_tables_parsed": 0}
+                "large_table_coverage": 0.0, "large_tables_parsed": 0,
+                "large_tables_structured": 0, "large_tables_with_header": 0,
+                "large_tables_with_merges": 0}
     from io import BytesIO
 
     item_grams = _shingles(item_text)
     total = {"tables": 0, "table_chars": 0, "grams": 0, "covered": 0}
-    large = {"tables": 0, "table_chars": 0, "grams": 0, "covered": 0, "parsed": 0}
+    large = {"tables": 0, "table_chars": 0, "grams": 0, "covered": 0,
+             "parsed": 0, "structured": 0, "with_header": 0, "with_merges": 0}
+
+    def structured(page_no: int, bbox: list[float]) -> dict | None:
+        for entry in entries or []:
+            raw = entry.get("raw_bbox") or []
+            if entry.get("page") == page_no and len(raw) == 4 and all(
+                abs(float(a) - float(b)) < 2 for a, b in zip(raw, bbox)
+            ):
+                return entry
+        return None
+
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-        for page in pdf.pages:
+        for page_no, page in enumerate(pdf.pages, start=1):
             try:
-                page_tables = page.extract_tables()
+                page_tables = page.find_tables()
             except Exception:  # noqa: BLE001 - a broken table must not stop the audit
                 continue
-            for cells in page_tables:
+            for table in page_tables:
+                try:
+                    cells = table.extract()
+                except Exception:  # noqa: BLE001 - skip the broken table only
+                    continue
                 if not cells:
                     continue
                 cell_text = "".join(c or "" for row in cells for c in row)
                 table_grams = _shingles(cell_text)
                 hit = len(table_grams & item_grams)
                 is_large = len(cell_text) >= LARGE_TABLE_CHARS
+                entry = structured(page_no, list(table.bbox))
                 buckets = (total, large) if is_large else (total,)
                 for bucket in buckets:
                     bucket["tables"] += 1
@@ -68,6 +86,11 @@ def _table_stats(pdf_bytes: bytes, item_text: str) -> dict:
                     bucket["covered"] += hit
                 if is_large:
                     large["parsed"] += int(bool(table_grams) and hit / len(table_grams) >= 0.5)
+                    large["structured"] += int(entry is not None)
+                    large["with_header"] += int(
+                        bool(entry) and bool(entry.get("header_detected"))
+                    )
+                    large["with_merges"] += int(bool(entry) and bool(entry.get("has_merges")))
     return {
         "tables": total["tables"],
         "table_chars": total["table_chars"],
@@ -76,6 +99,9 @@ def _table_stats(pdf_bytes: bytes, item_text: str) -> dict:
         "large_table_chars": large["table_chars"],
         "large_table_coverage": round(100 * large["covered"] / large["grams"], 1) if large["grams"] else 0.0,
         "large_tables_parsed": large["parsed"],
+        "large_tables_structured": large["structured"],
+        "large_tables_with_header": large["with_header"],
+        "large_tables_with_merges": large["with_merges"],
     }
 
 
@@ -109,6 +135,16 @@ def audit_pdf(path: Path) -> dict:
         (item.get("requirement") or "") + (item.get("method") or "") for item in items
     )
     item_grams = _shingles(item_text)
+    table_entries = parsed.get("tables") or []
+    table_text = "".join(
+        cell
+        for entry in table_entries
+        for cell in list(entry.get("header") or [])
+        + [c for row in entry.get("rows") or [] for c in row]
+        if cell
+    )
+    page_grams = _shingles("".join(pages))
+    table_entry_chars = len(table_text)
     page_coverage = [
         100 * len(grams & item_grams) / len(grams) if (grams := _shingles(text)) else 0.0
         for text in pages
@@ -117,7 +153,19 @@ def audit_pdf(path: Path) -> dict:
     sparse = [i for i, cov in enumerate(page_coverage) if cov < 10 and pages[i].strip()]
     raw_chars = sum(len(text) for text in raw_pages)
     appendix = _appendix_start(pages)
-    table = _table_stats(data, item_text)
+    table = _table_stats(data, item_text, table_entries)
+    coverage_grams = (
+        round(100 * len(page_grams & item_grams) / len(page_grams), 1)
+        if page_grams else 0.0
+    )
+    coverage_with_tables_grams = (
+        round(100 * len(page_grams & (item_grams | _shingles(table_text))) / len(page_grams), 1)
+        if page_grams else 0.0
+    )
+    coverage_with_tables = (
+        round(100 * (len(item_text) + table_entry_chars) / raw_chars, 1)
+        if raw_chars else 0.0
+    )
     return {
         "file": path.name,
         "pages": len(pages),
@@ -135,7 +183,12 @@ def audit_pdf(path: Path) -> dict:
         },
         "items": len(items),
         "item_chars": len(item_text),
+        "table_entry_chars": table_entry_chars,
+        "table_entries": len(table_entries),
         "coverage": round(100 * len(item_text) / raw_chars, 1) if raw_chars else 0.0,
+        "coverage_grams": coverage_grams,
+        "coverage_with_tables": coverage_with_tables,
+        "coverage_with_tables_grams": coverage_with_tables_grams,
         "mapping_source": parsed["mapping_source"],
         "table": table,
         "sparse_pages": len(sparse),
@@ -170,8 +223,11 @@ def main() -> int:
             f"{result['file'][:28]:28} pages={result['pages']:>3} "
             f"text={result['text_pages']:>3} chars={result['raw_chars']:>6} "
             f"items={result['items']:>3} item_chars={result['item_chars']:>6} "
-            f"cov={result['coverage']:>5}% tables={table['tables']:>3} "
-            f"large={table['large_tables']:>3}/{table['large_table_coverage']:>5}%"
+            f"cov={result['coverage']:>5}% cov+tables={result['coverage_with_tables']:>5}% "
+            f"tables={table['tables']:>3} large={table['large_tables']:>3} "
+            f"structured={table['large_tables_structured']:>2} "
+            f"header={table['large_tables_with_header']:>2} "
+            f"table_cov={table['large_table_coverage']:>5}%"
         )
     return 0
 
