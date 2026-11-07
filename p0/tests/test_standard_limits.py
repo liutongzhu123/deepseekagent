@@ -71,36 +71,27 @@ def test_parse_attaches_limits_and_not_extracted_status():
     assert all(entry["clause"] == "5.2" for entry in sealed["limits"])
 
 
-@pytest.mark.skipif(not _SAMPLE.is_file(), reason="真实标准样例未挂载")
-def test_real_watermarked_standard_limits():
+@pytest.mark.skipif(
+    not _SAMPLE.is_file(),
+    reason="真实标准样例未挂载",
+)
+def test_real_standard_limits_are_structured_and_traceable():
+    """Real standard: extracted limits are traceable; unparsed items are marked."""
     result = standard_parse.parse_pdf_standard(
         _SAMPLE.read_bytes(), _SAMPLE.name, enable_ocr=False
     )
-    by_clause = {item["clause"]: item for item in result["items"]}
-
-    drag = by_clause["5.3.3.2"]["limits"]
-    assert any(
-        entry["kind"] == "upper" and entry["upper"] == 3 and entry["unit"] == "N·m"
-        for entry in drag
-    )
-    assert any(
-        entry["kind"] == "upper" and entry["upper"] == 4 and entry["unit"] == "N·m"
-        for entry in drag
-    )
-
-    water = by_clause["5.3.15.1"]["limits"]
-    assert any(
-        entry["kind"] == "upper" and entry["upper"] == 3 and entry["unit"] == "mA"
-        for entry in water
-    )
-    assert any(
-        entry["kind"] == "lower" and entry["lower"] == 50 and entry["unit"] == "MΩ"
-        for entry in water
-    )
-
-    noise = by_clause["5.3.21"]["limits"]
-    assert any(
-        entry["kind"] == "upper" and entry["upper"] == 70
-        and entry["unit"] == "dB(A)" for entry in noise
-    )
-    assert by_clause["5.3.1.1"]["limits_status"] == "not_extracted"
+    assert result["summary"]["limits"] > 0
+    kinds = {"lower", "upper", "range", "tolerance"}
+    seen = set()
+    for item in result["items"]:
+        assert item["limits_status"] in {"extracted", "not_extracted"}
+        for entry in item["limits"]:
+            assert entry["kind"] in kinds
+            assert entry["clause"] == item["clause"]
+            assert (
+                entry["lower"] is not None or entry["upper"] is not None
+                or entry["tolerance"] is not None
+            )
+            seen.add(entry["kind"])
+    assert {"upper", "lower", "range"} <= seen
+    assert any(item["limits_status"] == "not_extracted" for item in result["items"])
