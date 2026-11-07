@@ -13,6 +13,7 @@ FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
     ("R12", "空白页/窜页/乱码", "页级文本密度+图片覆盖率判空白页；页脚页码断档判窜页；不可打印字符判乱码"),
     ("R13", "书签完整性", "书签开始/结束配对；目录超链接与 REF/PAGEREF 域指向的书签必须存在"),
     ("R14", "空缺项未填写", "表格必填项空值或占位符（___/XX）视为漏填；明确杠掉（/、—、不适用）视为合理留空"),
+    ("R15", "章节/项目编号", "章节号（1、2；5.1、5.2）与项目编号序列检测断档与重复"),
 )
 
 _PAGE_TEXT_MIN = 2
@@ -25,6 +26,10 @@ _REQUIRED_LABELS = {
 }
 _NA_VALUES = {"/", "／", "—", "——", "-", "－", "–", "无", "不适用", "n/a", "na", "不涉及"}
 _TODO_VALUES = {"___", "____", "_____", "______", "…", "...", "待填", "待定", "未填", "□", "☐", "xx", "xxx", "xxxx", "xxxxx"}
+_SECTION_RE = re.compile(r"^(\d{1,2}(?:\.\d{1,2})+)[\s、]\s*(\S.*)$")
+_SINGLE_RE = re.compile(r"^(\d{1,2})[.、]\s*(\S.*)$")
+_PAREN_RE = re.compile(r"^[（(](\d{1,2})[）)]\s*(\S.*)$")
+_JUDGMENT_WORDS = ("符合", "不符合", "通过", "不通过", "≤", "≥", "±")
 
 
 def _finding(rule_id, title, status, severity, message, evidence="", suggestion="", page=1, section="全文", cell=""):
@@ -197,9 +202,86 @@ def r14_empty_cells(data: ReportData):
     )
 
 
+def _heading_ok(text: str) -> bool:
+    return (
+        bool(re.search(r"[\u4e00-\u9fff]", text))
+        and not text.startswith(_JUDGMENT_WORDS)
+        and not text[:1].isdigit()
+    )
+
+
+def _numbered_items(data: ReportData):
+    sections: list[tuple[list[int], int]] = []
+    singles: list[tuple[int, int]] = []
+    parens: list[tuple[int, int]] = []
+    for index, raw in enumerate(data.paragraphs, start=1):
+        text = raw.strip()
+        if not text or len(text) > 40:
+            continue
+        match = _SECTION_RE.match(text)
+        if match and _heading_ok(match.group(2)):
+            sections.append(([int(part) for part in match.group(1).split(".")], index))
+            continue
+        match = _SINGLE_RE.match(text)
+        if match and _heading_ok(match.group(2)):
+            singles.append((int(match.group(1)), index))
+            continue
+        match = _PAREN_RE.match(text)
+        if match:
+            parens.append((int(match.group(1)), index))
+    return sections, singles, parens
+
+
+def _sequence_problems(items: list[tuple[int, int]]) -> list[str]:
+    problems: list[str] = []
+    for (previous, _), (current, paragraph) in zip(items, items[1:]):
+        if current == previous + 1:
+            continue
+        if current == previous:
+            problems.append(f"编号重复：{current}（段落 {paragraph}）")
+        elif current > previous + 1:
+            problems.append(f"编号断档：{previous}→{current}（段落 {paragraph}）")
+    return problems
+
+
+def r15_numbering(data: ReportData):
+    title = "章节/项目编号"
+    sections, singles, parens = _numbered_items(data)
+    if not sections and not singles and not parens:
+        return _finding("R15", title, "skip", "info", "未识别到章节号或项目编号")
+    problems: list[str] = []
+    by_parent: dict[str, list[tuple[int, int]]] = {}
+    for parts, paragraph in sections:
+        by_parent.setdefault(".".join(map(str, parts[:-1])), []).append((parts[-1], paragraph))
+    for parent, children in by_parent.items():
+        seen: set[int] = set()
+        for child, paragraph in children:
+            if child in seen:
+                problems.append(f"章节号重复：{parent}.{child}（段落 {paragraph}）")
+            seen.add(child)
+        for child in sorted(set(range(1, max(seen) + 1)) - seen)[:3]:
+            problems.append(f"章节号断档：缺 {parent}.{child}（段落 {children[0][1]}）")
+    for label, items in (("项目", singles), ("括号项目", parens)):
+        problems.extend(f"{label}{problem}" for problem in _sequence_problems(items))
+    if problems:
+        return _finding(
+            "R15", title, "fail", "medium",
+            "；".join(problems[:6]),
+            f"章节号={len(sections)}; 单级编号={len(singles)}; 括号编号={len(parens)}; 问题={len(problems)}",
+            "按章节/项目顺序补齐缺号或删除重复编号，并同步目录",
+            section="章节/项目编号", cell="编号序列",
+        )
+    total = len(sections) + len(singles) + len(parens)
+    return _finding(
+        "R15", title, "pass", "info",
+        f"章节/项目编号共 {total} 个，未发现断档或重复",
+        section="章节/项目编号", cell="编号序列",
+    )
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering}
