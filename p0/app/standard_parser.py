@@ -25,6 +25,7 @@ from io import BytesIO
 from typing import Iterable
 
 from .standard_extract.conditions import apply_conditions
+from .standard_extract.formula import apply_formulas
 from .standard_extract.limits import apply_limits
 from .standard_extract.samples import apply_samples
 
@@ -1462,7 +1463,9 @@ def parse_standard(
 
     conditions_summary = apply_conditions(items)
     limits_summary = apply_limits(items)
-    sample_entries, samples_summary = apply_samples(items, [(line.text, line.page) for line in lines])
+    line_meta = [(line.text, line.page) for line in lines]
+    formula_entries, formulas_summary = apply_formulas(items, line_meta)
+    sample_entries, samples_summary = apply_samples(items, line_meta)
 
     if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
@@ -1510,6 +1513,7 @@ def parse_standard(
         **conditions_summary,
         **limits_summary,
         **samples_summary,
+        **formulas_summary,
     }
     if ocr:
         summary["ocr_pages"] = ocr.get("pages", len(pages))
@@ -1519,6 +1523,7 @@ def parse_standard(
         "meta": meta,
         "items": items,
         "samples": sample_entries,
+        "formulas": formula_entries,
         "summary": summary,
         "warnings": warnings,
         "mapping_source": source or "heading-match",
