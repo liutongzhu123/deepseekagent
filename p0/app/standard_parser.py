@@ -26,6 +26,7 @@ from typing import Iterable
 
 from .standard_extract.conditions import apply_conditions
 from .standard_extract.limits import apply_limits
+from .standard_extract.samples import apply_samples
 
 SCHEMA_VERSION = "standard-v0.1"
 
@@ -1313,6 +1314,7 @@ def parse_standard(
 
     conditions_summary = apply_conditions(items)
     limits_summary = apply_limits(items)
+    sample_entries, samples_summary = apply_samples(items, [(line.text, line.page) for line in lines])
 
     if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
@@ -1359,6 +1361,7 @@ def parse_standard(
         "parse_ms": elapsed_ms,
         **conditions_summary,
         **limits_summary,
+        **samples_summary,
     }
     if ocr:
         summary["ocr_pages"] = ocr.get("pages", len(pages))
@@ -1367,6 +1370,7 @@ def parse_standard(
         "schema_version": SCHEMA_VERSION,
         "meta": meta,
         "items": items,
+        "samples": sample_entries,
         "summary": summary,
         "warnings": warnings,
         "mapping_source": source or "heading-match",

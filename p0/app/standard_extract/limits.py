@@ -10,6 +10,9 @@ left alone.  Each parsed item gains ``limits`` and ``limits_status``::
 
 ``kind`` is ``lower``/``upper``/``range``/``tolerance``.  For ``tolerance``
 ``lower``/``upper`` are the nominal value plus/minus the stated tolerance.
+
+Known follow-up (B5/B6): relative limits such as "不应大于图样规定值的 30%"
+are intentionally skipped; judging them needs the referenced base value × ratio.
 """
 from __future__ import annotations
 
