@@ -25,6 +25,7 @@ from io import BytesIO
 from typing import Iterable
 
 from .standard_extract.conditions import apply_conditions
+from .standard_extract.limits import apply_limits
 
 SCHEMA_VERSION = "standard-v0.1"
 
@@ -1311,6 +1312,7 @@ def parse_standard(
             )
 
     conditions_summary = apply_conditions(items)
+    limits_summary = apply_limits(items)
 
     if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
@@ -1356,6 +1358,7 @@ def parse_standard(
         "review_fields": sum(len(item.get("review_fields", [])) for item in items),
         "parse_ms": elapsed_ms,
         **conditions_summary,
+        **limits_summary,
     }
     if ocr:
         summary["ocr_pages"] = ocr.get("pages", len(pages))
