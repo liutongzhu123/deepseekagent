@@ -78,3 +78,12 @@ def test_non_required_label_and_no_table_skip(tmp_path):
     empty = tmp_path / "no-table.docx"
     _make_docx(empty, "<w:p><w:r><w:t>无表格</w:t></w:r></w:p>")
     assert _r14(empty)["status"] == "skip"
+
+
+def test_spacer_rows_after_label_value_do_not_fail(tmp_path):
+    path = tmp_path / "spacer.docx"
+    _make_docx(path, _table([["样品名称", "样品A"], ["", ""], ["规格型号", "M1"], ["", ""]]))
+
+    finding = _r14(path)
+
+    assert finding["status"] == "pass"

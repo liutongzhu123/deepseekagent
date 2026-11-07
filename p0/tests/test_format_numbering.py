@@ -68,3 +68,13 @@ def test_measurement_is_not_a_heading(tmp_path):
     finding = _r15(path)
 
     assert finding["status"] == "skip"
+
+
+def test_long_notice_line_does_not_create_gap(tmp_path):
+    path = tmp_path / "long-notice.docx"
+    long_line = "2." + "未经本检验中心批准，不得部分复制本检验报告。" * 3
+    _make_docx(path, ["1.报告无检验专用章无效", long_line, "3.报告无签字无效"])
+
+    finding = _r15(path)
+
+    assert finding["status"] == "pass"

@@ -180,9 +180,12 @@ def _iter_pages(root: ET.Element) -> list[dict]:
 
 
 def _parse_bookmarks(root: ET.Element) -> tuple[list[dict], list[str], list[dict]]:
-    """Collect bookmark definitions, end ids and internal references with paragraph index."""
+    """Collect bookmark definitions, end ids and internal references with paragraph index.
+
+    ``bookmarkEnd`` may live outside ``w:p`` (e.g. around OLE objects); collect
+    those globally instead of only inside paragraphs.
+    """
     starts: list[dict] = []
-    ends: list[str] = []
     refs: list[dict] = []
     for index, paragraph in enumerate(root.iter(_q("p")), start=1):
         snippet = _text(paragraph)[:60]
@@ -190,8 +193,6 @@ def _parse_bookmarks(root: ET.Element) -> tuple[list[dict], list[str], list[dict
             name = (start.attrib.get(_q("name")) or "").strip()
             if name:
                 starts.append({"name": name, "id": start.attrib.get(_q("id")), "paragraph": index, "text": snippet})
-        for end in paragraph.iter(_q("bookmarkEnd")):
-            ends.append(end.attrib.get(_q("id")) or "")
         for link in paragraph.iter(_q("hyperlink")):
             anchor = (link.attrib.get(_q("anchor")) or "").strip()
             if anchor:
@@ -203,6 +204,12 @@ def _parse_bookmarks(root: ET.Element) -> tuple[list[dict], list[str], list[dict
         instr_text = "".join(node.text or "" for node in paragraph.iter(_q("instrText")))
         for name in re.findall(r"\b(?:REF|PAGEREF)\s+([^\s\\]+)", instr_text):
             refs.append({"name": name, "paragraph": index, "text": snippet, "kind": "field"})
+    seen = {item["id"] for item in starts}
+    for start in root.iter(_q("bookmarkStart")):
+        name = (start.attrib.get(_q("name")) or "").strip()
+        if name and start.attrib.get(_q("id")) not in seen:
+            starts.append({"name": name, "id": start.attrib.get(_q("id")), "paragraph": 0, "text": ""})
+    ends = [end.attrib.get(_q("id")) or "" for end in root.iter(_q("bookmarkEnd"))]
     return starts, ends, refs
 
 
