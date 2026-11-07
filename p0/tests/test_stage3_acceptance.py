@@ -283,3 +283,33 @@ def test_render_markdown_marks_blocked():
     assert "缺文件" in markdown
     assert "语义" in markdown
     assert "D1（XG 样例）" in markdown
+
+
+def test_outcomes_exported_for_dry_run_comparison():
+    cases = _twenty_cases()[:2]
+    outcomes = _outcomes_for(cases)
+    metrics = s3.compute_metrics(cases, outcomes)
+
+    exported = metrics["outcomes"]
+    assert [item["data_id"] for item in exported] == [case.data_id for case in cases]
+    assert exported[0]["expected_fail"] == sorted(cases[0].expected_fail)
+    assert exported[0]["actual_fail"] == sorted(outcomes[0].actual_fail)
+    assert exported[0]["set_matches"] is True
+
+
+def test_synthetic_rows_are_rendered_as_drills():
+    case = _case(data_id="D3-SYN-001", masked_id="S3-DRILL-001", case_kind="synthetic",
+                 expected_fail=frozenset({"R01"}))
+    outcome = _outcome(case, {"R01", "P07"})
+    metrics = s3.compute_metrics([case], [outcome])
+    gate = s3.evaluate_gate(metrics)
+
+    assert metrics["samples"] == 0
+    assert metrics["excluded_synthetic"] == 1
+    assert gate["verdict"] == "blocked"
+    markdown = s3.render_markdown(
+        metrics, gate, [case], [outcome], manifest="m.csv", samples_dir="samples", now="2026-11-20 10:00"
+    )
+    assert "S3-DRILL-001" in markdown
+    assert "| 否 |" in markdown
+    assert "演练样本 1 份不计入验收" in markdown

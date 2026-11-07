@@ -116,6 +116,8 @@ class Outcome:
 
     @property
     def conclusion(self) -> str:
+        if not self.case.counts_toward_gate:
+            return "演练"
         if self.status != "ok":
             return "未验收"
         if not self.set_matches:
@@ -338,6 +340,29 @@ def compute_metrics(cases: list[Case], outcomes: list[Outcome]) -> dict:
     )
     total["visual_pass"] = sum(1 for item in total["gaps"] for gap in item["gaps"] if "P06 视觉项" in gap)
     total["gapped_reports"] = sum(1 for item in total["gaps"] if item["gaps"])
+    # Per-case detail for the dry-run record: the acceptance gate never uses
+    # these rows for synthetic samples, but T302 must be able to compare every
+    # draft's actual fail set with the stage-1 regression baseline.
+    total["outcomes"] = [
+        {
+            "data_id": item.case.data_id,
+            "masked_id": item.case.masked_id,
+            "class": item.case.report_class,
+            "case_kind": item.case.case_kind,
+            "counts_toward_gate": item.case.counts_toward_gate,
+            "status": item.status,
+            "expected_fail": sorted(item.case.expected_fail),
+            "actual_fail": sorted(item.actual_fail),
+            "set_matches": item.set_matches,
+            "conclusion": item.conclusion,
+            "template": item.template,
+            "variant": item.variant,
+            "seconds": item.seconds,
+            "gap": item.gap,
+            "gaps": list(item.gaps),
+        }
+        for item in outcomes
+    ]
     return total
 
 
@@ -478,7 +503,8 @@ def render_markdown(
         lines += [
             f"样本不足或数据缺口：可用验收样本 {metrics['samples']} 份"
             f"（要求 {GATE_MIN_SAMPLES}–{GATE_MAX_SAMPLES} 份），"
-            f"缺文件 {len(metrics['missing'])} 份，解析失败 {len(metrics['errors'])} 份。",
+            f"缺文件 {len(metrics['missing'])} 份，解析失败 {len(metrics['errors'])} 份；"
+            f"演练样本 {metrics['excluded_synthetic']} 份不计入验收。",
             "本结论为 blocked，不代表任何一类通过；补齐 D1/D3 后重跑。",
             "",
         ]
@@ -508,21 +534,20 @@ def render_markdown(
     lines += [
         "## 3. 逐份记录",
         "",
-        "| data_id | 类别 | 类型 | 期望 fail | 实际 fail | 集合一致 | 判定 | 模板 | 耗时 | 单份结论 | 缺口 |",
-        "|---|---|---|---|---|---|---|---|---:|---|---|",
+        "| data_id | 类别 | 类型 | 计入验收 | 期望 fail | 实际 fail | 集合一致 | 判定 | 模板 | 耗时 | 单份结论 | 缺口 |",
+        "|---|---|---|---|---|---|---|---|---|---|---:|---|---|",
     ]
     for outcome in outcomes:
         case = outcome.case
-        if not case.counts_toward_gate:
-            continue
         expected = ";".join(sorted(case.expected_fail)) or "—"
         actual = ";".join(sorted(outcome.actual_fail)) or "—"
         matched = "是" if outcome.set_matches else "否"
         template = f"{outcome.template}/{outcome.variant}" if outcome.template else "—"
         seconds = f"{outcome.seconds:.2f}" if outcome.status == "ok" else "—"
         gap = "；".join(outcome.gaps) if outcome.gaps else ("—" if outcome.status == "ok" else outcome.gap)
+        counted = "是" if case.counts_toward_gate else "否"
         lines.append(
-            f"| {case.masked_id} | {case.report_class} | {case.case_kind} | {expected} | {actual} | "
+            f"| {case.masked_id} | {case.report_class} | {case.case_kind} | {counted} | {expected} | {actual} | "
             f"{matched} | {outcome.judgment or '—'} | {template} | {seconds} | {outcome.conclusion} | {gap} |"
         )
     lines.append("")
