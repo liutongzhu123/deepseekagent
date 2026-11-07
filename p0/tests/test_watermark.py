@@ -80,3 +80,52 @@ def test_standard_parse_reports_watermark_cleanup(monkeypatch):
     monkeypatch.setattr(standard_parse.admin_config, "standard_config", lambda: {})
     result = standard_parse.parse_pdf_standard(b"%PDF-1.4", "x.pdf", enable_ocr=False)
     assert "已清洗水印碎片 5 处" in result["warnings"]
+
+
+def _recipient_block(to: str = "a@b", date: str = "2026/01/01", colon: str = ":") -> str:
+    return f"TO{colon}{to}\nOF{colon}单位\nBY{colon}研究院\nAT{colon}{date}"
+
+
+def test_repeated_recipient_block_is_removed(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    monkeypatch.delenv("P0_WATERMARK_BLOCK_MIN", raising=False)
+    block = _recipient_block()
+    text = "\n".join([block] * 4) + "\n技术要求正文"
+    cleaned, removed = watermark.clean_text(text)
+    assert "TO:" not in cleaned and "AT:" not in cleaned
+    assert "技术要求正文" in cleaned
+    assert removed == 4
+
+
+def test_single_recipient_block_is_kept(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    text = _recipient_block() + "\n技术要求正文"
+    cleaned, removed = watermark.clean_text(text)
+    assert cleaned == text
+    assert removed == 0
+
+
+def test_different_recipient_blocks_are_not_removed(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    text = "\n".join(_recipient_block(f"user{i}@b") for i in range(4)) + "\n技术要求"
+    cleaned, removed = watermark.clean_text(text)
+    assert cleaned == text
+    assert removed == 0
+
+
+def test_recipient_block_threshold_is_configurable(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    monkeypatch.setenv("P0_WATERMARK_BLOCK_MIN", "2")
+    text = "\n".join([_recipient_block()] * 2) + "\n正文"
+    cleaned, removed = watermark.clean_text(text)
+    assert "TO:" not in cleaned and "正文" in cleaned
+    assert removed == 2
+
+
+def test_recipient_block_handles_crlf_and_fullwidth_colon(monkeypatch):
+    monkeypatch.delenv("P0_WATERMARK_CLEAN", raising=False)
+    block = _recipient_block(colon="：").replace("\n", "\r\n")
+    text = "\r\n".join([block] * 4) + "\r\n技术要求"
+    cleaned, removed = watermark.clean_text(text)
+    assert "TO：" not in cleaned and "技术要求" in cleaned
+    assert removed == 4
