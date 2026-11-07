@@ -253,7 +253,7 @@
 - **涉及**：`p0/app/weknora.py`、`p0/app/standard_qa.py`、`p0/scripts/compare_retrieval.py`、`p0/tests/`
 
 #### T405 · rerank 候选集预算评估（替换原 T404 的「直接接入」）
-- **状态**：`merged`（#__T405_PR__）  **依赖**：T401
+- **状态**：`merged`（#94）  **依赖**：T401
 - **做什么**：实测 rerank 在 50/15/10 个候选下的耗时，判断能否接入问答；本任务不直接改问答链路默认。
 - **结果（2026-11-07）**：见 `docs/eval-p1-rerank-budget.md`。同一本地 CPU reranker 上 15/10 候选实测 P50 约 37.8 s / 24.9 s，均远高于 2 s；即使按 T401 空闲主机 50 候选 P50 52.1 s 的每候选成本折算，15/10 仍约 15.6/10.3 s。WeKnora 0.9.0 将 rerank 候选池硬编码为 50（`DefaultRetrievalTopK=50`，`max(top_k, 50)`），`match_count`/`rerank.top_k` 无法降到 10/15；端到端降候选需改 WeKnora 并重建，且当前 CPU reranker 的每候选成本本身已超 2 s 门槛，需 GPU/更小模型。**结论：不能接**；不进入第 2 步 5 题命中质量对比。P0 默认保持 hybrid-search，`P0_WEKNORA_RERANK=1` 才显式开启 rerank。
 - **涉及**：`docs/eval-p1-rerank-budget.md`、`p0/app/weknora.py`、`p0/tests/test_rerank_params.py`
@@ -296,7 +296,7 @@
 | T402 | `verified-deferred` | #76 | — | 本地 CPU 可跑通但吞吐不足（5.5 tok/s、图像 62s/张）；继续 DeepSeek 公网，客户本地需 GPU 再评估 |
 | T403 | `merged` | #75 #83 #88 #91 #92 #93 | 绿 | 真实样例确认 + 文本层块删除/扫描件掩膜/回退校验+单测 |
 | T404 | `merged` | #79 #84 | 绿 | knowledge-search（带 rerank）+ 命中对比脚本；T405 后默认关（opt-in） |
-| T405 | `merged` | #__T405_PR__ | 绿 | 10/15 候选实测仍远高于 2 s，结论「不能接」；rerank 默认关 |
+| T405 | `merged` | #94 | 绿 | 10/15 候选实测仍远高于 2 s，结论「不能接」；rerank 默认关 |
 
 **当前阻塞**：T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
 
@@ -342,7 +342,7 @@
 
 > 本节只排顺序，不新增正式任务号；新任务由项目负责人确认后再进 §三。
 
-**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T401 基准脚本/文档（#77/#78/#85、#87/#89/#90）、T403 水印（#75/#83、#88、#91–#93）、T404 rerank 接入（#79/#84）、T405 rerank 候选预算评估（#__T405_PR__）；T402（#76）为 **verified-deferred**（本地 CPU 约 5.5 tok/s、图像约 62 s/张，继续用 DeepSeek 公网，客户本地需 GPU 再评估）。
+**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T401 基准脚本/文档（#77/#78/#85、#87/#89/#90）、T403 水印（#75/#83、#88、#91–#93）、T404 rerank 接入（#79/#84）、T405 rerank 候选预算评估（#94）；T402（#76）为 **verified-deferred**（本地 CPU 约 5.5 tok/s、图像约 62 s/张，继续用 DeepSeek 公网，客户本地需 GPU 再评估）。
 
 **接下来按顺序**：
 
