@@ -776,7 +776,7 @@ async function loadReportInputs() {
     if (!data.configured) {
       pill.className = 'pill neutral';
       pill.textContent = '未配置';
-      body.innerHTML = '<p class="muted">未设置 P0_REPORT_INPUTS_DIR；当前只运行报告内 R01–R11，X01–X04 跨文档检查停用。</p>';
+      body.innerHTML = '<p class="muted">未设置 P0_REPORT_INPUTS_DIR；当前只运行报告内确定性规则（R01 起），X01–X04 跨文档检查停用。</p>';
       return;
     }
     const counts = data.counts || {};

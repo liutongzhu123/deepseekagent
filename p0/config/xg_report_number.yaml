@@ -1,0 +1,9 @@
+# XG 变更报告编号规则（预留，默认关闭；2026-11-07）
+# 客户尚未确认规则，先只做配置项，不实现判定逻辑。
+enabled: false
+rules:
+  # XG 报告编号 = 作废报告编号尾号 + 1
+  report_number_offset_from_voided: 1
+  # 变更报告需注明“原报告作废”
+  require_void_note: true
+  void_note_keyword: "原报告作废"

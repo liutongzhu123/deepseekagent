@@ -9,6 +9,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Iterable
 
+from .rules import RULES
+
+_RULE_RANGE = f"R01–R{len(RULES):02d}"
+
 STATUS_LABEL = {"fail": "不通过", "warn": "警告", "pass": "通过", "skip": "未检查"}
 SEVERITY_LABEL = {"high": "高", "medium": "中", "low": "低", "info": "提示"}
 LAYER_LABEL = {
@@ -41,7 +45,7 @@ def audit_markdown(result: dict, meta: dict | None = None, decisions: dict[str, 
     findings = result.get("findings", [])
     file_name = result.get("file", meta.get("file_name", ""))
     template = result.get("template", "")
-    audit_mode = "R01–R11 确定性规则 + X01–X04 跨文档"
+    audit_mode = f"{_RULE_RANGE} 确定性规则 + X01–X04 跨文档"
     if result.get("stage2"):
         audit_mode += " + 部分规则 + 规则 DSL + 语义审核"
 
@@ -178,7 +182,7 @@ def batch_markdown(rows: list[dict], rule_fail: dict[str, int], rules: list[tupl
         "",
         f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"- 样本：{len(rows)} 份 docx 草稿",
-        "- 规则：R01–R11，逐份输出问题/证据/建议；本汇总只做规则层统计",
+        f"- 规则：{_RULE_RANGE}，逐份输出问题/证据/建议；本汇总只做规则层统计",
         "",
         "## 1. 规则命中分布",
         "",
