@@ -53,7 +53,7 @@ RULES: list[tuple[str, str, str]] = [
     ("R05", "设备溯源有效", "检验日期在设备溯源有效期内"),
     ("R06", "符合性判定", "结论/判定与均值、限值一致"),
     ("R07", "页码完整", "共 N 页与第 1..N 页连续"),
-    ("R08", "注意事项条数", "中文报告注意事项应为 8 条"),
+    ("R08", "注意事项完整", "中文报告注意事项应为 8 条，且委托单位必填、试验类型必选"),
     ("R09", "标记符号", "报告不得含黄色高亮/红色字体"),
     ("R10", "签名/印章完整", "签名姓名与印章图片应完整嵌入"),
     ("R11", "模板识别", "按检验依据/项目识别报告模板"),
@@ -354,21 +354,73 @@ def r07_pages(data: ReportData) -> Finding:
     return _pass("R07", "页码完整", f"页码 1..{total} 连续{suffix}")
 
 
+_NOTICE_PLACEHOLDERS = {"", "/", "／", "—", "——", "-", "－", "无", "不适用", "xx", "xxx", "xxxx"}
+
+
+def _notice_lines(data: ReportData) -> list[str]:
+    start = next(
+        (i for i, line in enumerate(data.paragraphs) if "注意事项" in re.sub(r"\s+", "", line)),
+        None,
+    )
+    if start is None:
+        return []
+    lines: list[str] = []
+    for line in data.paragraphs[start + 1:]:
+        if "检验单位地址电话" in re.sub(r"\s+", "", line):
+            break
+        lines.append(line.strip())
+    return lines
+
+
+def _notice_filled(value: object) -> bool:
+    text = re.sub(r"\s+", "", str(value or "")).strip()
+    return bool(text) and text.lower() not in _NOTICE_PLACEHOLDERS
+
+
+def _notice_value(lines: list[str], label: str) -> str:
+    pattern = re.compile(rf"^\s*(?:\d+[.、]\s*)?{re.escape(label)}\s*[：:]?\s*(.*)$")
+    for index, line in enumerate(lines):
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if _notice_filled(value):
+            return value
+        if index + 1 < len(lines) and "：" not in lines[index + 1] and _notice_filled(lines[index + 1]):
+            return lines[index + 1].strip()
+        return ""
+    return ""
+
+
 def r08_notes(data: ReportData, expected_notices: int = DEFAULT_EXPECTED_NOTICES) -> Finding:
+    title = "注意事项完整"
     if expected_notices <= 0:
-        return _skip("R08", "注意事项条数", "规则配置为不校验注意事项条数")
+        return _skip("R08", title, "规则配置为不校验注意事项条数")
     if data.notices == 0:
-        return _skip("R08", "注意事项条数", "未识别到注意事项段落")
+        return _skip("R08", title, "未识别到注意事项段落")
+    lines = _notice_lines(data)
+    problems: list[str] = []
     if data.notices != expected_notices:
+        problems.append(f"注意事项应为 {expected_notices} 条，实际 {data.notices} 条")
+    client = _notice_value(lines, "委托单位") or data.client
+    if not _notice_filled(client):
+        problems.append("委托单位未填写")
+    test_type = _notice_value(lines, "试验类型")
+    if not _notice_filled(test_type):
+        test_type = data.template_variant or (data.item if data.template_family != "BYD-odor" else "")
+    if not _notice_filled(test_type):
+        problems.append("试验类型未选择")
+    if problems:
         return _fail(
-            "R08",
-            "注意事项条数",
-            f"中文报告注意事项应为 {expected_notices} 条，实际 {data.notices} 条",
-            f"notices={data.notices}",
-            "medium",
-            "按模板补齐/删除注意事项",
+            "R08", title, "；".join(problems),
+            f"notices={data.notices}; 委托单位={client or '空'}; 试验类型={test_type or '空'}",
+            "medium", "按模板补齐注意事项条数，并填写委托单位、选择试验类型",
         )
-    return _pass("R08", "注意事项条数", f"注意事项 {expected_notices} 条")
+    return _pass(
+        "R08", title,
+        f"注意事项 {expected_notices} 条；委托单位/试验类型已填写",
+        f"委托单位={client}; 试验类型={test_type}",
+    )
 
 
 def r09_markup(data: ReportData) -> Finding:
