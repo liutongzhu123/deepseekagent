@@ -34,6 +34,8 @@ def data(**kwargs) -> ReportData:
         test_start="2025年03月02日",
         test_end="2025年03月03日",
         template_family="BYD-odor",
+        template_variant="OTS",
+        client="比亚迪汽车工业有限公司",
     )
     base.update(kwargs)
     return ReportData(**base)
