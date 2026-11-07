@@ -585,18 +585,18 @@ def search(
 ) -> dict:
     """Retrieve cited chunks from WeKnora for a question.
 
-    Default path is the rerank-enabled ``/knowledge-search`` endpoint: the QA
-    chain is retrieval-first, and reranking the top candidates improves hit
-    quality without a generation step.  ``rerank=False`` (or
-    ``P0_WEKNORA_RERANK=0``) falls back to the raw hybrid-search primitive,
-    which is faster but has no rerank stage.
+    Default path is the plain hybrid-search primitive.  Rerank is opt-in: the
+    T405 candidate-budget evaluation measured 10/15 candidates well above the
+    2 s gate, so the QA chain does not enable it by default.  Set
+    ``P0_WEKNORA_RERANK=1`` (or ``rerank=True``) to opt into
+    ``/knowledge-search``; ``rerank=False`` keeps the fast hybrid path.
     """
     cfg = cfg or config_from_env()
     if cfg is None:
         raise WeKnoraUnavailable("未配置 WeKnora")
     top_k = max(1, int(top_k or DEFAULT_TOP_K))
     if rerank is None:
-        use_rerank = os.getenv("P0_WEKNORA_RERANK", "1").lower() in {"1", "true", "on", "yes"}
+        use_rerank = os.getenv("P0_WEKNORA_RERANK", "0").lower() in {"1", "true", "on", "yes"}
     else:
         use_rerank = bool(rerank)
     if use_rerank:

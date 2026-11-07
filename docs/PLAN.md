@@ -217,7 +217,7 @@
 
 #### T401 · 检索延迟优化
 - **状态**：`doing`（实现与基准脚本已合并；现网纯检索基线已出；rerank 未达 8s）  **依赖**：D5（已确认）
-- **进度**：T401a #72、T401b #73、T401c #74 已合并；基准脚本 #85 支持指定查询集、本地/现网与首字/完整响应 P50/P95；改写微基准见 `docs/eval-p1-latency.md`。2026-11-07 补现网 20 次/组纯检索基线，并直连 WeKnora 0.9.0 跑 hybrid-search vs knowledge-search（rerank）10 次/组：rerank 首字 P50 52.1 s / P95 54.6 s，未达 P95 < 8 s；瓶颈是本地 `builtin-local-rerank` 对 50 个候选打分。详见 `docs/eval-p1-latency.md` §6.5，优化项待排。
+- **进度**：T401a #72、T401b #73、T401c #74 已合并；基准脚本 #85 支持指定查询集、本地/现网与首字/完整响应 P50/P95；#87 补现网 20 次/组纯检索基线，#89 增加直连 WeKnora hybrid vs rerank 基准脚本，#90 记录 rerank 首字 P50 52.1 s / P95 54.6 s（10 次/组，空闲主机），未达 P95 < 8 s；瓶颈是本地 `builtin-local-rerank` 对 50 个候选打分。T405 已实测 10/15 候选仍远高于 2 s，结论「不能接」，见 `docs/eval-p1-rerank-budget.md`。详见 `docs/eval-p1-latency.md` §6.5。
 - **目标**：以现有 5 份标准的问答为基线，P95 首字延迟 < 8s；改前/改后对比写入 `docs/eval-p1-latency.md`。
 - **拆三个独立 PR（每个 ≤300 行）**：
   - **T401a 查询改写模型**：改写改用非 reasoning 模型（DeepSeek `deepseek-chat` 级别），新增可关闭开关；改写失败回退原问题，不阻断问答。
@@ -239,7 +239,7 @@
 - **涉及**：`docs/p1-model-switchability.md`（只写报告，不改代码）
 
 #### T403 · 水印预处理
-- **状态**：`merged`（#75、#83）  **依赖**：无
+- **状态**：`merged`（#75、#83、#88、#91–#93）  **依赖**：无
 - **做什么**：清洗 PDF/扫描件文本层中的水印碎片，避免污染条款与数值抽取；处理可配置、可回退。
 - **验收标准**：单测覆盖水印碎片清洗与正常文本不误伤；既有解析/审核结论 diff 为空（除明确修复的噪声）。
 - **结果**：`p0/app/watermark.py` 接在 PDF/OCR 汇合点，默认开启、阈值保守、可关；已覆盖 CJK 间孤立字母、`Q/JLY J7111074B-2021` / `Q-JLY J7111074B` 类重复标准号串（同页 ≥4 次才删，单次引用保留）。10 条单测通过。**2026-11-07 真实样例已到位并确认策略**：`/opt/dsh-agent/samples/watermark-sample.pdf` 每页 4 组 `TO/OF/BY/AT` 浅粉斜排水印（33 页共 132 组）；文本层块删除为主（#91，`P0_WATERMARK_BLOCK_MIN=4`，132 组全删、正文/页眉保留），扫描件浅粉掩膜兜底 + 非水印内容行校验（`P0_OCR_WATERMARK_MASK=1`，缺失则回退原图并写复核 warning），对比与配置见 `docs/t403-watermark-ocr.md`。
@@ -249,8 +249,14 @@
 - **状态**：`merged`（#79、#84）  **依赖**：T401c
 - **做什么**：把 rerank 候选与最终 `top_k` 正式接入 `standards/ask` 问答链路；保留关闭开关与无模型降级（按检索顺序返回）。
 - **验收标准**：开关关闭时与改前一致；开启时引用标准号/条款准确率不下降；P95 延迟记录进 `docs/eval-p1-latency.md`。
-- **结果**：问答链路默认走 `/knowledge-search`（带 rerank），`P0_WEKNORA_RERANK=0` 或 `answer(..., rerank=False)` 可回退；新增 `p0/scripts/compare_retrieval.py` 对比 hybrid vs rerank 的命中率/引用准确率/拒答率/P50/P95。**现网命中质量对比未跑**：本机无 KB/凭据。
+- **结果**：问答链路曾默认走 `/knowledge-search`（带 rerank），`P0_WEKNORA_RERANK=0` 或 `answer(..., rerank=False)` 可回退；新增 `p0/scripts/compare_retrieval.py` 对比 hybrid vs rerank 的命中率/引用准确率/拒答率/P50/P95。**T405 后默认关闭**（`P0_WEKNORA_RERANK=0`，需显式设为 1 才启用），见 T405。
 - **涉及**：`p0/app/weknora.py`、`p0/app/standard_qa.py`、`p0/scripts/compare_retrieval.py`、`p0/tests/`
+
+#### T405 · rerank 候选集预算评估（替换原 T404 的「直接接入」）
+- **状态**：`merged`（#94）  **依赖**：T401
+- **做什么**：实测 rerank 在 50/15/10 个候选下的耗时，判断能否接入问答；本任务不直接改问答链路默认。
+- **结果（2026-11-07）**：见 `docs/eval-p1-rerank-budget.md`。同一本地 CPU reranker 上 15/10 候选实测 P50 约 37.8 s / 24.9 s，均远高于 2 s；即使按 T401 空闲主机 50 候选 P50 52.1 s 的每候选成本折算，15/10 仍约 15.6/10.3 s。WeKnora 0.9.0 将 rerank 候选池硬编码为 50（`DefaultRetrievalTopK=50`，`max(top_k, 50)`），`match_count`/`rerank.top_k` 无法降到 10/15；端到端降候选需改 WeKnora 并重建，且当前 CPU reranker 的每候选成本本身已超 2 s 门槛，需 GPU/更小模型。**结论：不能接**；不进入第 2 步 5 题命中质量对比。P0 默认保持 hybrid-search，`P0_WEKNORA_RERANK=1` 才显式开启 rerank。
+- **涉及**：`docs/eval-p1-rerank-budget.md`、`p0/app/weknora.py`、`p0/tests/test_rerank_params.py`
 
 ---
 
@@ -286,10 +292,11 @@
 | T401a | `merged` | #72 | 绿 | 改写换非 reasoning 模型 + 开关 |
 | T401b | `merged` | #73 | 绿 | 改写结果 Redis 缓存（5 分钟） |
 | T401c | `merged` | #74 | 绿 | rerank 30→15 + embedding batch 64 |
-| T401 评测 | `doing` | #77 #78 #85 | 绿 | 基准脚本支持本地/现网与首字延迟；现网基线待凭据 |
+| T401 评测 | `doing` | #77 #78 #85 #87 #89 #90 | 绿 | 现网纯检索基线 + 直连 WeKnora hybrid vs rerank；rerank P50 52.1 s / P95 54.6 s |
 | T402 | `verified-deferred` | #76 | — | 本地 CPU 可跑通但吞吐不足（5.5 tok/s、图像 62s/张）；继续 DeepSeek 公网，客户本地需 GPU 再评估 |
-| T403 | `merged` | #75 #83 | 绿 | PDF/OCR 水印 + `Q/JLY J7111074B` 类标准号水印串 |
-| T404 | `merged` | #79 #84 | 绿 | 默认 knowledge-search（带 rerank）+ 命中对比脚本 |
+| T403 | `merged` | #75 #83 #88 #91 #92 #93 | 绿 | 真实样例确认 + 文本层块删除/扫描件掩膜/回退校验+单测 |
+| T404 | `merged` | #79 #84 | 绿 | knowledge-search（带 rerank）+ 命中对比脚本；T405 后默认关（opt-in） |
+| T405 | `merged` | #94 | 绿 | 10/15 候选实测仍远高于 2 s，结论「不能接」；rerank 默认关 |
 
 **当前阻塞**：T105（缺 D1 XG 变更样例）；T204/T305（缺 D2 第二主机厂 5 份+）；阶段 3 试点验收（主门禁缺 D3 20–30 份正式报告与客户签字，C 类缺 D1；D4 影响部分规则；详见 `docs/stage3-acceptance/`）
 
@@ -305,7 +312,7 @@
 | D2 | 第二主机厂（吉利/非吉利）正式报告 5 份+ | 客户业务/项目负责人 | 同上；附字段清单 | T204、P08；阶段 3 扩展 | 缺（blocked） |
 | D3 | 20–30 份正式报告（含签章/照片/最终版；覆盖 OTS/摸底/XG 变更） | 客户业务专家/项目负责人 | 客户导出最终版 docx/pdf + 金标准标注清单（期望判定/缺陷）→ 仓库外只读目录；不入库 | T110 客户验收、阶段 3 | 缺（blocked） |
 | D4 | 任务单/原始记录/样品导出/设备台账各 10–20 份 | 客户 IT/业务 | Excel/CSV，按 `p0/app/report_inputs.py` 字段名；附映射与坏行说明 | X 系列规则、P01/P04/P05、T107 真实数据 | 缺（blocked） |
-| D5 | DeepSeek 合规确认（文本语义出网、脱敏、留存/地域/模型范围） | 项目负责人 + 客户信息安全/法务 | 已确认：现阶段测试数据可走公网 DeepSeek；客户本地部署改用客户本地模型，接入保持可切换。配置 `DEEPSEEK_API_KEY`/`P0_SEMANTIC_ENABLED=1` | 语义启用、阶段 2 客户验收 | **已确认（2026-11-06）** |
+| D5 | DeepSeek 合规确认（文本语义出网、脱敏、留存/地域/模型范围） | 项目负责人 + 客户信息安全/法务 | 已确认（2026-11-06）：测试数据可出网；客户本地部署改用本地模型，届时再评估，接入保持可切换。配置 `DEEPSEEK_API_KEY`/`P0_SEMANTIC_ENABLED=1` | 语义启用、阶段 2 客户验收 | **已确认（2026-11-06）** |
 | D6 | inbox 目录与命名规范 | 客户 IT/业务 | 目录规范文档 + 示例 | T107 | 缺 |
 
 > D1–D5 的详细交付物、验收口径、3 类报告验收标准和样例/记录/清单模板见 `docs/stage3-acceptance/README.md`。
@@ -335,14 +342,13 @@
 
 > 本节只排顺序，不新增正式任务号；新任务由项目负责人确认后再进 §三。
 
-**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T401 基准脚本/文档（#77/#78/#85）、T403 水印（#75/#83）、T404 rerank 接入（#79/#84）；T402（#76）为 **verified-deferred**（本地 CPU 约 5.5 tok/s、图像约 62 s/张，继续用 DeepSeek 公网，客户本地需 GPU 再评估）。
+**已完成（P1 基础设施首批）**：T401a/b/c（#72/#73/#74）、T401 基准脚本/文档（#77/#78/#85、#87/#89/#90）、T403 水印（#75/#83、#88、#91–#93）、T404 rerank 接入（#79/#84）、T405 rerank 候选预算评估（#94）；T402（#76）为 **verified-deferred**（本地 CPU 约 5.5 tok/s、图像约 62 s/张，继续用 DeepSeek 公网，客户本地需 GPU 再评估）。
 
 **接下来按顺序**：
 
 1. **现网 T401 基线**：用 #85 的 `--endpoint http` 命令（`P0_BENCH_BASE_URL/USERNAME/PASSWORD` 或 token）打现网 P0，
    输出首字/完整响应 P50/P95；把改前/改后填进 `docs/eval-p1-latency.md`。
-2. **T404 现网命中质量对比**：同一查询集跑 `p0/scripts/compare_retrieval.py`，比较 hybrid vs knowledge-search（带 rerank）的
-   命中率/引用准确率/拒答率/P95。以上两项都缺现网账号/WeKnora 凭据，脚本已备好。
+2. **T405 结论落地**：rerank 不能接（10/15 候选仍 >2 s，且 WeKnora 0.9.0 候选池硬编码 50）。要重启该方向，先在 WeKnora 侧做候选池可配置 + GPU/更小模型，再用 T401 5 题跑命中质量对比；在此之前问答默认 hybrid-search。
 3. **T403 真实样例**：用客户带水印 PDF 跑一遍解析 diff；本机无该样例。
 4. **T306 语义启用**（D5 已确认）：服务器配置 `DEEPSEEK_API_KEY` / `P0_SEMANTIC_ENABLED=1`，
    按 `docs/stage3-acceptance/README.md` §4 复跑语义项。

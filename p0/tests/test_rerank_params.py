@@ -69,8 +69,16 @@ def test_rerank_never_asks_for_fewer_than_the_caller_wants(monkeypatch):
     assert captured["body"]["match_count"] == 15
 
 
-def test_default_path_is_knowledge_search_with_rerank(monkeypatch):
+def test_rerank_is_opt_in(monkeypatch):
     monkeypatch.delenv("P0_WEKNORA_RERANK", raising=False)
+    captured, result = _search(monkeypatch)
+    assert captured["path"] == "/api/v1/knowledge-bases/kb-1/hybrid-search"
+    assert captured["body"] == {"query_text": "5.1 外观要求", "match_count": 6}
+    assert result["rerank"] is False
+
+
+def test_rerank_enabled_via_env(monkeypatch):
+    monkeypatch.setenv("P0_WEKNORA_RERANK", "1")
     captured, result = _search(monkeypatch)
     assert captured["path"] == "/api/v1/knowledge-search"
     assert captured["body"]["rerank"] == {"enabled": True, "top_k": 15}
