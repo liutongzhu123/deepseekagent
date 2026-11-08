@@ -24,6 +24,7 @@ from difflib import SequenceMatcher
 from io import BytesIO
 from typing import Iterable
 
+from .standard_extract.classify import apply_classification
 from .standard_extract.conditions import apply_conditions
 from .standard_extract.formula import apply_formulas
 from .standard_extract.limits import apply_limits
@@ -595,7 +596,7 @@ def _extract_meta(pages: list[str], file_name: str) -> dict:
     issue_date = "-".join(dates[0]) if dates else ""
     implementation_date = "-".join(dates[1]) if len(dates) > 1 else ""
     confidential = "秘密" in head or "Confidential" in head
-    return {
+    meta = {
         "standard_no": standard_no,
         "name": name or re.sub(r"\.pdf$", "", file_name, flags=re.I),
         "issue_date": issue_date,
@@ -604,6 +605,8 @@ def _extract_meta(pages: list[str], file_name: str) -> dict:
         "pages": len(pages),
         "file_name": file_name,
     }
+    apply_classification(meta)
+    return meta
 
 
 def _clean_table_text(value: str) -> str:

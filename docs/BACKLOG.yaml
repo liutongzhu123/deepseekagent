@@ -12,7 +12,7 @@
 meta:
   updated_at: 2026-11-08
   owner: supervisor
-  next_task_hint: B7
+  next_task_hint: B8
 
 tasks:
   # ========== 已完成：早期基础规则（R01–R11，早于台账建立） ==========
@@ -226,12 +226,13 @@ tasks:
 
   - id: B7
     title: 标准类型智能分类（国标/行标/企标）
-    status: todo
+    status: done
     size: S
+    pr: 136
     deps: [B0]
     covers: [SP-10.1]
     acceptance: ["按标准号前缀+名称能分类", "误判率 <10%"]
-    files: [p0/app/standard_extract/classify.py]
+    files: [p0/app/standard_extract/classify.py, p0/app/standard_parser.py, p0/tests/test_standard_classify.py]
 
   - id: B8
     title: 标准版本管理与对比
