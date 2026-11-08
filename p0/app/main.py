@@ -38,6 +38,7 @@ from . import crm, monitoring, quote_store, store, task_worker
 from . import feedback_store, oidc, report_store, report_writer, report_inputs, partial_rules, rule_dsl, semantic_audit, standard_parse, standard_qa, standard_store, weknora
 from . import visual_checks
 from . import xlsx_writer
+from .standard_extract import items_list
 from .store import tasks
 from .docx_parser import parse_docx
 from .rules import RecordInput, audit_report, rules_catalog, validate_records
@@ -684,6 +685,8 @@ class ItemPatch(BaseModel):
     name: str | None = None
     requirement: str | None = None
     method: str | None = None
+    method_clause: str | None = None
+    applicable_parts: list[str] | None = None
     reviewed: bool | None = None
 
 
@@ -1515,6 +1518,9 @@ def get_standard(standard_id: str, request: Request) -> dict:
     # surface in ``pending`` so the workbench can mark them 待确认.
     payload = dict(record)
     payload["judgment_rules"] = rule_dsl.generate_judgment_rules(record.get("items") or [])
+    payload["items_list"] = items_list.build(
+        record.get("meta") or {}, record.get("items") or []
+    )
     return payload
 
 
