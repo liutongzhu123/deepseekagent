@@ -335,8 +335,8 @@
 - **检查什么**：管理员在 `report.custom_rules` 配置条件表达式，表达式为真即报出；典型场景「检测日期距生产日期不超过 N 天」写作 `days_between(production_date, test_start) > 30`。
 - **怎么配置**：`PUT /api/v1/admin/config/report` 带上 `custom_rules`（只提交该字段也可，保存时与现有配置合并），每条形如 `{"id":"C01","name":"…","expression":"days_between(production_date, test_start) > 30","severity":"medium","enabled":true,"message":"…","suggestion":"…"}`。
 - **判定与证据**：命中 → `fail`（high/medium）或 `warn`（low/info），证据含表达式、字段实际值与日期差；条件不成立、`custom_rules` 为空、`enabled=false`、或日期缺失/无法解析 → 不报；非法语法/字段/函数/severity/id 在保存时返回 400，手改坏配置只 `skip`。
-- **范围与局限**：字段取报告解析结果（`production_date`、`test_start`、`reported_mean`、`limit` 等 19 个），函数仅 `days_between`/`abs`，支持 `and`/`or`/`not` 与比较；AST 白名单、不用 `eval`。不做跨文档/自由文本和「相对今天」；管理端页面暂无编辑表格，页面保存会保留已配置规则。
-- 测试：`p0/tests/test_custom_rule.py` 8 条用例覆盖 F1–F6；默认 `custom_rules=[]`，既有 12 份 BYD 草稿审计结果不变。
+- **范围与局限**：字段取报告解析结果（`production_date`、`test_start`、`reported_mean`、`limit` 等 19 个），日期字段先解析为日期再比较（缺失/非法视为无法判定），函数仅 `days_between`/`abs`，支持 `and`/`or`/`not` 与比较；AST 白名单、不用 `eval`。不做跨文档/自由文本和「相对今天」；管理端页面暂无编辑表格，页面保存会保留已配置规则。
+- 测试：`p0/tests/test_custom_rule.py` 10 条用例覆盖 F1–F6；默认 `custom_rules=[]`，既有 12 份 BYD 草稿审计结果不变。
 
 
 ## A19 · 产品名称异常识别（R29 / RA-5.2）
