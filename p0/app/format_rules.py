@@ -691,9 +691,12 @@ def r22_standard_years(data: ReportData):
 # F8 样品数量可解析且与编号个数不一致 -> fail；XX/空/非数字 -> 不判数量。
 # F9 不同表/字段各自独立判重，跨表引用不报重复。
 # F10 纯数字长串（日期/流水号）不当编号序列，避免误报。
+# F11 全角范围符「－」：NFKC 会把它归一成 ASCII "-"，必须先在归一化前换成可识别
+#     的范围符，否则 TS24LXJ8A-01－03 只会被当成 1 个编号，数量核对误报。
 _SAMPLE_LINE = re.compile(r"^\s*[*＊]?\s*样品编号\s*[:：]\s*(.*)$")
 _SAMPLE_SPLIT = re.compile(r"[、,，;；\s]+")
 _SAMPLE_RANGE = re.compile(r"^(.+?)\s*(?:[～~—–－]|至)\s*(.+)$")
+_SAMPLE_RANGE_DASHES = str.maketrans({"－": "～", "—": "～", "–": "～", "−": "～", "―": "～", "‒": "～"})
 _SAMPLE_NUMBER = re.compile(r"^(?P<prefix>.*[^0-9])?(?P<num>\d+)$")
 _SAMPLE_QTY = re.compile(r"^\s*(\d+)\s*(?:件|个|份|支|块|只|套|根|片|颗|瓶|袋|组)?\s*$")
 _SAMPLE_ITEM_LABELS = {"检验项目", "试验项目", "检测项目", "测试项目"}
@@ -728,9 +731,14 @@ def _expand_sample_range(part: str) -> list[str] | None:
     return [f"{left[0]}{str(value).zfill(len(left[1]))}" for value in range(start, end + 1)]
 
 
+def _sample_norm(text: str) -> str:
+    """NFKC 前保留全角范围符，避免「－」被归一成 ASCII "-" 后丢失范围语义。"""
+    return unicodedata.normalize("NFKC", (text or "").translate(_SAMPLE_RANGE_DASHES))
+
+
 def _sample_tokens(text: str) -> list[str]:
     tokens: list[str] = []
-    for part in _SAMPLE_SPLIT.split(unicodedata.normalize("NFKC", text or "")):
+    for part in _SAMPLE_SPLIT.split(_sample_norm(text)):
         part = part.strip()
         if not part:
             continue

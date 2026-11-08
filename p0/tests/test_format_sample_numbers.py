@@ -78,6 +78,25 @@ def test_pass_cases(sample_no, qty, tables, needle):
 
 
 @pytest.mark.parametrize(
+    "sample_no",
+    [
+        "TS24LXJ8A-01－03",  # 全角「－」：NFKC 会归一成 ASCII "-"，第二轮验证反例
+        "TS24LXJ8A-01－TS24LXJ8A-03",
+        "TS24LXJ8A-01—03",
+        "TS24LXJ8A-01–03",
+        "TS24LXJ8A-01～03",
+        "TS24LXJ8A-01至03",
+    ],
+)
+def test_range_dash_variants_expand(sample_no):  # F11
+    finding = _r24(_data(sample_no, "3"))
+
+    assert finding["status"] == "pass"
+    assert "样品编号=3" in finding["evidence"]
+    assert "样品数量 3 与样品编号" not in finding["message"]
+
+
+@pytest.mark.parametrize(
     ("sample_no", "tables", "needle"),
     [
         ("TS24LXJ8A-01", None, "仅识别到 1 个样品编号"),
