@@ -26,6 +26,10 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F52 F51 只覆盖了 done→todo 的回退路径，漏掉「任务本来就在 todo、但次数已满」
+      （2026-11-08 实测：RA_PHOTO_SEQ 早就是 todo，attempts=3，但 revert_rejected 不返回它，
+       所以计数永远不清，仍然派不出去）
+      → 每轮先无条件检查：todo 任务若其 PR 已被验证拒绝，就重置次数
   F51 返工任务被 MAX_ATTEMPTS 卡死且静默（2026-11-08 实测：RA_PHOTO_SEQ attempts=3，
       台账 status=todo、依赖已满足，却不派单，日志只说"没有 todo 任务"）
       → 返工要重置 attempts；达到上限要进 blocked_reasons，不能悄悄吞掉
@@ -949,6 +953,21 @@ def run(dry_run: bool) -> int:
     busy = in_flight(api_tickets(), ids)
     awaiting = awaiting_merge(ids)
     dispatched = read_json(DISPATCHED, {})
+    # F52：只要任务的 PR 被验证拒绝，就重置派单次数——不依赖它是否刚被回退
+    rejected_now = rejected_prs()
+    if rejected_now:
+        for item in backlog.get("tasks") or []:
+            tid_now = str(item.get("id"))
+            if str(item.get("status")) != "todo":
+                continue
+            try:
+                pr_now = int(item.get("pr"))
+            except (TypeError, ValueError):
+                continue
+            if pr_now in rejected_now and (dispatched.get(tid_now) or {}).get("attempts"):
+                dispatched.pop(tid_now, None)
+                log(f"任务 {tid_now} 的 PR #{pr_now} 被验证拒绝，重置派单次数以便返工")
+
     task, reason = next_task(backlog, busy, dispatched, set(awaiting))
     if not task:
         if reason:
