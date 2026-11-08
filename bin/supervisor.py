@@ -26,6 +26,9 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F42 reconcile 不看验证结论：PR 合并就标 done，即使双人验证已判「拒绝」
+      （2026-11-08 实测：RA_STDVER 被验证拒绝并回退 todo，19:22 又被 reconcile 改回 done）
+      → 标 done 前先查该 PR 的验证状态，reject 的保持 todo 并记日志
   F30 漂移检测只覆盖目标机的 p0/，漏掉服务器自己的 bin/ → Supervisor 自身代码也会与 main 分叉
       机制：每轮把 bin/*.py 与 origin/main 比对并自动同步，**但同步前先做语法检查**，
       防止把写坏的文件同步上来把自己跑挂
@@ -168,15 +171,6 @@ def load_yaml(path: Path):
         return yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-
-
-def merged_subjects() -> list[str]:
-    """最近合并提交的标题，用于 F4 反查任务是否已完成。"""
-    try:
-        proc = git(["log", "-n", "80", "--pretty=%s"])
-        return proc.stdout.splitlines() if proc.returncode == 0 else []
-    except Exception:
-        return []
 
 
 def _ticket_rows() -> list[dict]:
@@ -334,6 +328,22 @@ def in_flight(tickets: list[dict], ids: set[str]) -> set[str]:
     return busy
 
 
+VERIFY_STATE = STATE / "verify.json"
+
+
+def rejected_prs() -> set[int]:
+    """F42：已被双人验证判「拒绝」的 PR。它们的任务不能算完成。"""
+    data = read_json(VERIFY_STATE, {})
+    rejected = set()
+    for pr, item in (data.get("verified") or {}).items():
+        if (item or {}).get("status") == "reject":
+            try:
+                rejected.add(int(pr))
+            except (TypeError, ValueError):
+                continue
+    return rejected
+
+
 def reconcile(backlog: dict) -> list[str]:
     """F4：工单完成 + PR 已合并 → 标 done。返回被改动的任务 id。
 
@@ -344,6 +354,7 @@ def reconcile(backlog: dict) -> list[str]:
     tickets = closed_completed()
     if not tickets:
         return []
+    rejected = rejected_prs()
     ids = task_ids(backlog)
     merged: dict[int, bool] = {}
     changed = []
@@ -361,6 +372,9 @@ def reconcile(backlog: dict) -> list[str]:
                 continue
             if pr not in merged:
                 merged[pr] = merge_commit_for(pr)
+            if pr in rejected:
+                log(f"任务 {tid} 的 PR #{pr} 验证未通过，保持 todo 待返工")
+                continue
             if merged[pr]:
                 task["status"] = "done"
                 task["pr"] = pr
