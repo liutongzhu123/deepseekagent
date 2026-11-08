@@ -28,6 +28,7 @@ from .standard_extract.conditions import apply_conditions
 from .standard_extract.formula import apply_formulas
 from .standard_extract.limits import apply_limits
 from .standard_extract.samples import apply_samples
+from .standard_extract.table_mapping import apply_table_mapping
 from .standard_extract.tables import apply_tables
 
 SCHEMA_VERSION = "standard-v0.1"
@@ -1468,6 +1469,7 @@ def parse_standard(
     formula_entries, formulas_summary = apply_formulas(items, line_meta)
     sample_entries, samples_summary = apply_samples(items, line_meta)
     table_entries, tables_summary = apply_tables(pdf_bytes, pages, items)
+    mapping_summary = apply_table_mapping(items, table_entries)
 
     if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
@@ -1517,6 +1519,7 @@ def parse_standard(
         **samples_summary,
         **formulas_summary,
         **tables_summary,
+        **mapping_summary,
     }
     if ocr:
         summary["ocr_pages"] = ocr.get("pages", len(pages))

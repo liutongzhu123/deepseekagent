@@ -81,7 +81,7 @@ def test_real_standard_limits_are_structured_and_traceable():
         _SAMPLE.read_bytes(), _SAMPLE.name, enable_ocr=False
     )
     assert result["summary"]["limits"] > 0
-    kinds = {"lower", "upper", "range", "tolerance"}
+    kinds = {"lower", "upper", "range", "tolerance", "value"}
     seen = set()
     for item in result["items"]:
         assert item["limits_status"] in {"extracted", "not_extracted"}
@@ -90,7 +90,7 @@ def test_real_standard_limits_are_structured_and_traceable():
             assert entry["clause"] == item["clause"]
             assert (
                 entry["lower"] is not None or entry["upper"] is not None
-                or entry["tolerance"] is not None
+                or entry["tolerance"] is not None or entry["value"] is not None
             )
             seen.add(entry["kind"])
     assert {"upper", "lower", "range"} <= seen
