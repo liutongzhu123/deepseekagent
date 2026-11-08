@@ -1,0 +1,9 @@
+# 用章合理性规则（RA-1.10 / RA-4.6）：客户答复“用章无标准，预留规则”，默认关闭。
+# 印章框单位 mm，原点页面左上角，由 OCR/视觉层提供。
+enabled: false
+tolerance_mm: 6.0        # 印章中心相对期望位置的最大偏移
+overlap_ratio: 0.15      # 印章覆盖签字/认证标志面积占比上限
+english_forbidden: [CMA章]
+types: {YF: {required: [实验室章], allowed: [实验室章], forbidden: [CMA章, CNAS章]}, QA: {}, ZY: {}, ZW: {}}  # YF 仅实验室章
+# 按类型配置 expected（期望位置）和 protected（不得遮挡的签字/认证标志区域），示例：
+#   YF: {expected: [{type: 实验室章, page: 1, bbox: [10, 20, 40, 50]}], protected: [{name: 批准人签字, page: 1, bbox: [50, 60, 90, 70]}]}

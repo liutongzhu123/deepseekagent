@@ -286,11 +286,12 @@ tasks:
 
   - id: RA_SEAL
     title: 用章合理性检查
-    status: todo
+    status: done
+    pr: 142
     size: M
     covers: [RA-1.10, RA-4.6]
     acceptance: ["YF/QA/ZY/ZW 规则可配置", "印章位置与遮挡判定"]
-    files: [p0/app/seal_rules.py]
+    files: [p0/app/seal_rules.py, p0/config/seal_rules.yaml, p0/tests/test_seal_rules.py]
     note: 客户回复「用章无标准，预留规则」
 
   - id: RA_TIME
