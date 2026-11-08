@@ -14,6 +14,9 @@
   F35 验证消息发不出去 → 记 failed，不静默丢
   F36 同一个 PR 因为合并提交和分支提交都带 #号被算两次 → 按 PR 号去重
   F37 首次运行会把历史 PR 全验一遍（几十个任务） → 建立基线，只验基线之后的
+  F38 只派验证任务、却不回收结论 → 状态永远是 dispatched，等于没验证
+      方案：从飞书消息里回收「结论：通过/拒绝」，写进状态
+  F39 agent 判「通过」的结论不能直接信 → 标记为待人工/他模型复核（B 方案）
 
 用法：
     python3 bin/verify.py scan           # 找出需要验证的新合并 PR 并派验证任务
@@ -179,6 +182,98 @@ def verify_prompt(pr: int, subject: str, files: list[str]) -> str:
 """
 
 
+def feishu_recent(limit: int = 15) -> list[dict]:
+    env = {**os.environ, "HOME": "/home/dshadmin",
+           "LARKSUITE_CLI_CONFIG_DIR": "/home/dshadmin/.lark-cli-yunan-bot"}
+    try:
+        proc = subprocess.run(["/opt/dsh-agent/tools/node_modules/.bin/lark-cli",
+                               "im", "+chat-messages-list", "--chat-id", CHAT_ID,
+                               "--page-size", str(limit), "--order", "desc"],
+                              capture_output=True, text=True, timeout=60, env=env)
+    except Exception:
+        return []
+    raw = proc.stdout
+    start = raw.find("{")
+    if start < 0:
+        return []
+    try:
+        payload = json.loads(raw[start:])
+    except json.JSONDecodeError:
+        return []
+    return ((payload.get("data") or {}).get("messages")) or []
+
+
+PR_REF_RE = re.compile(r"#(\d{2,4})")
+
+
+def collect(dry_run: bool = False) -> int:
+    """F38：把 agent 的验证结论从飞书消息里收回来。"""
+    state = read_state()
+    verified = state.get("verified") or {}
+    updated = 0
+    for message in feishu_recent():
+        sender = (message.get("sender") or {}).get("sender_type") or ""
+        if sender != "app":
+            continue
+        text = message.get("content") or ""
+        verdict = verdict_of(text)
+        if verdict == "unverified":
+            continue
+        match = PR_REF_RE.search(text)
+        if not match:
+            continue
+        pr = match.group(1)
+        entry = verified.get(pr) or {}
+        if entry.get("status") in ("pass", "reject"):
+            continue
+        entry.update({
+            "status": verdict,
+            "verdict_at": message.get("create_time") or now().isoformat(timespec="seconds"),
+            # F39：通过也要人来复核——同模型的盲区是共享的
+            "review": "pending" if verdict == "pass" else "confirmed",
+            "evidence": text[:400],
+        })
+        verified[pr] = entry
+        updated += 1
+        log(f"{'[dry-run] ' if dry_run else ''}回收验证结论 PR #{pr} = {verdict}")
+    if updated and not dry_run:
+        state["verified"] = verified
+        write_state(state)
+    return updated
+
+
+def pending_review() -> list[dict]:
+    """F39：等复核的项（agent 判通过、但我还没看过的）。"""
+    state = read_state()
+    items = []
+    for pr, item in (state.get("verified") or {}).items():
+        if item.get("status") == "pass" and item.get("review") == "pending":
+            items.append({"pr": int(pr), **item})
+    return sorted(items, key=lambda x: x.get("verdict_at") or "")
+
+
+def mark_reviewed(pr: int, verdict: str, note: str = "") -> bool:
+    """记录人工/他模型复核结论：ok 或 overturn（推翻）。"""
+    if verdict not in ("ok", "overturn"):
+        print("复核结论只能是 ok 或 overturn")
+        return False
+    state = read_state()
+    entry = (state.get("verified") or {}).get(str(pr))
+    if not entry:
+        print(f"没有 PR #{pr} 的验证记录")
+        return False
+    entry["review"] = verdict
+    entry["reviewed_at"] = now().isoformat(timespec="seconds")
+    if note:
+        entry["review_note"] = note
+    if verdict == "overturn":
+        entry["status"] = "reject"
+    state["verified"][str(pr)] = entry
+    write_state(state)
+    log(f"复核 PR #{pr}：{verdict}{(' — ' + note) if note else ''}")
+    return True
+
+
 def scan(dry_run: bool) -> int:
     state = read_state()
     verified = state.get("verified") or {}
@@ -242,11 +337,30 @@ def status() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["scan", "status"])
+    parser.add_argument("command", choices=["scan", "status", "collect", "pending", "review"])
+    parser.add_argument("--pr", type=int)
+    parser.add_argument("--verdict", choices=["ok", "overturn"])
+    parser.add_argument("--note", default="")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    return scan(args.dry_run) if args.command == "scan" else status()
+    if args.command == "scan":
+        return scan(args.dry_run)
+    if args.command == "collect":
+        return collect(args.dry_run)
+    if args.command == "pending":
+        items = pending_review()
+        if not items:
+            print("没有待复核项")
+        for item in items:
+            print(f"  #{item['pr']}  判定通过于 {item.get('verdict_at','')}  证据：{item.get('evidence','')[:80]}")
+        return 0
+    if args.command == "review":
+        if not args.pr or not args.verdict:
+            print("用法：verify.py review --pr 123 --verdict ok|overturn --note ...")
+            return 2
+        return 0 if mark_reviewed(args.pr, args.verdict, args.note) else 1
+    return status()
 
 
 if __name__ == "__main__":
