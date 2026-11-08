@@ -328,8 +328,8 @@ tasks:
 
   - id: RA_STDVER
     title: 检测依据标准年代号检查
-    status: done
-    note: 验证 #149 拒绝：①`Q/JLY J7110109C` 缺年代号未报出（token 识别不到字母开头的编号）②`GB/T 1037-2021：xxx` 冒号被吞进 token 导致误报格式不合法
+    status: todo
+    note: 验证#149 拒绝：Q/JLY J7110109C 缺年代号未报出；GB/T 1037-2021：冒号被吞误报（修复见 #164）
     pr: 149
     size: S
     covers: [RA-4.15]
@@ -339,34 +339,34 @@ tasks:
 
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
-    status: done
+    status: todo
     pr: 151
     size: M
     deps: [VIS]
     covers: [RA-4.16, RA-4.17]
     acceptance: ["照片序号连续", "缺前/中/后能报出"]
     files: [p0/app/visual_checks.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_photo_sequence.py, docs/report-format-checks/README.md]
-    note: BYD 12 份草稿题注序号 12/12 连续、0 误报；无 word/media，R23 12/12 skip；缺前/中/后由合成用例覆盖，完整性待客户 D3
+    note: 验证#151 拒绝：正文「随报告附照片2张」被当题注；分项缺前/中/后未抓到
 
   - id: RA_TEMPLATE
     title: 主机厂模板正确性（吉利/比亚迪等）
-    status: done
+    status: todo
     pr: 153
     size: M
     covers: [RA-4.18]
     acceptance: ["按主机厂识别模板", "错用模板能报出"]
     files: [p0/app/template_rules.py, p0/app/docx_parser.py, p0/app/rules.py, p0/config/templates/oems.yaml, p0/config/templates/byd_odor.yaml, p0/tests/test_template_rules.py, docs/report-format-checks/README.md]
-    note: BYD 12 份草稿 R11 12/12 pass（OTS 6/摸底 6）；吉利内容已识别但模板待 D2，R11 skip 不冒充 pass；错用/冲突/多标记由合成用例覆盖
+    note: 验证#153 拒绝：封面含 Q/BYDQ 标准号时，错用模板判成 skip
 
   - id: RA_SAMPLENO
     title: 样品编号连续性与重复性
-    status: done
+    status: todo
     pr: 154
     size: S
     covers: [RA-5.4, RA-1.8]
     acceptance: ["编号断号/重复能报出"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_format_sample_numbers.py, docs/report-format-checks/README.md]
-    note: BYD 12 份草稿各仅 1 个样品编号 → R24 12/12 skip、0 误报；断号/重复/范围/数量不符由 16 条合成用例覆盖
+    note: 验证#154 拒绝：全角「－」范围符导致数量与编号对应误判
 
   # ========== 待做：智能客服（尚未开始） ==========
   - id: CS_BASE
