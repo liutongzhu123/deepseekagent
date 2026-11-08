@@ -168,6 +168,20 @@ def test_f35_send_failure_recorded(monkeypatch):
     assert ver.read_state is not None
 
 
+def test_f49_collect_keeps_existing_review(monkeypatch):
+    """F49：重复回收不能把已复核（ok/overturn）的结论冲掉。"""
+    store = {"verified": {"201": {"status": "dispatched", "review": "ok"}}}
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: None)
+    monkeypatch.setattr(ver, "feishu_recent", lambda limit=40: [
+        {"sender": {"sender_type": "app"}, "create_time": "2026-11-08 21:50",
+         "content": "验证 #201：通过\n证据：xx"}])
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+    ver.collect(dry_run=False)
+    assert store["verified"]["201"]["status"] == "pass"
+    assert store["verified"]["201"]["review"] == "ok", "已复核的不能被重置成 pending"
+
+
 def test_f38_collect_reads_verdict(monkeypatch):
     """F38：从飞书消息里回收验证结论，状态不能永远停在 dispatched。"""
     store = {"verified": {"201": {"status": "dispatched"}}, "baseline_at": "x"}
