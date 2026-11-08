@@ -17,6 +17,8 @@
   F12 待合并 PR 越积越多没人管 → 超阈值或等待过久要催办，不能默默换下一个任务
   F13 人对决策的答复没人读 → 每轮扫飞书，把 `DEC-00x` + 选项记进决策表并恢复原任务
   F14 agent 要人拍板时不登记 → 扫 agent 消息里的 `[DEC-00x]` 区块，自动建决策（幂等）
+  F15 已合并的 PR 被反复催办 → 以 GitHub 的 PR state 为准，不信可能过期的本地 git log
+  F16 催办没有冷却，每 2 分钟刷一次 → `_last_nag_at` 必须持久化（曾被自己的写入覆盖掉）
       （2026-11-08 真实发生：#137/#138 交付后被丢下，agent 直接去做了 B10）
 
 用法：
@@ -209,10 +211,27 @@ def closed_completed() -> list[dict]:
     return result
 
 
+def pr_state(pr: int | None) -> str:
+    """PR 的真实状态（F15）。以 GitHub 为准，本地 git log 可能没拉最新。"""
+    if not pr:
+        return "UNKNOWN"
+    try:
+        proc = subprocess.run(["gh-agent", "pr", "view", str(pr), "--repo",
+                               "liutongzhu123/deepseekagent", "--json", "state", "--jq", ".state"],
+                              capture_output=True, text=True, timeout=30,
+                              env={**os.environ, "HOME": "/home/dshadmin"})
+        return (proc.stdout or "").strip() or "UNKNOWN"
+    except Exception:
+        return "UNKNOWN"
+
+
 def merge_commit_for(pr: int | None) -> bool:
-    """PR 是否已经合并进 main（用合并提交号确认，不信"工单说完成了"）。"""
+    """PR 是否已合并：先查 GitHub 状态，查不到再退回本地合并提交。"""
     if not pr:
         return False
+    state = pr_state(pr)
+    if state in ("MERGED", "OPEN", "CLOSED"):
+        return state == "MERGED"
     try:
         proc = git(["log", "-n", "200", "--pretty=%s"])
         return proc.returncode == 0 and any(f"#{pr}" in line for line in proc.stdout.splitlines())
@@ -351,6 +370,8 @@ def nag_pending(waiting: dict[str, int], dry_run: bool) -> None:
     for tid, pr in waiting.items():
         previous = state.get(tid) or {}
         tracked[tid] = {"pr": pr, "since": previous.get("since") or now_iso}
+    if state.get("_last_nag_at"):          # F16：先继承冷却时间戳，别被下面的写入抹掉
+        tracked["_last_nag_at"] = state["_last_nag_at"]
     if not dry_run:
         write_json(AWAITING_STATE, tracked)
     if not tracked:
@@ -358,6 +379,8 @@ def nag_pending(waiting: dict[str, int], dry_run: bool) -> None:
 
     ages = {}
     for tid, info in tracked.items():
+        if tid.startswith("_"):      # 跳过 _last_nag_at 这类元字段
+            continue
         created = pr_created_at(info["pr"])
         if created:
             ages[tid] = max(0.0, (now() - created).total_seconds())
@@ -369,7 +392,8 @@ def nag_pending(waiting: dict[str, int], dry_run: bool) -> None:
                 ages[tid] = 0
 
     overdue = {tid: age for tid, age in ages.items() if age >= NAG_AFTER_SECONDS}
-    if len(tracked) < NAG_MIN_COUNT and not overdue:
+    real_count = len([t for t in tracked if not t.startswith("_")])
+    if real_count < NAG_MIN_COUNT and not overdue:
         return
 
     last = state.get("_last_nag_at")
@@ -380,8 +404,10 @@ def nag_pending(waiting: dict[str, int], dry_run: bool) -> None:
         except Exception:
             pass
 
-    lines = [f"{AGENT_AT} 【催办】有 {len(tracked)} 个 PR 已交付但还没合并", ""]
+    lines = [f"{AGENT_AT} 【催办】有 {real_count} 个 PR 已交付但还没合并", ""]
     for tid, info in tracked.items():
+        if tid.startswith("_"):
+            continue
         minutes = int(ages[tid] // 60)
         lines.append(f"- {tid} → PR #{info['pr']}（已等 {minutes} 分钟）")
     lines += ["", "请按自合命令处理，并把 merge 返回和 `pr view --json state` 贴进汇报：",

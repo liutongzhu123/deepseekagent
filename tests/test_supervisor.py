@@ -442,6 +442,32 @@ def test_f14_then_reply_resumes(monkeypatch):
     assert store["decisions"][0]["answer"] == "B"
 
 
+def test_f15_merged_pr_not_awaiting(monkeypatch):
+    """F15：GitHub 说 MERGED 就不是待合并（本地 git log 过期会误判）。"""
+    monkeypatch.setattr(sup, "pr_state", lambda pr: "MERGED")
+    assert sup.merge_commit_for(104) is True
+    monkeypatch.setattr(sup, "pr_state", lambda pr: "OPEN")
+    assert sup.merge_commit_for(104) is False
+
+
+def test_f16_cooldown_survives_write(monkeypatch):
+    """F16：冷却时间戳必须持久化，否则每轮都催（曾每 4 分钟刷一次）。"""
+    recent = (datetime.now(TZ) - timedelta(seconds=60)).isoformat(timespec="seconds")
+    store = {"_last_nag_at": recent}
+    written = {}
+    sent = []
+
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, data: written.update(data))
+    monkeypatch.setattr(sup, "pr_created_at", lambda pr: datetime.now(TZ) - timedelta(hours=1))
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    sup.nag_pending({"T302": 104}, dry_run=False)
+    assert sent == [], "冷却期内不该催"
+    assert written.get("_last_nag_at") == recent, "冷却时间戳被写入覆盖掉了"
+
+
 def test_dispatch_message_contains_acceptance_and_protocol():
     text = sup.dispatch_message({
         "id": "B7", "title": "标准类型分类", "covers": ["SP-10.1"],
