@@ -249,7 +249,7 @@ def merge_commit_for(pr: int | None) -> bool:
 
 # ---------- 业务逻辑 ----------
 
-SELF_FILES = ("supervisor.py", "deploy.py", "decision.py", "budget.py", "heartbeat.py")
+SELF_FILES = ("supervisor.py", "deploy.py", "decision.py", "budget.py", "heartbeat.py", "verify.py")
 
 
 def _compiles(source: str) -> bool:
