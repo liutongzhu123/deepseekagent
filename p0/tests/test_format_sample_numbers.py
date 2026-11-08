@@ -108,6 +108,26 @@ def test_range_dash_variants_expand(sample_no):  # F11 / F12
     assert "样品数量 3 与样品编号" not in finding["message"]
 
 
+@pytest.mark.parametrize("dash", ["\u2010", "\u2011", "\ufe58", "\u2e3a"])
+def test_hyphen_variants_normalize_like_ascii(dash):  # F11
+    """Word/PDF 常见的少见连字符：与 ASCII 写法是同一编号，不能拆成两个前缀组。"""
+    dup = _r24(_data(f"TS24LXJ8A-01、TS24LXJ8A{dash}01"))
+    assert dup["status"] == "fail"
+    assert "编号重复：TS24LXJ8A-01（样品编号字段，2 次）" in dup["message"]
+
+    variant_table = [_table([["序号", "样品编号"],
+                             ["1", f"TS24LXJ8A{dash}01"],
+                             ["2", f"TS24LXJ8A{dash}02"]])]
+    dedupe = _r24(_data("TS24LXJ8A-01、TS24LXJ8A-02", "2", variant_table))
+    assert dedupe["status"] == "pass"
+    assert "样品编号=2" in dedupe["evidence"]
+    assert "编号出现=4" in dedupe["evidence"]
+
+    gap = _r24(_data(f"TS24LXJ8A-01、TS24LXJ8A{dash}03", "2"))
+    assert gap["status"] == "fail"
+    assert "编号断档：TS24LXJ8A- 缺 TS24LXJ8A-02" in gap["message"]
+
+
 def test_fullwidth_prefix_dedupes_across_field_and_table():
     finding = _r24(_data("TS24LXJ8A-01、TS24LXJ8A-02", "2", FULLWIDTH_PREFIX_TABLE))
 

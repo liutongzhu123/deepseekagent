@@ -691,9 +691,9 @@ def r22_standard_years(data: ReportData):
 # F8 样品数量可解析且与编号个数不一致 -> fail；XX/空/非数字 -> 不判数量。
 # F9 不同表/字段各自独立判重，跨表引用不报重复。
 # F10 纯数字长串（日期/流水号）不当编号序列，避免误报。
-# F11 全角/长横写法：NFKC 只把「－」折成 ASCII "-"，「—/–/−」等仍是自身；先统一
-#     折成 ASCII "-"，范围才可识别，同一编号的全角/半角写法也不会被当成两个
-#     （TS24LXJ8A-01－03 展开 3 个；…-01、…－01 判重）。
+# F11 全角/长横/连字符写法：NFKC 只把「－」折成 ASCII "-"，「—/–/−」与 Word 常见的
+#     U+2010/U+2011 等仍是自身；先 NFKC、再统一折成 ASCII "-"，范围才可识别，同一
+#     编号的不同横线写法也不会被当成两个（TS24LXJ8A-01－03 展开 3 个；…-01、…‐01 判重）。
 # F12 「－」同时可能是前缀分隔符（TS24LXJ8A－01）与范围符（01－03）。折成 "-" 后
 #     只在“左侧已是完整编号”时展开：左侧是纯数字，或左侧已含前缀分隔符（如
 #     TS24LXJ8A-01）；否则按前缀分隔符处理。这样 TS24－27 仍是 1 个编号
@@ -703,6 +703,7 @@ _SAMPLE_SPLIT = re.compile(r"[、,，;；\s]+")
 _SAMPLE_RANGE = re.compile(r"^(.+?)\s*(?:~|至)\s*(.+)$")
 _SAMPLE_DASHES = str.maketrans({
     "－": "-", "—": "-", "–": "-", "−": "-", "―": "-", "‒": "-",
+    "‐": "-", "‑": "-", "⸺": "-", "⸻": "-", "⁃": "-", "﹣": "-",
     "～": "~", "〜": "~",
 })
 _SAMPLE_NUMBER = re.compile(r"^(?P<prefix>.*[^0-9])?(?P<num>\d+)$")
@@ -754,8 +755,8 @@ def _expand_sample_range(part: str) -> list[str] | None:
 
 
 def _sample_norm(text: str) -> str:
-    """统一全角/长横写法后做 NFKC：范围符与前缀分隔符都先折成 ASCII "-"。"""
-    return unicodedata.normalize("NFKC", (text or "").translate(_SAMPLE_DASHES))
+    """先 NFKC 再统一横线：U+FE58 等要先归一成「—」才能被映射兜住。"""
+    return unicodedata.normalize("NFKC", text or "").translate(_SAMPLE_DASHES)
 
 
 def _sample_tokens(text: str) -> list[str]:
