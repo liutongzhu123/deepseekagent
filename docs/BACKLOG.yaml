@@ -256,7 +256,8 @@ tasks:
 
   - id: B10
     title: 拆解结果人工复核闭环
-    status: todo
+    pr: 139
+    status: done
     size: M
     deps: [B1, B2]
     covers: [SP-11.1, SP-11.2]
