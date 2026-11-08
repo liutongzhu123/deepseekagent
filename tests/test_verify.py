@@ -21,6 +21,16 @@ ver = load_verify()
 
 # ---------- F34：风险路径判定 ----------
 
+def test_f46_any_app_py_is_risky():
+    """F46：p0/app/ 下任何 .py 都算风险，不能靠白名单（新模块会漏）。"""
+    assert ver.is_risky(["p0/app/visual_checks.py"]) is True, "新模块也是规则代码"
+    assert ver.is_risky(["p0/app/typo_rules.py"]) is True
+    assert ver.is_risky(["p0/app/format_rules.py"]) is True
+    assert ver.is_risky(["docs/PLAN.md"]) is False
+    assert ver.is_risky(["p0/tests/test_x.py"]) is False, "纯测试改动不必二验"
+    assert ver.is_risky(["p0/app/main.py", "docs/x.md"]) is True
+
+
 def test_f34_risky_paths():
     assert ver.is_risky(["p0/app/standard_extract/limits.py"]) is True
     assert ver.is_risky(["p0/app/rules.py"]) is True
