@@ -518,6 +518,17 @@ def test_f41_reconcile_keeps_waiting(monkeypatch):
     assert ng["tasks"][0]["status"] == "waiting"
 
 
+def test_f48_reconcile_prefers_task_pr(monkeypatch):
+    """F48：台账里的 task.pr 比工单报告里的旧 PR 更权威。"""
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "RA_PHOTO_SEQ 照片序号", "pr": 151}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    monkeypatch.setattr(sup, "rejected_prs", lambda: {151})   # 旧 PR 被拒
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "doing", "pr": 167}])  # 新 PR 没被拒
+    assert sup.reconcile(ng) == ["RA_PHOTO_SEQ"], "应认新 PR #167 并标 done"
+    assert ng["tasks"][0]["status"] == "done"
+
+
 def test_f45_sync_task_pr_from_title(monkeypatch):
     """F45：返工 PR 标题带 [任务ID] → task.pr 更新为新 PR，旧拒绝不再拦着。"""
     monkeypatch.setattr(sup, "git", lambda args, timeout=120: type(
