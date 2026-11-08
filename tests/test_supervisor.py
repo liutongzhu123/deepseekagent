@@ -468,6 +468,32 @@ def test_f16_cooldown_survives_write(monkeypatch):
     assert written.get("_last_nag_at") == recent, "冷却时间戳被写入覆盖掉了"
 
 
+def test_f25_writes_status_back_to_file(tmp_path):
+    """F25：reconcile 改了内存后必须真正写回文件，否则 git 永远 nothing to commit。"""
+    path = tmp_path / "BACKLOG.yaml"
+    path.write_text(
+        "tasks:\n"
+        "  - id: B10\n"
+        "    title: 人工复核闭环\n"
+        "    status: doing\n"
+        "    size: M\n"
+        "  - id: B11\n"
+        "    status: todo\n", encoding="utf-8")
+
+    assert sup.set_task_status(path, "B10", "done", 144) is True
+    text = path.read_text(encoding="utf-8")
+    assert "status: done" in text
+    assert "pr: 144" in text
+    assert text.index("status: done") < text.index("id: B11"), "只能改 B10 那一段"
+    assert "status: todo" in text, "B11 不受影响"
+
+
+def test_f25_missing_task_returns_false(tmp_path):
+    path = tmp_path / "BACKLOG.yaml"
+    path.write_text("tasks:\n  - id: X\n    status: todo\n", encoding="utf-8")
+    assert sup.set_task_status(path, "NOPE", "done") is False
+
+
 def test_dispatch_message_contains_acceptance_and_protocol():
     text = sup.dispatch_message({
         "id": "B7", "title": "标准类型分类", "covers": ["SP-10.1"],
