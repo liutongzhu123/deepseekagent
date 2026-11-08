@@ -85,6 +85,35 @@ def test_pretreatment_and_missing_order_data():
     assert check_sample_order({"items": []}, {})["mismatches"] == []
 
 
+def test_unassigned_quantity_is_checked_against_order_total():
+    guide = build_sample_guide(
+        [_entry("quantity", clause="", item_clause="", value=5, unit="套", raw="5套样品")],
+        _ITEMS,
+    )
+    short = check_sample_order(guide, {"quantity": 1, "unit": "套"})
+    assert _codes(short) == ["quantity_short"]
+    assert short["mismatches"][0]["item_clause"] == ""
+    assert short["mismatches"][0]["item_name"] == "未归属要求"
+    assert check_sample_order(guide, {"quantity": 5, "unit": "套"})["mismatches"] == []
+
+
+def test_pretreatment_synonyms_are_reported():
+    guide = build_sample_guide(_samples(), _ITEMS)
+    for text in ("无需做预处理", "不需要做预处理", "无需进行预处理", "不用做预处理"):
+        assert _codes(check_sample_order(guide, {"pretreatment": text})) == [
+            "pretreatment_missing"
+        ], text
+    assert check_sample_order(guide, {"pretreatment": "23℃下放置 24h"})["mismatches"] == []
+
+
+def test_model_without_dimensions_is_not_a_size_mismatch():
+    guide = build_sample_guide(_samples(), _ITEMS)
+    for model in ("AX-50", "X100"):
+        result = check_sample_order(guide, {"model": model})
+        assert result["mismatches"] == [], model
+        assert result["checked"]["size"] == 0
+
+
 def test_sample_guide_api(tmp_path, monkeypatch):
     data = tmp_path / "standards"
     monkeypatch.setattr(standard_store, "DATA_DIR", data)
