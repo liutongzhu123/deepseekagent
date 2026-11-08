@@ -452,7 +452,8 @@ tasks:
 
   - id: INFRA_DECISION
     title: 决策登记与飞书回复解析
-    status: todo
+    status: done
+    pr: 140
     size: M
     deps: [INFRA_BACKLOG]
     acceptance: ["回归一句 DEC-003 C 能自动恢复原工单", "歧义回复不猜"]
@@ -460,7 +461,8 @@ tasks:
 
   - id: INFRA_SUPERVISOR
     title: Supervisor 常驻（服务器，每 2 分钟，心跳双看门狗）
-    status: todo
+    status: done
+    pr: 133
     size: L
     deps: [INFRA_BACKLOG, INFRA_DECISION]
     acceptance: ["Mac 关机仍能转", "延迟 ≤2 分钟", "心跳超时能告警"]
@@ -484,7 +486,8 @@ tasks:
 
   - id: INFRA_BUDGET
     title: Token 预算熔断
-    status: todo
+    status: done
+    pr: 133
     size: S
     deps: [INFRA_SUPERVISOR]
     acceptance: ["日 2000 万 / 月 4 亿", "80% 告警、100% 停止派新任务"]
