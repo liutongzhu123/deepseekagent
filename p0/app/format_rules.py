@@ -970,9 +970,123 @@ def r25_judge_consistency(data: ReportData):
     )
 
 
+# --- R27: 原始记录版本有效性（RA-4.7） -------------------------------------
+# 原始记录通过「检验依据」引用试验标准；引用过期版本号即“未使用最新有效版本”。
+# Failure branches (each covered in p0/tests/test_raw_record_version.py):
+# F1 未识别到检验依据字段 -> skip，不冒充 pass。
+# F2 检验依据里没有标准号 -> skip。
+# F3 引用的标准全部无年代号 -> skip（年代号缺失由 R22 负责，不重复判）。
+# F4 引用的标准均不在最新有效版本表 -> skip，无依据不臆断。
+# F5 引用版本早于已知最新版本 -> fail，逐条列出旧版本与最新版本。
+# F6 引用版本等于或晚于最新版本 -> pass（最新版本不报；晚于表内版本按已升版处理）。
+# F7 同一标准重复引用只报一次；旧、新版本同时出现时只报旧版本。
+# F8 多个标准混合（过期/最新/未收录）-> 只报过期项，未收录项只计数。
+# F9 全角/长横写法先按 R22 的归一化切分，同一版本不因横线写法重复或漏判。
+# F10 企业标准编号里的 4 位数字（A1901）不当年份，只认末尾 -YYYY/:YYYY。
+#
+# 最新有效版本表来源：客户当前 12 份 BYD 草稿与 records.xlsx 的检验依据（2026-11-08 基线）。
+# 只收录能从客户现行资料确认的版本；未收录标准不判，客户升版后在此更新一行即可。
+_RAW_RECORD_LATEST_VERSIONS = {
+    "Q/BYDQ-A1901.404": 2025,
+    "Q/BYDQ-A1901.1373": 2018,
+}
+_RAW_RECORD_LATEST = {re.sub(r"\s+", "", key): year for key, year in _RAW_RECORD_LATEST_VERSIONS.items()}
+
+
+def _standard_year(prefix: str, body: str) -> int | None:
+    """Return the 4-digit year at the end of a standard number, if any."""
+    body = (body or "").strip()
+    if prefix == "ASTM":
+        body = re.sub(r"e\d+$", "", body)
+    match = re.search(r"[-:](\d{4})$", body)
+    if match:
+        year = int(match.group(1))
+        return year if 1900 <= year <= 2099 else None
+    if prefix == "ASTM" and (match := re.search(r"-(\d{2})$", body)):
+        return 2000 + int(match.group(1))
+    return None
+
+
+def _standard_version_key(prefix: str, body: str) -> str:
+    """Normalise a standard number to ``prefix + number`` without its year."""
+    body = re.sub(r"e\d+$", "", (body or "").strip())
+    body = re.sub(r"[-:]\d{4}$", "", body)
+    if prefix == "ASTM":
+        body = re.sub(r"-\d{2}$", "", body)
+    return re.sub(r"\s+", "", f"{prefix}{body}")
+
+
+def _unique_tokens(tokens: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    seen: set[str] = set()
+    unique: list[tuple[str, str, str]] = []
+    for token, prefix, body in tokens:
+        if token not in seen:
+            seen.add(token)
+            unique.append((token, prefix, body))
+    return unique
+
+
+def r27_raw_record_version(data: ReportData):
+    title = "原始记录版本有效性"
+    basis = _basis_text(data)
+    if not basis:
+        return _finding("R27", title, "skip", "info", "未识别到检验依据（检测依据）字段，无法检查引用版本")
+    tokens = _unique_tokens(_standard_tokens(basis))
+    if not tokens:
+        return _finding(
+            "R27", title, "skip", "info", f"检验依据中未识别到标准号，无法检查版本：{basis[:60]}",
+            f"检验依据={basis[:80]}", section="检验依据", cell="版本号",
+        )
+    expired: list[str] = []
+    judged = 0
+    unknown: list[str] = []
+    no_year: list[str] = []
+    for token, prefix, body in tokens:
+        year = _standard_year(prefix, body)
+        if year is None:
+            no_year.append(token)
+            continue
+        latest = _RAW_RECORD_LATEST.get(_standard_version_key(prefix, body))
+        if latest is None:
+            unknown.append(token)
+            continue
+        judged += 1
+        if year < latest:
+            expired.append(f"{token}（最新 {latest}）")
+    evidence = (
+        f"检验依据={basis[:80]}; 引用标准={len(tokens)}; 可判定={judged}; "
+        f"过期={len(expired)}; 未收录={len(unknown)}; 无年代号={len(no_year)}"
+    )
+    if expired:
+        return _finding(
+            "R27", title, "fail", "medium",
+            f"原始记录引用了 {len(expired)} 个过期版本号：" + "；".join(expired[:6]),
+            evidence,
+            "按最新有效版本更新检验依据与原始记录中的标准版本号；客户升版后同步更新",
+            section="检验依据", cell="、".join(expired)[:80],
+        )
+    if judged:
+        message = f"引用的 {judged} 个标准版本均为最新有效版本"
+        if unknown:
+            message += f"（另有 {len(unknown)} 个标准未收录最新版本表，未判）"
+        return _finding("R27", title, "pass", "info", message, evidence, section="检验依据", cell="版本号")
+    if unknown:
+        return _finding(
+            "R27", title, "skip", "info",
+            f"引用的 {len(unknown)} 个标准均不在最新有效版本表，无法判断是否过期："
+            + "、".join(unknown[:4]),
+            evidence, section="检验依据", cell="版本号",
+        )
+    return _finding(
+        "R27", title, "skip", "info",
+        f"引用的 {len(no_year)} 个标准均无年代号，无法判断版本（缺年代号由 R22 报出）",
+        evidence, section="检验依据", cell="版本号",
+    )
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency, "R27": r27_raw_record_version}
