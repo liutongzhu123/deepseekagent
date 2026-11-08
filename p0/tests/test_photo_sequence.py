@@ -1,12 +1,10 @@
-"""RA-4.16 / RA-4.17: 附录照片序号与试验前/中/后完整性（R23）。
+"""RA-4.16 / RA-4.17: appendix photo numbering (R23), A12 v5.
 
-Rules: ``docs/report-format-checks/README.md`` A12 (2026-11-08 algorithm):
-split captions -> drop narrative -> series name -> per-series numbering ->
-unnamed-group completeness -> skip instead of fake pass.
-
-The 12 BYD drafts carry captions but no ``word/media`` photos, so the real
-sample only proves "numbering consecutive + completeness skipped".  The eight
-README cases below are the acceptance table, one test (or more) per row.
+``docs/report-format-checks/README.md`` A12 v5 is deliberately conservative:
+judge only a *standard caption* (one ``照片N`` on the line, series name owned
+or inherited), report only 照片0 / gap / duplicate, and skip every ambiguous
+form with a reason.  Each failure (F) and skip (S) scenario in the
+implementation header has at least one test here.
 """
 from __future__ import annotations
 
@@ -18,366 +16,315 @@ from app.docx_parser import ReportData, parse_docx
 from app.rules import RULES, audit_report
 
 APPENDIX = "附录A：照片"
-SAMPLE = Path("/opt/dsh-agent/samples/byd/ots-250717(1)__ots-250717__袋子-100L.docx")
-
-
-def _data(paragraphs: list[str], images: int = 3) -> ReportData:
-    return ReportData(file_name="photo.docx", paragraphs=paragraphs, embedded_images=images)
+SAMPLE_DIR = Path("/opt/dsh-agent/samples/byd")
 
 
 def _r23(paragraphs: list[str], images: int = 3) -> dict:
-    return _r23_from(_data(paragraphs, images))
+    data = ReportData(file_name="photo.docx", paragraphs=paragraphs, embedded_images=images)
+    return _r23_from(data)
 
 
 def _r23_from(data: ReportData) -> dict:
     return next(item for item in audit_report(data)["findings"] if item["rule_id"] == "R23")
 
 
-def _assert_no_number_issue(finding: dict) -> None:
-    assert finding["status"] != "fail", finding
-    assert "缺" not in finding["evidence"], finding
-    assert "重复" not in finding["evidence"], finding
-    assert "倒退" not in finding["evidence"], finding
+# ---------------------------------------------------------------------------
+# F1: 照片0 (N < 1) is the one failure the previous round missed.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("caption", ["照片0", "外包装照片0", "试验前照片0", "照片0 试验前"])
+def test_photo_zero_fails(caption):
+    finding = _r23([APPENDIX, caption])
+
+    assert finding["status"] == "fail"
+    assert "序号从 0 开始" in finding["evidence"]
+
+
+def test_photo_zero_fails_without_embedded_photos():
+    """Numbering is text-only: the zero failure survives no word/media photos."""
+    finding = _r23([APPENDIX, "外包装照片0"], images=0)
+
+    assert finding["status"] == "fail"
+    assert "序号从 0 开始" in finding["evidence"]
+
+
+def test_photo_zero_in_a_multi_caption_line_still_fails():
+    finding = _r23([APPENDIX, "外包装照片0、内包装照片1"])
+
+    assert finding["status"] == "fail"
+    assert "序号从 0 开始" in finding["evidence"]
 
 
 # ---------------------------------------------------------------------------
-# Case 1: body narrative is not a caption (step 2).
+# F2: a gap inside one group.
 # ---------------------------------------------------------------------------
 
-def test_case1_narrative_is_not_a_caption():
-    finding = _r23([APPENDIX, "随报告附照片2张。"])
-
-    assert finding["status"] == "skip"
-    assert "未识别到附录照片题注" in finding["message"]
-
-
-@pytest.mark.parametrize(
-    "narrative",
-    [
-        "随报告附照片2张。",
-        "随报告附照片2张",
-        "详见照片2张",
-        "见照片2张",
-        "照片2张",
-        "照片2页",
-        "照片2所示",
-        "照片2为外观",
-    ],
-)
-def test_case1_narrative_variants(narrative):
-    finding = _r23([APPENDIX, narrative])
-
-    assert finding["status"] == "skip"
-    assert "未识别到附录照片题注" in finding["message"]
-
-
-def test_case1_long_sentence_ending_with_full_stop():
-    narrative = "本报告附录内的全部照片均按检验项目顺序统一编号并附在报告末尾照片2。"
-    finding = _r23([APPENDIX, narrative])
-
-    assert len(narrative) > 20
-    assert finding["status"] == "skip"
-    assert "未识别到附录照片题注" in finding["message"]
-
-
-# ---------------------------------------------------------------------------
-# Case 2: a named sample caption is one single-photo group.
-# ---------------------------------------------------------------------------
-
-def test_case2_sample_series_single_caption():
-    finding = _r23([APPENDIX, "1号样品照片1"])
-
-    # Numbering is fine; no stage word anywhere -> completeness skips (step 6).
-    assert finding["status"] == "skip"
-    assert "题注=1; 有序号=1" in finding["evidence"]
-    _assert_no_number_issue(finding)
-    assert "1号样品" not in finding["evidence"]  # named group is never forced
-
-
-def test_case2_sample_series_passes_with_stages():
-    finding = _r23([
-        APPENDIX,
-        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
-        "1号样品照片1",
-    ])
-
-    assert finding["status"] == "pass"
-
-
-# ---------------------------------------------------------------------------
-# Case 3: two series on one line, each starts at 1 (step 1).
-# ---------------------------------------------------------------------------
-
-def test_case3_two_series_on_one_line():
-    finding = _r23([APPENDIX, "外包装照片1、内包装照片1"])
-
-    assert finding["status"] == "skip"  # no stage word anywhere (step 6)
-    assert "题注=2; 有序号=2" in finding["evidence"]
-    _assert_no_number_issue(finding)
-
-
-def test_case3_two_series_passes_with_stages():
-    finding = _r23([
-        APPENDIX,
-        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
-        "外包装照片1、内包装照片1",
-    ])
-
-    assert finding["status"] == "pass"
-
-
-# ---------------------------------------------------------------------------
-# Case 4: multi-series interleaving (the round-3 failure point).
-# ---------------------------------------------------------------------------
-
-INTERLEAVED = [
-    APPENDIX,
-    "外包装照片1、内包装照片1",
-    "外包装照片2、内包装照片2",
-]
-
-
-def test_case4_interleaved_series_have_no_number_gap():
-    finding = _r23(INTERLEAVED)
-
-    assert finding["status"] == "skip"  # no stage word anywhere (step 6)
-    assert "题注=4; 有序号=4" in finding["evidence"]
-    _assert_no_number_issue(finding)
-    assert "内包装" not in finding["evidence"]
-
-
-def test_case4_interleaved_series_passes_with_stages():
-    finding = _r23([
-        APPENDIX,
-        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
-        *INTERLEAVED[1:],
-    ])
-
-    assert finding["status"] == "pass"
-
-
-# ---------------------------------------------------------------------------
-# Case 5: naming variants must reach the same verdict.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "captions",
-    [
-        ["外观照片1、外观照片2", "分项2照片1、分项2照片2"],
-        ["外观照片1", "外观照片2", "分项2照片1", "分项2照片2"],
-    ],
-)
-def test_case5_named_variants_same_verdict(captions):
-    finding = _r23([APPENDIX, *captions])
-
-    assert finding["status"] == "skip"  # no stage word anywhere (step 6)
-    assert "题注=4; 有序号=4" in finding["evidence"]
-    _assert_no_number_issue(finding)
-
-
-def test_case5_named_variants_pass_with_stages():
-    finding = _r23([
-        APPENDIX,
-        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
-        "外观照片1、外观照片2", "分项2照片1、分项2照片2",
-    ])
-
-    assert finding["status"] == "pass"
-
-
-def test_named_series_with_stage_captions_is_not_forced():
-    """A prefix that names its own group may carry stages; they stay its own."""
-    finding = _r23([
-        APPENDIX,
-        "分项1照片1", "分项1照片2", "分项1试验前照片", "分项1试验中照片", "分项1试验后照片",
-        "分项2照片1", "分项2照片2",
-    ])
-
-    assert finding["status"] == "pass"
-
-
-# ---------------------------------------------------------------------------
-# Case 6: a gap inside one named series fails.
-# ---------------------------------------------------------------------------
-
-def test_case6_gap_inside_one_series_fails():
+def test_gap_in_named_group_fails():
     finding = _r23([APPENDIX, "分项1照片1", "分项1照片3"])
 
     assert finding["status"] == "fail"
     assert "分项1 序号从 1 开始，缺 2" in finding["evidence"]
 
 
-# ---------------------------------------------------------------------------
-# Case 7: unnamed group completeness, gated by "any stage word in the report".
-# ---------------------------------------------------------------------------
-
-def test_case7_unnamed_group_missing_stages_fails():
-    finding = _r23([
-        APPENDIX,
-        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
-        "分项2：外观试验", "照片1、照片2",
-    ])
+def test_group_starting_above_one_fails():
+    finding = _r23([APPENDIX, "照片2", "照片3"])
 
     assert finding["status"] == "fail"
-    assert "分项2：外观试验 缺试验前、试验中、试验后照片" in finding["evidence"]
+    assert "序号从 2 开始，缺 1" in finding["evidence"]
 
 
-def test_case7_without_any_stage_word_skips():
-    """Two-level gate: no stage word anywhere -> skip, not fail (README step 6)."""
-    finding = _r23([APPENDIX, "分项2：外观试验", "照片1、照片2"])
+def test_multiple_missing_numbers_are_listed():
+    finding = _r23([APPENDIX, "外包装照片1", "外包装照片4"])
 
-    assert finding["status"] == "skip"
-    assert "未标注试验前/中/后" in finding["message"]
+    assert finding["status"] == "fail"
+    assert "外包装 序号从 1 开始，缺 2、3" in finding["evidence"]
 
 
 # ---------------------------------------------------------------------------
-# Case 8: the stage is an attribute, not part of the series name.
+# F3: a duplicate inside one group.
 # ---------------------------------------------------------------------------
 
-def test_case8_stages_do_not_split_the_series():
-    finding = _r23([APPENDIX, "试验前照片1、试验中照片2、试验后照片3"])
+def test_duplicate_number_fails():
+    finding = _r23([APPENDIX, "外包装照片1", "外包装照片2", "外包装照片2"])
 
+    assert finding["status"] == "fail"
+    assert "外包装 序号重复" in finding["evidence"]
+
+
+def test_duplicate_without_embedded_photos_still_fails():
+    finding = _r23([APPENDIX, "照片1", "照片1"], images=0)
+
+    assert finding["status"] == "fail"
+    assert "序号重复" in finding["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# Standard captions: only these are judged (pass when everything lines up).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("caption", [
+    "外包装照片1",          # named series
+    "照片1",                # inherits 附录A：照片
+    "试验前照片1",          # stage before the photo word
+    "照片1 试验前",         # stage after the number
+    "分项2照片1（外观）",   # prefix wins over the annotation
+    "照片1（外观）",        # annotation is the series only without a prefix
+])
+def test_standard_caption_forms_are_judged(caption):
+    finding = _r23([APPENDIX, caption])
+
+    # The caption itself was judged (the difference from the five skipped
+    # forms below); the stage gate may still make the final status skip/pass.
+    assert finding["status"] != "fail"
+    assert "标准题注=1" in finding["evidence"]
+    assert "跳过=" not in finding["evidence"]
+
+
+def test_standard_sequence_passes():
+    finding = _r23([APPENDIX, "试验前照片1", "试验中照片2", "试验后照片3"])
+
+    assert ("R23", "附录照片完整性", "附录照片序号连续（只判一行一个标准题注；试验前/中/后完整性暂不自动判定）") in RULES
     assert finding["status"] == "pass"
-    assert "1 组照片均含试验前/中/后" in finding["message"]
+    assert finding["location"]["section"] == "附录照片"
+    assert "标准题注=3" in finding["evidence"]
 
 
-# ---------------------------------------------------------------------------
-# Boundary cases found while implementing the six steps.
-# ---------------------------------------------------------------------------
-
-def test_transposed_table_interleaving_has_no_false_gap():
-    """A1,B1,C1 / A2,B2,C2 / A3,B3,C3 must be per-series, not a global run."""
+def test_named_stage_attributes_pass():
     finding = _r23([
         APPENDIX,
-        "外包装照片1、内包装照片1、样品照片1",
-        "外包装照片2、内包装照片2、样品照片2",
-        "外包装照片3、内包装照片3、样品照片3",
+        "分项1试验前照片1", "分项1试验中照片2", "分项1试验后照片3",
     ])
 
-    assert finding["status"] == "skip"  # no stage word anywhere (step 6)
-    assert "题注=9; 有序号=9" in finding["evidence"]
-    _assert_no_number_issue(finding)
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+
+
+def test_bare_stage_attributes_pass():
+    finding = _r23([APPENDIX, "前照片1", "中照片2", "后照片3"])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
 
 
 def test_normalisation_keeps_one_group():
-    """Spaces / full-width / 的 / 共 must not split the same series name."""
-    finding = _r23([APPENDIX, "外包装照片1", "外包装 照片2", "外包装的照片3", "外包装共照片4"])
-
-    assert finding["status"] == "skip"
-    assert "题注=4; 有序号=4" in finding["evidence"]
-    _assert_no_number_issue(finding)
-
-
-def test_fullwidth_numbers_still_count():
-    finding = _r23([APPENDIX, "外包装照片１", "外包装照片２"])
-
-    assert finding["status"] == "skip"
-    assert "题注=2; 有序号=2" in finding["evidence"]
-    _assert_no_number_issue(finding)
-
-
-def test_annotation_is_series_only_without_a_prefix():
-    finding = _r23([APPENDIX, "照片1（外观）、照片2（外观）"])
-    assert finding["status"] == "skip"
-    assert "题注=2; 有序号=2" in finding["evidence"]
-    _assert_no_number_issue(finding)
-
-    finding = _r23([APPENDIX, "外包装照片1（局部）、内包装照片1"])
-    assert finding["status"] == "skip"
-    assert "题注=2; 有序号=2" in finding["evidence"]
-    _assert_no_number_issue(finding)
-
-
-def test_unnamed_group_follows_the_nearest_heading():
-    """Each heading starts its own unnamed group; a global run would see 1,2,1,2."""
+    """Spaces / 的 / 共 / full-width digits must not split the same series."""
     finding = _r23([
         APPENDIX,
-        "分项1：气味试验", "照片1", "照片2",
-        "分项2：外观试验", "照片1", "照片2",
+        "外包装照片1", "外包装 照片2", "外包装的照片3", "外包装共照片４",
     ])
 
+    assert finding["status"] == "skip"  # no stage word: correctness gate only
+    assert "标准题注=4" in finding["evidence"]
+    assert "缺" not in finding["evidence"]
+
+
+def test_omitted_second_photo_word_only_counts_first():
+    """README-known limitation: ``照片1、2`` only recognises the first number."""
+    finding = _r23([APPENDIX, "照片1、2"])
+
+    assert finding["status"] != "fail"
+    assert "标准题注=1" in finding["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# S1: two or more 照片N on one line -> skip, never split.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line", [
+    "外包装照片1、内包装照片1",
+    "照片1 试验前、照片2 试验中、照片3 试验后",
+    "外包装照片1、内包装照片1、外包装照片2",
+])
+def test_multi_caption_line_skips(line):
+    finding = _r23([APPENDIX, line])
+
     assert finding["status"] == "skip"
-    assert "题注=4; 有序号=4" in finding["evidence"]
-    _assert_no_number_issue(finding)
+    assert "一行多个照片N" in finding["evidence"]
+    assert "缺" not in finding["evidence"]
+    assert "重复" not in finding["evidence"]
 
 
-def test_numbering_fail_is_kept_without_embedded_photos():
-    """Step 6 skips completeness but keeps the numbering conclusion (F18)."""
-    finding = _r23([APPENDIX, "照片1", "照片3"], images=0)
+def test_multi_line_does_not_create_a_false_gap():
+    """外包装照片1 lives in the skipped line; it must not make 外包装照片2 a gap."""
+    finding = _r23([APPENDIX, "外包装照片1、内包装照片1", "外包装照片2"])
 
-    assert finding["status"] == "fail"
-    assert "缺 2" in finding["evidence"]
+    assert finding["status"] == "skip"
+    assert "缺" not in finding["evidence"]
+    assert "跳过=一行多个照片N" in finding["evidence"]
 
+
+# ---------------------------------------------------------------------------
+# S2: list-style numbering without the photo word -> skip.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line", ["1、2、3", "1, 2, 3", "1；2；3"])
+def test_list_sequence_skips(line):
+    finding = _r23([APPENDIX, line])
+
+    assert finding["status"] == "skip"
+    assert "列表型序号题注" in finding["evidence"]
+
+
+def test_decimal_value_is_not_a_list_sequence():
+    """``4.0`` is a measurement, not a caption list (real-draft regression)."""
+    finding = _r23([APPENDIX, "4.0"])
+
+    assert finding["status"] == "skip"
+    assert "列表型序号题注" not in finding["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# S3: a number that is not a pure digit -> skip.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("line", ["照片一", "照片A", "外包装照片A"])
+def test_non_numeric_number_skips(line):
+    finding = _r23([APPENDIX, line])
+
+    assert finding["status"] == "skip"
+    assert "序号不是纯数字" in finding["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# S4: no series name and no heading -> grouping unreliable, skip.
+# ---------------------------------------------------------------------------
+
+def test_undetermined_group_skips():
+    finding = _r23(["照片1", "照片2"])
+
+    assert finding["status"] == "skip"
+    assert "无法确定分组" in finding["evidence"]
+
+
+def test_named_caption_needs_no_heading():
+    finding = _r23(["外包装照片1"])
+
+    assert finding["status"] == "skip"  # no stage word, but grouping was known
+    assert "标准题注=1" in finding["evidence"]
+    assert "跳过=" not in finding["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# S5: no embedded photo / no stage word anywhere -> skip.
+# ---------------------------------------------------------------------------
 
 def test_no_embedded_photo_skips_after_numbering():
     finding = _r23([APPENDIX, "外包装照片1", "外包装照片2"], images=0)
 
     assert finding["status"] == "skip"
     assert "未嵌入照片" in finding["message"]
+    assert "标准题注=2" in finding["evidence"]
 
 
-def test_no_stage_word_anywhere_skips_completeness():
+def test_no_stage_word_anywhere_skips():
     finding = _r23([APPENDIX, "外包装照片1", "外包装照片2"])
 
     assert finding["status"] == "skip"
     assert "未标注试验前/中/后" in finding["message"]
 
 
-def test_sampling_after_is_not_test_after():
-    finding = _r23([APPENDIX, "试验前照片", "试验中照片", "取样后照片"])
+# ---------------------------------------------------------------------------
+# S6/S7: narrative is not a caption; no caption never becomes pass.
+# ---------------------------------------------------------------------------
 
-    assert finding["status"] == "fail"
-    assert "缺试验后照片" in finding["evidence"]
-
-
-def test_photo_width_is_not_a_caption():
-    finding = _r23([APPENDIX, "照片宽5cm"])
+@pytest.mark.parametrize("line", [
+    "随报告附照片2张。",
+    "详见照片2张",
+    "见照片2张",
+    "照片2所示",
+    "照片2为外观",
+    "照片宽5cm",
+])
+def test_narrative_or_non_caption_skips(line):
+    finding = _r23([APPENDIX, line])
 
     assert finding["status"] == "skip"
     assert "未识别到附录照片题注" in finding["message"]
 
 
-def test_duplicate_number_in_one_series_fails():
-    finding = _r23([APPENDIX, "外包装照片1、外包装照片2、外包装照片2"])
-
-    assert finding["status"] == "fail"
-    assert "外包装 序号 2 重复" in finding["evidence"]
-
-
-def test_backwards_number_fails():
-    finding = _r23([APPENDIX, "照片1", "照片3", "照片2"])
-
-    assert finding["status"] == "fail"
-    assert "倒退" in finding["evidence"]
-
-
-def test_group_starting_above_one_fails():
-    finding = _r23([APPENDIX, "照片2", "照片3"])
-
-    assert finding["status"] == "fail"
-    assert "从 2 开始，缺 1" in finding["evidence"]
-
-
-def test_repeated_one_in_one_group_is_a_duplicate():
-    """A12 removed the old "回到 1 = 新开一组" rule: one group must be 1..N."""
-    finding = _r23([APPENDIX, "照片1 试验前", "照片2 试验中", "照片1 试验后"])
-
-    assert finding["status"] == "fail"
-    assert "重复" in finding["evidence"] or "倒退" in finding["evidence"]
-
-
-def test_complete_sequence_passes():
-    finding = _r23([APPENDIX, "外包装照片1", "外包装照片2", "试验前照片", "试验中照片", "试验后照片"])
-
-    assert ("R23", "附录照片完整性", "附录照片序号连续，且每个检验项目含试验前/中/后照片") in RULES
-    assert finding["status"] == "pass"
-    assert finding["location"]["section"] == "附录照片"
-    assert finding["evidence"] == "题注=5; 有序号=2; 阶段组=1; 嵌入图片=3"
-
-
-@pytest.mark.skipif(not SAMPLE.exists(), reason="customer sample not mounted")
-def test_real_draft_numbering_is_consecutive_but_completeness_skips():
-    finding = _r23_from(parse_docx(SAMPLE))
+def test_empty_appendix_skips():
+    finding = _r23([APPENDIX])
 
     assert finding["status"] == "skip"
-    assert "序号连续" in finding["message"] and "未嵌入照片" in finding["message"]
+    assert "未识别到附录照片题注" in finding["message"]
+
+
+# ---------------------------------------------------------------------------
+# Round-4 regressions that must now be skips, not failures.
+# ---------------------------------------------------------------------------
+
+def test_backwards_is_no_longer_a_failure():
+    finding = _r23([APPENDIX, "照片1", "照片3", "照片2"])
+
+    assert finding["status"] != "fail"
+    assert "倒退" not in finding["evidence"]
+
+
+def test_stage_names_do_not_create_a_completeness_failure():
+    finding = _r23([APPENDIX, "试验前照片1", "试验中照片2"])
+
+    # A12 v5 reports no stage-completeness failure; numbering {1,2} is fine.
+    assert finding["status"] != "fail"
+    assert "缺试验后" not in finding["evidence"]
+
+
+# ---------------------------------------------------------------------------
+# Real drafts: all 12 must still skip (no word/media photos).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(not SAMPLE_DIR.exists(), reason="customer samples not mounted")
+def test_twelve_real_drafts_still_skip():
+    samples = sorted(
+        path for path in SAMPLE_DIR.iterdir()
+        if path.suffix == ".docx" and not path.name.startswith("._")
+    )
+    assert len(samples) == 12
+
+    statuses = []
+    for path in samples:
+        finding = _r23_from(parse_docx(path))
+        statuses.append(finding["status"])
+        assert finding["status"] == "skip", path.name
+        assert "标准题注=9" in finding["evidence"], path.name
+        assert "嵌入图片=0" in finding["evidence"], path.name
+    assert statuses.count("skip") == 12
