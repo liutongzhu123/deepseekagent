@@ -26,6 +26,10 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F51 返工任务被 MAX_ATTEMPTS 卡死且静默（2026-11-08 实测：RA_PHOTO_SEQ attempts=3，
+      台账 status=todo、依赖已满足，却不派单，日志只说"没有 todo 任务"）
+      → 返工要重置 attempts；达到上限要进 blocked_reasons，不能悄悄吞掉
+  F50 拒绝日志每 2 分钟重复刷（状态没变也记）→ 只在 PR 变化时记一次
   F48 reconcile 用「工单报告里的 PR」判断拒绝，不认 task.pr
       （2026-11-08：F45 把 task.pr 指向返工 PR #167，reconcile 仍盯着旧 PR #151）
       → 有 task.pr 时优先用它
@@ -338,6 +342,7 @@ def in_flight(tickets: list[dict], ids: set[str]) -> set[str]:
 
 
 VERIFY_STATE = STATE / "verify.json"
+REJECT_LOG_STATE = STATE / "reject_logged.json"
 
 
 def rejected_prs() -> set[int]:
@@ -444,7 +449,12 @@ def reconcile(backlog: dict) -> list[str]:
             if pr not in merged:
                 merged[pr] = merge_commit_for(pr)
             if pr in rejected:
-                log(f"任务 {tid} 的 PR #{pr} 验证未通过，保持 todo 待返工")
+                # F50：只在"这个任务的拒绝 PR 变了"时记一次，别每 2 分钟刷屏
+                seen = read_json(REJECT_LOG_STATE, {})
+                if str(seen.get(tid)) != str(pr):
+                    log(f"任务 {tid} 的 PR #{pr} 验证未通过，保持 todo 待返工")
+                    seen[tid] = pr
+                    write_json(REJECT_LOG_STATE, seen)
                 continue
             if merged[pr]:
                 task["status"] = "done"
@@ -662,6 +672,8 @@ def next_task(backlog: dict, busy: set[str], dispatched: dict,
             if age < REDISPATCH_SECONDS:
                 continue  # 刚派过，还在等
         if attempts >= MAX_ATTEMPTS:
+            # F51：不能静默丢弃——要说清楚哪个任务卡住了
+            blocked_reasons.append(f"{tid} 已派 {attempts} 次未完成，等人工确认")
             continue
         return task, ""
     if blocked_reasons:
@@ -899,6 +911,11 @@ def run(dry_run: bool) -> int:
     if synced:
         log(f"任务 PR 号已更新：{', '.join(synced)}")
     reverted = revert_rejected(backlog)                # F44：先回退被拒绝的
+    if reverted:
+        # F51：返工是正常流程，不能被"最多 3 次"挡住
+        for tid in reverted:
+            dispatched.pop(tid, None)
+        write_json(DISPATCHED, dispatched)
     changed = reconcile(backlog)                       # 改的是内存
     if reverted:
         by_id2 = {str(t.get("id")): t for t in backlog.get("tasks") or []}
