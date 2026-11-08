@@ -10,6 +10,8 @@
   F21 目标机不可达 → 记录 unreachable，不改任何状态到"已部署"
   F22 两轮部署重叠 → 文件锁，抢不到锁直接退出
   F23 打包用的是工作区而不是目标 commit → 必须 `git archive <sha>`，否则可能部署旧代码
+  F40 目标机残留 macOS 元数据（._*）与 __pycache__ → 解析配置时崩，
+      导致部署后测试大面积失败并反复回滚。部署前后都要清理。
   F28 有人绕过部署器手工改目标机 → 代码与 main 分叉，下次部署会把它悄悄覆盖。
       机制：部署后记下目标机代码树的 manifest 指纹；每轮部署前先比对，
       不一致就记 drift 并强制重部署（**不再相信"上次部署成功"**）。
@@ -113,6 +115,23 @@ def needs_deploy(state: dict, sha: str | None) -> tuple[bool, str]:
     if state.get("deployed_sha") == sha and state.get("status") == "ok":
         return False, f"{sha[:8]} 已部署，跳过"
     return True, f"准备部署 {sha[:8]}"
+
+
+def clean_junk() -> None:
+    """F40：清理目标机上的 macOS 元数据与字节码缓存。
+
+    真实事故：/opt/cq-ai-p0 里累积了 282 个 ._* 文件（来自早期手工从 Mac 部署），
+    其中 config/templates/._byd_odor.yaml 让配置加载抛 UnicodeDecodeError，
+    177 个测试失败、部署连续回滚。
+    """
+    cmd = (f"cd {TARGET_DIR} && find . -name '._*' -delete 2>/dev/null; "
+           f"find . -name '.DS_Store' -delete 2>/dev/null; "
+           f"find . -name '__pycache__' -type d -prune -exec rm -rf {{}} + 2>/dev/null; "
+           f"echo cleaned")
+    try:
+        ssh(cmd, 120)
+    except Exception:
+        pass
 
 
 def deploy_payload(sha: str) -> bool:
@@ -255,6 +274,7 @@ def run(dry_run: bool) -> int:
         log("备份失败，放弃部署（没有回滚点不能动目标机）")
         return 0
 
+    clean_junk()                                                  # F40：先清残留再部署
     if not deploy_payload(sha):                                   # F20
         state.update({"status": "failed", "last_attempt_at": now().isoformat(timespec="seconds"),
                       "backup": backup})
@@ -262,6 +282,7 @@ def run(dry_run: bool) -> int:
         log("同步代码失败，状态记为 failed，下一轮重试")
         return 0
 
+    clean_junk()                                                  # F40：解压后再清一次
     ok, detail = restart_and_check()
     if not ok:
         restored = rollback(backup)
