@@ -518,6 +518,49 @@ def test_f41_reconcile_keeps_waiting(monkeypatch):
     assert ng["tasks"][0]["status"] == "waiting"
 
 
+def test_f51_max_attempts_is_reported(monkeypatch):
+    """F51：达到派单上限的任务必须出现在 blocked 原因里，不能静默消失。"""
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo"}])
+    dispatched = {"RA_PHOTO_SEQ": {"attempts": 3, "last_at": "2026-11-08T20:55:31+08:00"}}
+    task, reason = sup.next_task(ng, set(), dispatched, set())
+    assert task is None
+    assert "RA_PHOTO_SEQ" in reason, "必须说清是哪个任务卡住了"
+    assert "3" in reason
+
+
+def test_f51_rework_resets_attempts(monkeypatch):
+    """F51：验证拒绝后返工，要重置派单次数，否则永远派不出去。"""
+    monkeypatch.setattr(sup, "rejected_prs", lambda: {167})
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "done", "pr": 167}])
+    reverted = sup.revert_rejected(ng)
+    assert reverted == ["RA_PHOTO_SEQ"]
+    dispatched = {"RA_PHOTO_SEQ": {"attempts": 3, "last_at": "2026-11-08T20:55:31+08:00"}}
+    for tid in reverted:
+        dispatched.pop(tid, None)
+    task, reason = sup.next_task(ng, set(), dispatched, set())
+    assert task is not None, "重置后必须能重新派单"
+
+
+def test_f50_reject_log_dedupe(monkeypatch):
+    """F50：同一任务的同一个拒绝 PR，只记一次日志。"""
+    logs = []
+    seen = {}
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "RA_PHOTO_SEQ 照片", "pr": 151}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    monkeypatch.setattr(sup, "rejected_prs", lambda: {151})
+    monkeypatch.setattr(sup, "read_json",
+                        lambda path, default: dict(seen) if "reject_logged" in str(path) else default)
+    monkeypatch.setattr(sup, "write_json",
+                        lambda path, data: seen.update(data) if "reject_logged" in str(path) else None)
+    monkeypatch.setattr(sup, "log", lambda msg, *a, **k: logs.append(msg))
+
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo", "pr": 151}])
+    sup.reconcile(ng)
+    sup.reconcile(ng)
+    sup.reconcile(ng)
+    assert len(logs) == 1, "重复轮次不该重复记日志"
+
+
 def test_f48_reconcile_prefers_task_pr(monkeypatch):
     """F48：台账里的 task.pr 比工单报告里的旧 PR 更权威。"""
     monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "RA_PHOTO_SEQ 照片序号", "pr": 151}])
