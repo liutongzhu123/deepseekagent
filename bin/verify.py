@@ -22,6 +22,8 @@
       → 只认 `Merge pull request #N` 这种权威合并提交
   F46 风险路径写成白名单，agent 新加的模块永远漏检（#167 改 visual_checks.py 被判"非风险"）
       → 按目录判定：p0/app/ 下任何 .py 都算风险
+  F49 collect 重复回收时把已经复核过的 review 重置成 pending（2026-11-08 实测：#173 复核定论被覆盖）
+      → 已有 ok/overturn 的条目保留复核结论
   F43 结论解析过严：只认「结论：拒绝」，而 agent 实际写「验证 #149：拒绝。」
       → 放宽为「冒号后紧跟通过/拒绝」，但仍要求有明确标签，避免把正文里的词当结论
 
@@ -241,11 +243,14 @@ def collect(dry_run: bool = False) -> int:
         entry = verified.get(pr) or {}
         if entry.get("status") in ("pass", "reject"):
             continue
+        existing_review = entry.get("review")
         entry.update({
             "status": verdict,
             "verdict_at": message.get("create_time") or now().isoformat(timespec="seconds"),
-            # F39：通过也要人来复核——同模型的盲区是共享的
-            "review": "pending" if verdict == "pass" else "confirmed",
+            # F49：已经复核过（ok/overturn）的不再重置
+            # F39：未复核过的"通过"要进待复核队列
+            "review": existing_review if existing_review in ("ok", "overturn")
+                      else ("pending" if verdict == "pass" else "confirmed"),
             "evidence": text[:400],
         })
         verified[pr] = entry
