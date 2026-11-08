@@ -328,7 +328,7 @@ tasks:
 
   - id: RA_STDVER
     title: 检测依据标准年代号检查
-    status: todo
+    status: done
     note: 验证#149 拒绝：Q/JLY J7110109C 缺年代号未报出；GB/T 1037-2021：冒号被吞误报（修复见 #164）
     pr: 164
     size: S
@@ -346,11 +346,11 @@ tasks:
     covers: [RA-4.16, RA-4.17]
     acceptance: ["照片序号连续", "缺前/中/后能报出"]
     files: [p0/app/visual_checks.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_photo_sequence.py, docs/report-format-checks/README.md]
-    note: 验证#151 拒绝：正文「随报告附照片2张」被当题注；分项缺前/中/后未抓到
+    note: 验证#167 拒绝：修好原问题但引入3个新问题——①「1号样品照片1」误判缺前中后 ②「外包装照片1、内包装照片1」误判序号重复 ③同类写法判定不一致
 
   - id: RA_TEMPLATE
     title: 主机厂模板正确性（吉利/比亚迪等）
-    status: todo
+    status: done
     pr: 168
     size: M
     covers: [RA-4.18]
@@ -360,8 +360,8 @@ tasks:
 
   - id: RA_SAMPLENO
     title: 样品编号连续性与重复性
-    status: todo
-    pr: 169
+    status: done
+    pr: 173
     size: S
     covers: [RA-5.4, RA-1.8]
     acceptance: ["编号断号/重复能报出"]
