@@ -691,12 +691,20 @@ def r22_standard_years(data: ReportData):
 # F8 样品数量可解析且与编号个数不一致 -> fail；XX/空/非数字 -> 不判数量。
 # F9 不同表/字段各自独立判重，跨表引用不报重复。
 # F10 纯数字长串（日期/流水号）不当编号序列，避免误报。
-# F11 全角范围符「－」：NFKC 会把它归一成 ASCII "-"，必须先在归一化前换成可识别
-#     的范围符，否则 TS24LXJ8A-01－03 只会被当成 1 个编号，数量核对误报。
+# F11 全角/长横写法：NFKC 只把「－」折成 ASCII "-"，「—/–/−」等仍是自身；先统一
+#     折成 ASCII "-"，范围才可识别，同一编号的全角/半角写法也不会被当成两个
+#     （TS24LXJ8A-01－03 展开 3 个；…-01、…－01 判重）。
+# F12 「－」同时可能是前缀分隔符（TS24LXJ8A－01）与范围符（01－03）。折成 "-" 后
+#     只在“左侧已是完整编号”时展开：左侧是纯数字，或左侧已含前缀分隔符（如
+#     TS24LXJ8A-01）；否则按前缀分隔符处理。这样 TS24－27 仍是 1 个编号
+#     （前缀 TS24-、序号 27），不会被误展开成 24..27。
 _SAMPLE_LINE = re.compile(r"^\s*[*＊]?\s*样品编号\s*[:：]\s*(.*)$")
 _SAMPLE_SPLIT = re.compile(r"[、,，;；\s]+")
-_SAMPLE_RANGE = re.compile(r"^(.+?)\s*(?:[～~—–－]|至)\s*(.+)$")
-_SAMPLE_RANGE_DASHES = str.maketrans({"－": "～", "—": "～", "–": "～", "−": "～", "―": "～", "‒": "～"})
+_SAMPLE_RANGE = re.compile(r"^(.+?)\s*(?:~|至)\s*(.+)$")
+_SAMPLE_DASHES = str.maketrans({
+    "－": "-", "—": "-", "–": "-", "−": "-", "―": "-", "‒": "-",
+    "～": "~", "〜": "~",
+})
 _SAMPLE_NUMBER = re.compile(r"^(?P<prefix>.*[^0-9])?(?P<num>\d+)$")
 _SAMPLE_QTY = re.compile(r"^\s*(\d+)\s*(?:件|个|份|支|块|只|套|根|片|颗|瓶|袋|组)?\s*$")
 _SAMPLE_ITEM_LABELS = {"检验项目", "试验项目", "检测项目", "测试项目"}
@@ -718,11 +726,8 @@ def _sample_parts(token: str) -> tuple[str, str] | None:
     return prefix, number
 
 
-def _expand_sample_range(part: str) -> list[str] | None:
-    match = _SAMPLE_RANGE.match(part)
-    if not match:
-        return None
-    left, right = _sample_parts(match.group(1).strip()), _sample_parts(match.group(2).strip())
+def _expand_range_pair(left_text: str, right_text: str) -> list[str] | None:
+    left, right = _sample_parts(left_text.strip()), _sample_parts(right_text.strip())
     if not left or not right or (right[0] and right[0] != left[0]):
         return None
     start, end = int(left[1]), int(right[1])
@@ -731,9 +736,26 @@ def _expand_sample_range(part: str) -> list[str] | None:
     return [f"{left[0]}{str(value).zfill(len(left[1]))}" for value in range(start, end + 1)]
 
 
+def _expand_sample_range(part: str) -> list[str] | None:
+    match = _SAMPLE_RANGE.match(part)
+    if match:  # 显式范围符 ～/~/至
+        return _expand_range_pair(match.group(1), match.group(2))
+    # F12: "-" 只有落在已成型编号之后才是范围符，否则是编号前缀分隔符。
+    for index in range(len(part) - 1, 0, -1):
+        if part[index] != "-":
+            continue
+        left = part[:index].strip()
+        if not (left.isdigit() or "-" in left):
+            continue
+        expanded = _expand_range_pair(left, part[index + 1:])
+        if expanded:
+            return expanded
+    return None
+
+
 def _sample_norm(text: str) -> str:
-    """NFKC 前保留全角范围符，避免「－」被归一成 ASCII "-" 后丢失范围语义。"""
-    return unicodedata.normalize("NFKC", (text or "").translate(_SAMPLE_RANGE_DASHES))
+    """统一全角/长横写法后做 NFKC：范围符与前缀分隔符都先折成 ASCII "-"。"""
+    return unicodedata.normalize("NFKC", (text or "").translate(_SAMPLE_DASHES))
 
 
 def _sample_tokens(text: str) -> list[str]:
