@@ -370,7 +370,7 @@ tasks:
   # ========== 待做：智能客服（尚未开始） ==========
   - id: CS_BASE
     title: 基础数据管理（价格库/排期/资质/名称映射）
-    status: partial
+    status: done
     partial_reason: 四类库结构与维护 API 已就绪；真实 CRM API、认可清单解析、排期 AI 识别未接
     pr: 155
     size: L
