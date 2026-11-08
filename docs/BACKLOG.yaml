@@ -410,7 +410,8 @@ tasks:
 
   - id: SP_FORMULAVAR
     title: 提取公式变量定义与计算逻辑
-    status: todo
+    pr: 199
+    status: done
     size: M
     covers: [SP-6.2]
     acceptance: ["能提取变量名与定义", "能生成可执行规则", "变量缺失时明确报出"]
@@ -418,7 +419,8 @@ tasks:
 
   - id: SP_SAMPLEGUIDE
     title: 样品制备指引生成与委托单联动校验
-    status: todo
+    pr: 200
+    status: done
     size: M
     covers: [SP-8.2]
     acceptance: ["能生成样品制备指引", "与委托单样品信息不一致时能报出"]
