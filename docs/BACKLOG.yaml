@@ -374,7 +374,8 @@ tasks:
 
   - id: RA_CUSTOMRULE
     title: 支持自建逻辑条件（如检测日期距生产日期不超过 N 天）
-    status: todo
+    pr: 190
+    status: done
     size: M
     covers: [RA-5.1]
     acceptance: ["管理员可配置条件表达式", "命中条件能报出并给出证据", "配置为空时不报"]
@@ -382,7 +383,8 @@ tasks:
 
   - id: RA_PRODNAME
     title: 产品名称异常识别（与产品不符或无法判定种类）
-    status: todo
+    pr: 191
+    status: done
     size: S
     covers: [RA-5.2]
     acceptance: ["产品名称与检测项目明显不符能报出", "纯编号类名称（如 001）能报出", "正常名称不报"]
