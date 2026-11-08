@@ -11,9 +11,16 @@ with ``status="not_extracted"``; no formula is invented.  Each item gains
 
     {"kind": "mean", "status": "extracted", "variables": [...],
      "clause": "6.5", "item_clause": "5.3.3", "raw": "..."}
+
+SP_FORMULAVAR (SP-6.2): target/expression, uses/missing_variables (reported) and a
+restricted-AST rule.  F1 no 式中, F2 unused, F3 separators, F4 full-width, F5 ellipsis,
+F6 reference-only, F7 Greek/subscripts, F8 eval error, F9 unsafe AST, F10 series.
 """
 from __future__ import annotations
 
+import ast
+import math
+import operator
 import re
 
 _TYPES = (
@@ -29,8 +36,32 @@ _CALC = re.compile(
 )
 _PERCENT_CALC = re.compile(r"按式|公式|计算式|式\s*[（(]|[=＝]|×\s*100\s*%|百分率|相对偏差|偏差率")
 _FORMULA_REF = re.compile(r"按式|公式|计算式|式\s*[（(]\s*\d")
-_VARIABLE = re.compile(r"([A-Za-zα-ωΑ-Ω][\w′̄]{0,4})\s*[—–\-]{1,2}\s*([^；;。]+)")
+_VARIABLE = re.compile(
+    r"([A-Za-zα-ωΑ-Ω][\w′̄]{0,5})\s*[—–\-:：]{1,2}\s*"
+    r"([^；;。\n]+?)(?=\s*[；;。\n]|\s*[，,]\s*"
+    r"[A-Za-zα-ωΑ-Ω][\w′̄]{0,5}\s*[—–\-:：]|$)"
+)
 _CLAUSE = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+\S")
+_LHS = r"(?:[A-Za-zα-ωΑ-Ω][A-Za-z0-9_\u0304′̄]{0,5}|[\u4e00-\u9fff]{2,6})"
+_RHS = r"[0-9A-Za-zα-ωΑ-Ω+\-−－＋*/×÷·().,，、%％√²³_′̄\s^…（）]+"
+_EQUATION = re.compile(rf"(?P<lhs>{_LHS})\s*[=＝]\s*(?P<rhs>{_RHS})")
+_SYMBOL = re.compile(r"[A-Za-zα-ωΑ-Ω][A-Za-z0-9_\u0304′̄]*")
+_SERIES_MEAN = re.compile(
+    r"^\((?P<base>[A-Za-z])1\+(?P=base)2\+\.\.\.\+(?P=base)n\)/n$"
+)
+_TRANS = str.maketrans({
+    "（": "(", "）": ")", "×": "*", "÷": "/", "−": "-", "－": "-",
+    "＋": "+", "％": "%", "·": "*", "—": "-", "–": "-",
+})
+_FUNCTIONS = {
+    "sqrt": math.sqrt, "abs": abs, "min": min, "max": max, "sum": sum,
+    "mean": lambda values: sum(values) / len(values),
+}
+_ALLOWED_NODES = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.Add, ast.Sub, ast.Mult, ast.Div,
+    ast.Pow, ast.USub, ast.UAdd, ast.Name, ast.Load, ast.Constant, ast.Call,
+)
+_OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow}
 
 
 def _sentences(text: str) -> list[str]:
@@ -54,22 +85,161 @@ def _variables(text: str) -> list[dict]:
     return variables[:12]
 
 
-def _entry(kind, status, sentence, variables, clause, item_clause) -> dict:
+def _expression(sentence: str) -> tuple[str, str] | None:
+    match = _EQUATION.search(sentence or "")
+    return ((match.group("lhs").strip(), match.group("rhs").strip())
+            if match and len(match.group("rhs").strip()) >= 2 else None)
+
+
+def _norm(text: str) -> str:
+    return text.translate(_TRANS).replace(" ", "").replace("…", "...")
+
+
+def _series_base(text: str) -> str:
+    match = _SERIES_MEAN.fullmatch(_norm(text))
+    return match.group("base") if match else ""
+
+
+def _python(rhs: str) -> str:
+    """Translate standard notation to a safe Python expression (or "")."""
+    text = _norm(rhs)
+    if base := _series_base(text):
+        return f"mean({base})"
+    if "..." in text:
+        return ""
+    text = text.replace("²", "**2").replace("³", "**3").replace("^", "**")
+    text = re.sub(r"√\s*\(([^()]*)\)", r"sqrt(\1)", text)
+    text = re.sub(r"√\s*([A-Za-z0-9_.]+)", r"sqrt(\1)", text)
+    text = text.rstrip("%")
+    return "" if not text or "%" in text else text
+
+
+def _safe(text: str) -> bool:
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError:
+        return False
+    return all(
+        isinstance(node, _ALLOWED_NODES)
+        and (not isinstance(node, ast.Call)
+             or (isinstance(node.func, ast.Name) and node.func.id in _FUNCTIONS
+                 and not node.keywords))
+        for node in ast.walk(tree))
+
+
+def _eval(node, values: dict):
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        if node.id not in values:
+            raise KeyError(node.id)
+        return values[node.id]
+    if isinstance(node, ast.UnaryOp):
+        value = _eval(node.operand, values)
+        return -value if isinstance(node.op, ast.USub) else +value
+    if isinstance(node, ast.BinOp):
+        return _OPS[type(node.op)](_eval(node.left, values), _eval(node.right, values))
+    if isinstance(node, ast.Call):
+        return _FUNCTIONS[node.func.id](*[_eval(a, values) for a in node.args])
+    raise ValueError(type(node).__name__)
+
+
+def evaluate_formula(formula: dict | None, values: dict | None = None) -> dict:
+    """Run a formula entry (or its ``rule``); report missing values explicitly."""
+    rule = formula.get("rule") if isinstance(formula, dict) else None
+    if rule is None and isinstance(formula, dict) and "status" in formula:
+        rule = formula
+    if not isinstance(rule, dict) or not rule:
+        return {"status": "not_executable", "value": None, "missing": [],
+                "error": "没有可执行规则"}
+    if rule.get("status") != "executable":
+        return {"status": rule.get("status") or "not_executable", "value": None,
+                "missing": list(rule.get("missing") or []), "error": ""}
+    missing = [name for name in rule.get("inputs") or []
+               if (values or {}).get(name) is None]
+    if missing:
+        return {"status": "missing_values", "value": None, "missing": missing,
+                "error": ""}
+    try:
+        value = _eval(ast.parse(rule["expression"], mode="eval").body, values or {})
+    except ZeroDivisionError:
+        return {"status": "error", "value": None, "missing": [], "error": "除数为 0"}
+    except Exception as exc:  # noqa: BLE001 - report, never crash
+        return {"status": "error", "value": None, "missing": [], "error": str(exc)}
+    return {"status": "ok", "value": value, "missing": [], "error": ""}
+
+
+def _covers(symbol: str, defined: list[str]) -> bool:
+    base = symbol.rstrip("′̄\u0304")
+    return any(base == name.rstrip("′̄\u0304")
+               or (len(name) == 1 and base.startswith(name)
+                   and re.fullmatch(r"[0-9_′̄ijkn\u0304]+", base[len(name):]))
+               for name in defined)
+
+
+def _used(rhs: str, variables: list[dict]) -> list[str]:
+    text = re.sub(r"\d+(?:\.\d+)?[eE][+-]?\d+", "", _norm(rhs))
+    if base := _series_base(text):
+        return [base, "n"]
+    defined = [variable["symbol"] for variable in variables]
+    used: list[str] = []
+    for token in _SYMBOL.findall(text):
+        if token in _FUNCTIONS or token == "pi":
+            continue
+        if (len(token) == 1 or token in defined
+                or re.fullmatch(r"[A-Za-zα-ωΑ-Ω][0-9_′̄ijkn]{0,3}", token)):
+            if token not in used:
+                used.append(token)
+    return used
+
+
+def _rule(kind, target: str, rhs: str, variables: list[dict],
+          used: list[str], missing: list[str]) -> dict:
+    rule = {"kind": kind or "expression", "target": target, "inputs": used,
+            "expression": rhs, "missing": list(missing)}
+    if missing:
+        return {**rule, "status": "missing_variables"}
+    if rhs:
+        python = _python(rhs)
+        if python and _safe(python):
+            base = _series_base(rhs)
+            return {**rule, "status": "executable", "expression": python,
+                    "inputs": [base] if base else used}
+        return {**rule, "status": "not_executable"}
+    symbol = next((variable["symbol"] for variable in variables
+                   if "次数" not in variable["definition"]), "")
+    if kind == "mean" and symbol:
+        return {**rule, "status": "executable", "inputs": [symbol],
+                "expression": f"mean({symbol})"}
+    return {**rule, "status": "not_extracted"}
+
+
+def _entry(kind, status, sentence, variables, clause, item_clause,
+           expression=None) -> dict:
+    target, rhs = expression or ("", "")
+    used = _used(rhs, variables) if rhs else []
+    missing = [s for s in used
+               if not _covers(s, [v["symbol"] for v in variables])]
     return {"kind": kind, "status": status, "variables": variables,
-            "clause": clause, "item_clause": item_clause, "raw": sentence}
+            "clause": clause, "item_clause": item_clause, "raw": sentence,
+            "target": target, "expression": rhs, "uses": used,
+            "missing_variables": missing,
+            "rule": _rule(kind, target, rhs, variables, used, missing)}
 
 
 def _classify(sentence, variables, clause, item_clause) -> dict | None:
     kind = next((name for name, pattern in _TYPES if pattern.search(sentence)), None)
-    if kind == "percentage":
-        # A percentage is only a formula with an explicit ratio/equation
-        # context; "取峰值的 20%~80% 进行计算" is a sampling rule, not one.
-        if _PERCENT_CALC.search(sentence):
-            return _entry(kind, "extracted", sentence, variables, clause, item_clause)
-    elif kind is not None and _CALC.search(sentence):
-        return _entry(kind, "extracted", sentence, variables, clause, item_clause)
+    expression = _expression(sentence)
+    calculated = (
+        (kind == "percentage" and _PERCENT_CALC.search(sentence))
+        or (kind not in (None, "percentage") and _CALC.search(sentence))
+    )
+    if calculated or expression is not None:
+        return _entry(kind, "extracted", sentence, variables, clause,
+                      item_clause, expression)
     if _FORMULA_REF.search(sentence):
-        return _entry(None, "not_extracted", sentence, variables, clause, item_clause)
+        return _entry(None, "not_extracted", sentence, variables, clause,
+                      item_clause)
     return None
 
 
@@ -78,11 +248,8 @@ def extract_text_formulas(
 ) -> list[dict]:
     """Classify formula sentences from one clause's text (no document scan)."""
     variables = _variables(text)
-    return [
-        entry
-        for sentence in _sentences(text)
-        if (entry := _classify(sentence, variables, clause, item_clause)) is not None
-    ]
+    return [entry for sentence in _sentences(text)
+            if (entry := _classify(sentence, variables, clause, item_clause))]
 
 
 def extract_formulas(lines: list[tuple[str, int]], items: list[dict]) -> list[dict]:
@@ -148,10 +315,9 @@ def apply_formulas(
             by_item.setdefault(entry["item_clause"], []).append(entry)
     for item in items:
         item["formulas"] = by_item.get(item["clause"], [])
-        extracted = any(
+        item["formula_status"] = "extracted" if any(
             entry["status"] == "extracted" for entry in item["formulas"]
-        )
-        item["formula_status"] = "extracted" if extracted else "not_extracted"
+        ) else "not_extracted"
     extracted = [entry for entry in entries if entry["status"] == "extracted"]
     kinds = (("mean", "formula_means"), ("weighted_mean", "formula_weighted_means"),
              ("range", "formula_ranges"), ("std_dev", "formula_std_devs"),
@@ -160,9 +326,12 @@ def apply_formulas(
         "formulas": len(entries),
         "formulas_extracted": len(extracted),
         "formulas_not_extracted": len(entries) - len(extracted),
+        "formulas_executable": sum(
+            1 for e in entries if e["rule"] and e["rule"]["status"] == "executable"),
+        "formulas_missing_variables": sum(
+            1 for e in entries if e["missing_variables"]),
         "items_with_formulas": sum(
-            1 for item in items if item["formula_status"] == "extracted"
-        ),
+            1 for item in items if item["formula_status"] == "extracted"),
         **{
             key: sum(1 for entry in extracted if entry["kind"] == kind)
             for kind, key in kinds
