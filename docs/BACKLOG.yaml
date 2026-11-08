@@ -338,13 +338,14 @@ tasks:
 
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
-    status: todo
+    status: done
+    pr: 151
     size: M
     deps: [VIS]
     covers: [RA-4.16, RA-4.17]
     acceptance: ["照片序号连续", "缺前/中/后能报出"]
-    files: [p0/app/visual_checks.py]
-    note: 需带照片的报告样例（客户 D3）
+    files: [p0/app/visual_checks.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_photo_sequence.py, docs/report-format-checks/README.md]
+    note: BYD 12 份草稿题注序号 12/12 连续、0 误报；无 word/media，R23 12/12 skip；缺前/中/后由合成用例覆盖，完整性待客户 D3
 
   - id: RA_TEMPLATE
     title: 主机厂模板正确性（吉利/比亚迪等）

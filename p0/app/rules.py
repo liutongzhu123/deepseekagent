@@ -62,6 +62,7 @@ RULES: list[tuple[str, str, str]] = [
     ("R20", "计算结果正确性", "重算平均值/最大值/变化率并与报告值比对，偏差超过容差报出"),
     ("R21", "错别字与病句", "常见错别字/词序颠倒 + 相邻重复字词/标点；术语白名单防误报，定位到段落"),
     ("R22", "检测依据标准年代号", "检验依据中的标准号必须带具体年代号，并校验标准号/年代号格式"),
+    ("R23", "附录照片完整性", "附录照片序号连续，且每个检验项目含试验前/中/后照片"),
 ]
 
 
@@ -934,6 +935,7 @@ _LOCATIONS = {
     "R11": {"page": 1, "section": "检验依据", "cell": "模板"},
     "R19": {"page": 1, "section": "检验项目表", "cell": "单项检验时间"},
     "R20": {"page": 1, "section": "检验结果表", "cell": "平均值/最大值/变化率"},
+    "R23": {"page": 1, "section": "附录照片", "cell": "照片序号/试验前中后"},
 }
 
 
@@ -945,7 +947,7 @@ def _location_for(rule_id: str, data: ReportData) -> dict:
             (entry["page"] for entry in data.toc_entries if "检验结果" in entry.get("title", "")),
             3,
         )
-    elif rule_id in {"R05", "R08", "R10"}:
+    elif rule_id in {"R05", "R08", "R10", "R23"}:
         location["page"] = total or 1
     return location
 
@@ -1138,6 +1140,13 @@ def audit_report(
     from .typo_rules import evaluate_typo_rules  # local import: avoids a rules<->typo_rules cycle
 
     for finding in evaluate_typo_rules(data):
+        finding = _apply_rule_meta(finding, meta.get(finding.rule_id))
+        if not finding.location:
+            finding.location = _location_for(finding.rule_id, data)
+        findings.append(finding)
+    from .visual_checks import evaluate_photo_rules  # local import: avoids a rules<->visual_checks cycle
+
+    for finding in evaluate_photo_rules(data):
         finding = _apply_rule_meta(finding, meta.get(finding.rule_id))
         if not finding.location:
             finding.location = _location_for(finding.rule_id, data)
