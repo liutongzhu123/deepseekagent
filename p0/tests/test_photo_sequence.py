@@ -95,3 +95,66 @@ def test_real_draft_numbering_is_consecutive_but_completeness_skips():
 
     assert finding["status"] == "skip"
     assert "序号连续" in finding["message"] and "未嵌入照片" in finding["message"]
+
+
+# ---------- 第二轮验证反例（F11 / F12） ----------
+
+def test_body_narrative_is_not_a_caption():  # F11
+    """「随报告附照片2张。」是正文叙述，不是题注，不能报“序号从 2 开始”。"""
+    finding = _r23(_data([APPENDIX, "随报告附照片2张。"]))
+
+    assert finding["status"] == "skip"
+    assert "未识别到附录照片题注" in finding["message"]
+
+
+@pytest.mark.parametrize("narrative", ["随报告附照片2张。", "随报告附照片2张", "详见照片2张"])
+def test_narrative_variants_are_not_captions(narrative):  # F11
+    finding = _r23(_data([APPENDIX, narrative]))
+
+    assert finding["status"] == "skip"
+    assert "未识别到附录照片题注" in finding["message"]
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("分项1：气味试验", "分项2：外观试验"),
+        ("分项1", "分项2"),
+        ("1、气味试验", "2、外观试验"),
+    ],
+)
+def test_each_sub_item_needs_its_own_stages(first, second):  # F12
+    """分项1 有前/中/后，分项2 只有照片1、照片2 → 分项2 缺前/中/后要报出。"""
+    finding = _r23(_data([
+        APPENDIX,
+        first, "试验前照片", "试验中照片", "试验后照片",
+        second, "照片1、照片2",
+    ]))
+
+    assert finding["status"] == "fail"
+    assert second in finding["message"] + finding["evidence"]
+    assert "缺试验前、试验中、试验后照片" in finding["evidence"]
+
+
+def test_sub_item_prefixes_are_grouped_separately():  # F12
+    """分项写在题注前缀里（分项2照片1）也要单独判，不能并进分项1。"""
+    finding = _r23(_data([
+        APPENDIX,
+        "分项1照片1", "分项1照片2", "分项1试验前照片", "分项1试验中照片", "分项1试验后照片",
+        "分项2照片1", "分项2照片2",
+    ]))
+
+    assert finding["status"] == "fail"
+    assert "分项2 缺试验前、试验中、试验后照片" in finding["evidence"]
+
+
+def test_multiple_numbers_on_one_line_are_all_captions():  # F12
+    finding = _r23(_data([
+        APPENDIX,
+        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
+        "分项2：外观试验", "外包装照片1、外包装照片2", "试验前照片", "试验中照片", "试验后照片",
+    ]))
+
+    # 两个编号都识别到，且两项都完整 → pass；证据里的题注数不能丢。
+    assert finding["status"] == "pass"
+    assert "题注=8" in finding["evidence"] and "有序号=2" in finding["evidence"]

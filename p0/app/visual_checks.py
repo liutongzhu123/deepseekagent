@@ -200,6 +200,10 @@ def extract_images(docx_bytes: bytes) -> list[bytes]:
 # F8  captions exist but the report embeds no photo -> skip completeness (D3 gap).
 # F9  numbering restarts at 1 -> a new series, not a defect.
 # F10 ``取样后`` is not a test stage; only 试验/测试/检测/处理/老化/加热/运行/评价 + 前/中/后 count.
+# F11 body narrative (``随报告附照片2张。``) mentions a photo but is not a caption.
+# F12 each 检验项目 is judged separately; a sub-item with only stage-less photo
+#     captions (``照片1、照片2``) is incomplete instead of being folded into the
+#     first complete group.
 # ---------------------------------------------------------------------------
 
 PHOTO_RULE_ID = "R23"
@@ -210,38 +214,78 @@ _EXPLICIT_STAGE_RE = re.compile(r"(?:试验|测试|检测|处理|老化|加热|�
 _STAGE_NAMES = {"前": "before", "中": "middle", "后": "after"}
 _STAGE_LABELS = {"before": "试验前", "middle": "试验中", "after": "试验后"}
 _HEADING_RE = re.compile(
-    r"^(?:附\s*录|附\s*件|[一二三四五六七八九十]+[、.]|\d+(?:\.\d+)*[、.．]|[（(]\d+[)）])"
+    r"^(?:附\s*录|附\s*件|[一二三四五六七八九十]+[、.]|\d+(?:\.\d+)*[、.．]|[（(]\d+[)）]"
+    r"|(?:分项|项目)\s*[一二三四五六七八九十\d]+)"
 )
+# F12: a numbered / 分项N / 「…试验」heading marks one 检验项目, so its photos
+# must carry 前/中/后.
+_TEST_SECTION_RE = re.compile(r"(?:试验|测试|检测|评价|检验)\s*[)）]?\s*$")
+_TEST_ITEM_RE = re.compile(r"^(?:分项|项目)\s*[一二三四五六七八九十\d]+")
+_NUMBERED_HEADING_RE = re.compile(r"^\d+(?:\.\d+)*[、.．]?\s*\S")
+# F11: body narrative mentions photos but is not a caption.  Captions are short
+# labels (``外包装照片1``); a sentence, a measure word (照片2张) or a leading
+# narrative verb (随报告/详见/...) marks prose instead.
+_PHOTO_UNIT_RE = re.compile(r"(?:照片|图片|相片|附图|photo)\s*(?:No\.?\s*)?\d+\s*(?:张|幅|页|组)", re.IGNORECASE)
+_NARRATIVE_HEAD_RE = re.compile(r"^(?:详见|参见|见|如|如上|随报告|随附|附上|共附|合计)")
+_NARRATIVE_WORD_RE = re.compile(r"(?:随报告|报告附|共附|合计|详见|参见|见附|附上|如下|所示)")
 
 
-def _photo_entry(text: str, index: int, section: str) -> dict | None:
-    """Parse one caption line; ``None`` when the line is not a photo caption."""
+def _is_photo_narrative(text: str) -> bool:
+    """F11: True for a prose sentence that merely mentions photos."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if stripped.endswith(("。", "！", "？", "；", ";")):
+        return True
+    if _PHOTO_UNIT_RE.search(stripped):
+        return True
+    if _NARRATIVE_HEAD_RE.match(stripped):
+        return True
+    return len(stripped) > 24 and bool(_NARRATIVE_WORD_RE.search(stripped))
+
+
+def _photo_entries_for_line(text: str, index: int, section: str) -> list[dict]:
+    """Parse one line into caption entries; ``[]`` when it is not a caption."""
     if not text or len(text) > 60:
-        return None
+        return []
     lowered = text.lower()
     if not any(word in lowered for word in ("照片", "图片", "相片", "附图", "photo")):
-        return None
-    number_match = _PHOTO_NUMBER_RE.search(text)
-    stage_match = _EXPLICIT_STAGE_RE.search(text)
-    stage = _STAGE_NAMES[stage_match.group(1)] if stage_match else ""
-    if not number_match and not stage:  # F1: "照片宽5cm"/"附录A：照片" are not captions
-        return None
+        return []
+    if _is_photo_narrative(text):  # F11
+        return []
+    number_matches = list(_PHOTO_NUMBER_RE.finditer(text))
+    stage_matches = list(_EXPLICIT_STAGE_RE.finditer(text))
+    if not number_matches and not stage_matches:  # F1: "照片宽5cm"/"附录A：照片" are not captions
+        return []
+    spans = [match.span() for match in number_matches] + [match.span() for match in stage_matches]
     item = text
-    spans = ([number_match.span()] if number_match else []) + ([stage_match.span()] if stage_match else [])
     for start, end in sorted(spans, reverse=True):
         item = item[:start] + " " + item[end:]
     item = _PHOTO_WORD_RE.sub(" ", item)
     item = re.sub(r"^\s*(?:\d+[.、．]|[（(]\d+[)）])\s*", "", item)
     item = re.sub(r"[\s:：,，、;；\-—_()（）]+", " ", item).strip()
-    if not stage and item in _STAGE_NAMES:  # F10: a bare 前/中/后 only when it is the whole label
-        stage, item = _STAGE_NAMES[item], ""
-    return {
-        "index": index,
-        "text": text,
-        "number": int(number_match.group(1)) if number_match else None,
-        "stage": stage,
-        "item": item or section or "照片",
-    }
+    stage_values = [_STAGE_NAMES[match.group(1)] for match in stage_matches]
+    numbers: list[int | None] = [int(match.group(1)) for match in number_matches] or [None]
+    entries: list[dict] = []
+    for position, number in enumerate(numbers):
+        stage = ""
+        if len(stage_values) == len(numbers) and number_matches:
+            stage = stage_values[position]
+        elif stage_values and position == 0:
+            stage = stage_values[0]
+        own_item = item
+        if not stage and own_item in _STAGE_NAMES:  # F10: a bare 前/中/后 only when it is the whole label
+            stage, own_item = _STAGE_NAMES[own_item], ""
+        entries.append({
+            "index": index,
+            "text": text,
+            "number": number,
+            "stage": stage,
+            "item": own_item or section or "照片",
+            "own_item": own_item,
+            "section": section,
+        })
+    return entries
 
 
 def _photo_entries(paragraphs: Sequence[str]) -> list[dict]:
@@ -251,9 +295,9 @@ def _photo_entries(paragraphs: Sequence[str]) -> list[dict]:
         text = (raw or "").strip()
         if not text:
             continue
-        entry = _photo_entry(text, index, section)
-        if entry is not None:
-            entries.append(entry)
+        line_entries = _photo_entries_for_line(text, index, section)
+        if line_entries:
+            entries.extend(line_entries)
         elif _is_heading(text):
             section = text
     return entries
@@ -293,11 +337,34 @@ def _number_issues(entries: Sequence[dict]) -> list[str]:
     return issues
 
 
+def _looks_like_test_item(label: str) -> bool:
+    """F12: does ``label`` name one 检验项目 (not a packaging/sample photo group)?"""
+    text = (label or "").strip()
+    if not text or text.startswith(("附录", "附件")):
+        return False
+    return bool(
+        _TEST_SECTION_RE.search(text)
+        or _TEST_ITEM_RE.match(text)
+        or _NUMBERED_HEADING_RE.match(text)
+    )
+
+
 def _stage_issues(entries: Sequence[dict]) -> tuple[list[str], dict[str, set[str]]]:
+    """F6/F12: per-检验项目 completeness, including sub-items with no stage labels.
+
+    A group is an item name (caption prefix) or, when the caption has no prefix,
+    the enclosing numbered / 分项N / 「…试验」section.  Items whose photos simply
+    carry no stage labels are only reported once at least one other caption
+    proves the report does label stages (F7 keeps the all-stage-less case a
+    ``skip``).  Packaging/sample groups (``外包装照片1``) are not 检验项目 and are
+    not required to have stages.
+    """
     groups: dict[str, set[str]] = {}
     for entry in entries:
         if entry["stage"]:
             groups.setdefault(entry["item"], set()).add(entry["stage"])
+        elif _looks_like_test_item(entry["item"]):
+            groups.setdefault(entry["item"], set())
     issues = [
         f"{label} 缺{'、'.join(name for key, name in _STAGE_LABELS.items() if key not in stages)}照片"
         for label, stages in groups.items()
@@ -313,6 +380,7 @@ def evaluate_photo_rules(data: ReportData) -> list[Finding]:
         return [_photo_finding("skip", "info", "未识别到附录照片题注，无法核对照片序号与试验前/中/后", "", "题注使用「照片N」「试验前照片」等写法后重试", 1)]
     number_issues = _number_issues(entries)
     stage_issues, stage_groups = _stage_issues(entries)
+    has_stage = any(entry["stage"] for entry in entries)
     numbered = sum(1 for entry in entries if entry["number"] is not None)
     evidence = f"题注={len(entries)}; 有序号={numbered}; 阶段组={len(stage_groups)}; 嵌入图片={data.embedded_images}"
     page = max(data.page_totals) if data.page_totals else 1
@@ -323,7 +391,7 @@ def evaluate_photo_rules(data: ReportData) -> list[Finding]:
     if not data.embedded_images:  # F8: the drafts carry captions but no word/media photo
         return [_photo_finding("skip", "info", f"附录题注序号连续（{len(entries)} 条），但报告未嵌入照片，完整性无法核对",
                                evidence, "客户 D3 带嵌入照片的样例到位后复核试验前/中/后", page)]
-    if not stage_groups:  # F7
+    if not has_stage:  # F7: no caption labels any stage, so completeness is unknowable
         return [_photo_finding("skip", "info", "照片题注未标注试验前/中/后，完整性无法核对",
                                evidence, "题注补充试验前/中/后后复核", page)]
     if stage_issues:
