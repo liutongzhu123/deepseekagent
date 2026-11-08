@@ -518,6 +518,25 @@ def test_f41_reconcile_keeps_waiting(monkeypatch):
     assert ng["tasks"][0]["status"] == "waiting"
 
 
+def test_f44_revert_rejected_task(monkeypatch):
+    """F44：验证拒绝后，done 的任务要退回 todo（reconcile 只会往前推）。"""
+    monkeypatch.setattr(sup, "rejected_prs", lambda: {149})
+    ng = backlog([
+        {"id": "RA_STDVER", "status": "done", "pr": 149},
+        {"id": "B7", "status": "done", "pr": 136},
+    ])
+    reverted = sup.revert_rejected(ng)
+    assert reverted == ["RA_STDVER"]
+    assert ng["tasks"][0]["status"] == "todo"
+    assert ng["tasks"][1]["status"] == "done", "没被拒绝的不受影响"
+
+
+def test_f44_no_rejections_no_change(monkeypatch):
+    monkeypatch.setattr(sup, "rejected_prs", lambda: set())
+    ng = backlog([{"id": "X", "status": "done", "pr": 1}])
+    assert sup.revert_rejected(ng) == []
+
+
 def test_f42_reconcile_skips_rejected_pr(monkeypatch):
     """F42：验证判「拒绝」的 PR，即使已合并也不能把任务标 done。
 

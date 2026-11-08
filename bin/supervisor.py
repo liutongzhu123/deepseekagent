@@ -26,6 +26,8 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F44 验证判「拒绝」后任务仍停在 done（reconcile 只往前推、不往后退）
+      → 每轮把「PR 被拒绝且状态为 done」的任务退回 todo，并记返工原因
   F42 reconcile 不看验证结论：PR 合并就标 done，即使双人验证已判「拒绝」
       （2026-11-08 实测：RA_STDVER 被验证拒绝并回退 todo，19:22 又被 reconcile 改回 done）
       → 标 done 前先查该 PR 的验证状态，reject 的保持 todo 并记日志
@@ -342,6 +344,33 @@ def rejected_prs() -> set[int]:
             except (TypeError, ValueError):
                 continue
     return rejected
+
+
+def revert_rejected(backlog: dict) -> list[str]:
+    """F44：验证拒绝 → 任务从 done 退回 todo。
+
+    reconcile 只会把任务往前推（todo→done），没有回退能力。验证判拒绝之后，
+    任务必须能被拉回来，否则返工永远不会发生。
+    """
+    rejected = rejected_prs()
+    if not rejected:
+        return []
+    reverted = []
+    for task in backlog.get("tasks") or []:
+        if str(task.get("status")) != "done":
+            continue
+        pr = task.get("pr")
+        if pr is None:
+            continue
+        try:
+            pr = int(pr)
+        except (TypeError, ValueError):
+            continue
+        if pr in rejected:
+            task["status"] = "todo"
+            task["rejected_pr"] = pr
+            reverted.append(str(task.get("id")))
+    return reverted
 
 
 def reconcile(backlog: dict) -> list[str]:
@@ -823,7 +852,15 @@ def run(dry_run: bool) -> int:
 
     sync_self(dry_run)                     # F30：自己的代码也跟 main 对齐
 
+    reverted = revert_rejected(backlog)                # F44：先回退被拒绝的
     changed = reconcile(backlog)                       # 改的是内存
+    if reverted:
+        by_id2 = {str(t.get("id")): t for t in backlog.get("tasks") or []}
+        rows = [set_task_status(REPO / "docs" / "BACKLOG.yaml", tid, "todo")
+                for tid in reverted]
+        if reverted and not dry_run and all(rows):
+            commit_backlog(f"chore(backlog): 验证拒绝，回退 {', '.join(reverted)} 为 todo")
+        log(f"{'[dry-run] ' if dry_run else ''}验证拒绝回退：{', '.join(reverted)}")
     if changed:
         written = []
         by_id = {str(t.get("id")): t for t in backlog.get("tasks") or []}

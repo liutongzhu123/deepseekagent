@@ -188,7 +188,7 @@ def verify_prompt(pr: int, subject: str, files: list[str]) -> str:
 """
 
 
-def feishu_recent(limit: int = 15) -> list[dict]:
+def feishu_recent(limit: int = 40) -> list[dict]:
     env = {**os.environ, "HOME": "/home/dshadmin",
            "LARKSUITE_CLI_CONFIG_DIR": "/home/dshadmin/.lark-cli-yunan-bot"}
     try:
@@ -217,7 +217,7 @@ def collect(dry_run: bool = False) -> int:
     state = read_state()
     verified = state.get("verified") or {}
     updated = 0
-    for message in feishu_recent():
+    for message in feishu_recent(40):
         sender = (message.get("sender") or {}).get("sender_type") or ""
         if sender != "app":
             continue
