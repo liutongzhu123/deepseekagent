@@ -698,9 +698,12 @@ def r22_standard_years(data: ReportData):
 #     只在“左侧已是完整编号”时展开：左侧是纯数字，或左侧已含前缀分隔符（如
 #     TS24LXJ8A-01）；否则按前缀分隔符处理。这样 TS24－27 仍是 1 个编号
 #     （前缀 TS24-、序号 27），不会被误展开成 24..27。
+# F13 范围展开上限 9999，与样品数量可解析上限一致：01～52 这类超过 50 个的正常
+#     批量编号也要展开；只有超长/倒序范围不展开，避免异常输入产生巨量 token。
 _SAMPLE_LINE = re.compile(r"^\s*[*＊]?\s*样品编号\s*[:：]\s*(.*)$")
 _SAMPLE_SPLIT = re.compile(r"[、,，;；\s]+")
 _SAMPLE_RANGE = re.compile(r"^(.+?)\s*(?:~|至)\s*(.+)$")
+_SAMPLE_RANGE_MAX = 9999
 _SAMPLE_DASHES = str.maketrans({
     "－": "-", "—": "-", "–": "-", "−": "-", "―": "-", "‒": "-",
     "‐": "-", "‑": "-", "⸺": "-", "⸻": "-", "⁃": "-", "﹣": "-",
@@ -732,7 +735,7 @@ def _expand_range_pair(left_text: str, right_text: str) -> list[str] | None:
     if not left or not right or (right[0] and right[0] != left[0]):
         return None
     start, end = int(left[1]), int(right[1])
-    if not 0 <= end - start <= 50:
+    if not 0 <= end - start <= _SAMPLE_RANGE_MAX:  # F13
         return None
     return [f"{left[0]}{str(value).zfill(len(left[1]))}" for value in range(start, end + 1)]
 
