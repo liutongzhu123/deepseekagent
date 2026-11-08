@@ -4,7 +4,7 @@ import openpyxl
 import pytest
 from fastapi.testclient import TestClient
 
-from app import crm, main
+from app import auth, crm, main
 from app.quote import QuoteLine, QuoteResult
 
 
@@ -52,6 +52,7 @@ def test_excel_snapshot_and_lookups(tmp_path, monkeypatch):
         "schedules": 1,
         "task_orders": 1,
         "samples": 1,
+        "name_mappings": 0,
     }
     assert crm.lookup_task_order(snapshot, "t-001")["customer"] == "客户A"
     assert crm.lookup_sample(snapshot, "S-001")["model"] == "X"
@@ -126,6 +127,7 @@ def test_crm_endpoints(tmp_path, monkeypatch):
     _workbook(path)
     monkeypatch.setenv("P0_CRM_MODE", "excel")
     monkeypatch.setenv("P0_CRM_PATH", str(path))
+    monkeypatch.setenv("P0_CRM_BASE_PATH", str(tmp_path / "base.json"))
     client = TestClient(main.app)
     assert client.get("/api/v1/crm/status").json()["configured"] is True
     projects = client.get("/api/v1/crm/projects").json()
@@ -134,3 +136,60 @@ def test_crm_endpoints(tmp_path, monkeypatch):
     assert prices["total"] == 1
     assert client.get("/api/v1/crm/task-orders/T-001").json()["order_no"] == "T-001"
     assert client.get("/api/v1/crm/samples/nope").status_code == 404
+    assert client.post("/api/v1/crm/base-data/sync").json()["created"] == 4
+
+
+# CS-1.1..1.4: local four-library maintenance, name mapping and CRM sync
+def _base(tmp_path):
+    return crm.BaseDataStore(tmp_path / "base.json")
+
+
+def test_base_library_lifecycle_and_validation(tmp_path, monkeypatch):
+    store = _base(tmp_path)
+    price = {"project_name": "中汽研", "sample_name": "样品A", "item_name": "外观检查", "unit_price": "100"}
+    assert store.upsert("prices", price)["action"] == "created"
+    assert store.upsert("prices", price | {"unit_price": 120})["action"] == "updated"
+    store.upsert("schedules", {"project_name": "中汽研", "start_date": "2026-02-01"})
+    store.upsert("qualifications", {"name": "CNAS", "certificate_no": "CNAS-001"})
+    store.upsert("name_mappings", {"alias": "中汽研", "canonical": "中汽研汽车检验中心"})
+    snapshot = store.snapshot()
+    assert crm.resolve_project(snapshot, "中汽研") == "中汽研汽车检验中心"
+    assert crm.read_prices(snapshot, project="中汽研")[0]["unit_price"] == 120
+    assert store.delete("prices", price) and not store.delete("prices", price)
+    for bad in ({"project_name": "P"}, {"project_name": "P", "item_name": "I", "unit_price": "abc"}):
+        with pytest.raises(ValueError):
+            store.upsert("prices", bad)
+    with pytest.raises(ValueError):
+        store.upsert("bogus", {})
+    store.path.write_text("{not-json", encoding="utf-8")
+    with pytest.raises(crm.CrmUnavailable):
+        store.snapshot()
+    with pytest.raises(crm.CrmUnavailable):
+        store.upsert("qualifications", {"name": "CNAS"})
+
+
+def test_base_sync_is_idempotent_and_rejects_off(tmp_path, monkeypatch):
+    path = tmp_path / "crm.xlsx"
+    _workbook(path)
+    monkeypatch.setenv("P0_CRM_MODE", "excel")
+    monkeypatch.setenv("P0_CRM_PATH", str(path))
+    store = _base(tmp_path)
+    store.upsert("name_mappings", {"alias": "项目A", "canonical": "项目A（全称）"})
+    first = crm.sync_base_data(crm.provider().snapshot(), store)
+    assert (first["created"], first["updated"]) == (4, 0)
+    second = crm.sync_base_data(crm.provider().snapshot(), store)
+    assert (second["created"], second["updated"]) == (0, 4)
+    with pytest.raises(crm.CrmUnavailable):
+        crm.sync_base_data(crm.CrmSnapshot(mode="off", source=""), store)
+
+
+def test_base_data_endpoints_and_admin_permission(tmp_path, monkeypatch):
+    store = _base(tmp_path)
+    monkeypatch.setenv("P0_CRM_BASE_PATH", str(store.path))
+    client = TestClient(main.app)
+    price = {"project_name": "项目A", "item_name": "外观检查", "unit_price": 100}
+    assert client.post("/api/v1/crm/base-data/prices", json=price).json()["action"] == "created"
+    data = client.get("/api/v1/crm/base-data").json()
+    assert data["counts"]["prices"] == 1 and data["prices"][0]["item_name"] == "外观检查"
+    assert client.request("DELETE", "/api/v1/crm/base-data/prices", json=price).status_code == 200
+    assert auth.PERMISSIONS["crm:write"] == ("admin",)

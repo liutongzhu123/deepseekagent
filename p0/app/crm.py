@@ -6,23 +6,24 @@ business contract stable:
 * ``P0_CRM_MODE=off`` (default) — no CRM data; quote behaviour is unchanged;
 * ``P0_CRM_MODE=excel|csv`` — read a local export/template, reconcile quote
   lines against projects/prices, and expose read-only lookups;
-* ``P0_CRM_MODE=api`` — the interface is reserved but intentionally not called;
-  status/lookup return a clear configuration error instead of silent fallback.
-
-Everything is read-only: no CRM write-back, no price generation.
+* ``P0_CRM_MODE=api|base`` — api stays reserved; base reads the admin-maintained
+  local libraries, which ``sync_base_data`` can merge from a CRM export.
 """
 from __future__ import annotations
 
 import csv
+import json
 import os
 import re
+import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
 
-MODES = ("off", "excel", "csv", "api")
+MODES = ("off", "excel", "csv", "api", "base")
 
 
 class CrmUnavailable(RuntimeError):
@@ -95,6 +96,13 @@ class CrmQualification:
 
 
 @dataclass
+class CrmNameMapping:
+    alias: str
+    canonical: str
+    note: str = ""
+
+
+@dataclass
 class CrmSchedule:
     project_id: str
     project_name: str
@@ -135,6 +143,7 @@ class CrmSnapshot:
     schedules: list[CrmSchedule] = field(default_factory=list)
     task_orders: list[CrmTaskOrder] = field(default_factory=list)
     samples: list[CrmSample] = field(default_factory=list)
+    name_mappings: list[CrmNameMapping] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def counts(self) -> dict:
@@ -145,6 +154,7 @@ class CrmSnapshot:
             "schedules": len(self.schedules),
             "task_orders": len(self.task_orders),
             "samples": len(self.samples),
+            "name_mappings": len(self.name_mappings),
         }
 
 
@@ -233,6 +243,135 @@ def _project_from_prices(prices: list[CrmPrice]) -> list[CrmProject]:
             CrmProject(project_id=price.project_id, name=price.project_name or price.project_id),
         )
     return list(seen.values())
+
+
+# F1 kind, F2 field, F3 number, F4 corrupt JSON (report, never overwrite); F5 duplicate key update, F6 delete missing False, F7 off sync error, F9 locked writes.
+BASE_KINDS = ("prices", "schedules", "qualifications", "name_mappings")
+_BASE_LOCK = threading.RLock()
+_BASE_REQUIRED = {"prices": ("item_name", "project_name"), "schedules": ("project_name",),
+                  "qualifications": ("name",), "name_mappings": ("alias", "canonical")}
+_BASE_NUMERIC = {CrmPrice: {"quantity": 1.0, "unit_price": 0.0, "discount": 60.0}}
+
+
+def _base_path() -> Path:
+    explicit = os.getenv("P0_CRM_BASE_PATH", "").strip()
+    default = Path(os.getenv("P0_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
+    return Path(explicit).expanduser() if explicit else default / "crm" / "base_data.json"
+
+
+def _check_kind(kind: str) -> None:
+    if kind not in BASE_KINDS:
+        raise ValueError(f"未知基础数据库：{kind}，可选 {BASE_KINDS}")
+
+
+def _base_row(cls, item: dict) -> dict:
+    data = {name: item.get(name, "") for name in cls.__dataclass_fields__}
+    for name, default in _BASE_NUMERIC.get(cls, {}).items():
+        number = _number(item.get(name))
+        if _text(item.get(name)) and number is None:
+            raise ValueError(f"{name} 必须是数字：{item.get(name)!r}")
+        data[name] = default if number is None else number
+    return data
+
+
+def _coerce_base_item(kind: str, item: dict) -> dict:
+    """Validate one row and fill its project id (F1-F3)."""
+    _check_kind(kind)
+    if not isinstance(item, dict):
+        raise ValueError("基础数据条目必须是对象")
+    for field in _BASE_REQUIRED[kind]:
+        if not _text(item.get(field)):
+            raise ValueError(f"{field} 不能为空")
+    data = dict(item)
+    if kind in ("prices", "schedules") and not _text(data.get("project_id")):
+        data["project_id"] = _text(data.get("project_name"))
+    if kind == "prices":
+        _base_row(CrmPrice, data)
+    return data
+
+
+def _base_key(kind: str, item: dict) -> tuple:
+    if kind == "prices":
+        return (_norm(item.get("project_id") or item.get("project_name")),
+                _norm(item.get("sample_name")), _norm(item.get("item_name")),
+                _norm_standard(item.get("standard")))
+    if kind == "schedules":
+        return (_norm(item.get("project_id") or item.get("project_name")),
+                _norm(item.get("start_date")), _norm(item.get("end_date")))
+    if kind == "qualifications":
+        return (_norm(item.get("certificate_no")) or _norm(item.get("name")),)
+    return (_norm(item.get("alias")),)
+
+
+class BaseDataStore:
+    def __init__(self, path: Path | None = None):
+        self.path = Path(path) if path else _base_path()
+
+    def read(self) -> dict:
+        if not self.path.exists():
+            return {kind: [] for kind in BASE_KINDS}
+        try:
+            document = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CrmUnavailable(f"基础数据文件不可读：{self.path}（{exc}）") from exc
+        if not isinstance(document, dict):
+            raise CrmUnavailable(f"基础数据文件格式错误：{self.path}")
+        for kind in BASE_KINDS:
+            if not isinstance(document.setdefault(kind, []), list):
+                raise CrmUnavailable(f"基础数据 {kind} 必须是列表：{self.path}")
+        return document
+
+    def _save(self, document: dict, updated_by: str) -> None:
+        document.update(version=1, updated_by=updated_by,
+                        updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(json.dumps(document, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(self.path)
+
+    def upsert(self, kind: str, item: dict, updated_by: str = "") -> dict:
+        data = _coerce_base_item(kind, item)
+        key = _base_key(kind, data)
+        with _BASE_LOCK:
+            document = self.read()
+            for position, row in enumerate(document[kind]):
+                if _base_key(kind, row) == key:
+                    document[kind][position] = data
+                    action = "updated"
+                    break
+            else:
+                document[kind].append(data)
+                action = "created"
+            self._save(document, updated_by)
+        return {"action": action, "kind": kind, "item": data}
+
+    def delete(self, kind: str, item: dict, updated_by: str = "") -> bool:
+        _check_kind(kind)
+        if not isinstance(item, dict):
+            raise ValueError("基础数据条目必须是对象")
+        key = _base_key(kind, item)
+        with _BASE_LOCK:
+            document = self.read()
+            kept = [row for row in document[kind] if _base_key(kind, row) != key]
+            if len(kept) == len(document[kind]):
+                return False
+            document[kind] = kept
+            self._save(document, updated_by)
+        return True
+
+    def snapshot(self) -> CrmSnapshot:
+        document = self.read()
+        try:
+            return CrmSnapshot(
+                mode="base", source=str(self.path),
+                prices=[CrmPrice(**_base_row(CrmPrice, row)) for row in document["prices"]],
+                schedules=[CrmSchedule(**_base_row(CrmSchedule, row)) for row in document["schedules"]],
+                qualifications=[CrmQualification(**_base_row(CrmQualification, row)) for row in document["qualifications"]],
+                name_mappings=[CrmNameMapping(**_base_row(CrmNameMapping, row)) for row in document["name_mappings"]],
+            )
+        except (TypeError, ValueError) as exc:
+            raise CrmUnavailable(f"基础数据内容无效：{exc}") from exc
 
 
 class _PriceListMixin:
@@ -440,6 +579,8 @@ def provider() -> Any:
         return NullCrmProvider()
     if mode == "api":
         return ApiCrmProvider()
+    if mode == "base":
+        return BaseDataStore()
     path_text = os.getenv("P0_CRM_PATH", "").strip()
     if not path_text:
         raise CrmUnavailable(f"P0_CRM_MODE={mode} 需要 P0_CRM_PATH")
@@ -466,12 +607,27 @@ def read_projects(snapshot: CrmSnapshot) -> list[dict]:
     return [project.__dict__ for project in snapshot.projects]
 
 
+def resolve_project(snapshot: CrmSnapshot, name: str) -> str:
+    """Resolve a project name through the CS-1.4 mapping library (one hop)."""
+    wanted = _norm(name)
+    if not wanted:
+        return ""
+    for mapping in snapshot.name_mappings:
+        if _norm(mapping.alias) == wanted:
+            return mapping.canonical
+    return _text(name)
+
+
 def read_prices(snapshot: CrmSnapshot, project: str = "", query: str = "") -> list[dict]:
-    wanted_project = _norm(project)
+    wanted_project = _norm(resolve_project(snapshot, project)) if project else ""
     wanted_query = _norm(query)
     rows = []
     for price in snapshot.prices:
-        if wanted_project and wanted_project not in {_norm(price.project_id), _norm(price.project_name)}:
+        names = {
+            _norm(resolve_project(snapshot, name))
+            for name in (price.project_id, price.project_name)
+        }
+        if wanted_project and wanted_project not in names:
             continue
         if wanted_query and wanted_query not in _norm(
             price.sample_name + price.item_name + price.standard + price.department
@@ -591,3 +747,27 @@ def reconcile_quote(result: Any) -> dict:
         "price_available": price_available[:50],
         "crm_counts": snapshot.counts(),
     }
+
+
+def sync_base_data(
+    snapshot: CrmSnapshot, store: BaseDataStore | None = None, updated_by: str = ""
+) -> dict:
+    """Merge CRM rows into the local libraries (upsert only; F7: off is an error)."""
+    if snapshot.mode == "off":
+        raise CrmUnavailable("P0_CRM_MODE=off，未启用 CRM 数据源")
+    store = store or BaseDataStore()
+    counts = {"created": 0, "updated": 0, "skipped": 0}
+    for mapping in snapshot.name_mappings:
+        counts[store.upsert("name_mappings", mapping.__dict__, updated_by)["action"]] += 1
+    for kind in ("prices", "schedules", "qualifications"):
+        before = {_base_key(kind, row) for row in store.read()[kind]}
+        for row in getattr(snapshot, kind):
+            try:
+                item = store.upsert(kind, dict(row.__dict__), updated_by)["item"]
+            except ValueError:
+                counts["skipped"] += 1
+                continue
+            key = _base_key(kind, item)
+            counts["updated" if key in before else "created"] += 1
+            before.add(key)
+    return {"mode": snapshot.mode, "source": snapshot.source, **counts}

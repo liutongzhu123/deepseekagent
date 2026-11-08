@@ -2184,6 +2184,54 @@ def crm_sample(sample_no: str, request: Request) -> dict:
     return item
 
 
+# CS-1.1..1.4 admin-maintained base libraries and CRM-to-local sync
+def _crm_base_error(exc: Exception) -> HTTPException:
+    return HTTPException(503 if isinstance(exc, crm.CrmUnavailable) else 400, detail=str(exc))
+
+
+@app.get("/api/v1/crm/base-data")
+def crm_base_data(request: Request) -> dict:
+    _require_permission(request, "crm:read")
+    try:
+        document = crm.BaseDataStore().read()
+        return {**document, "counts": {kind: len(document[kind]) for kind in crm.BASE_KINDS}}
+    except (ValueError, crm.CrmUnavailable) as exc:
+        raise _crm_base_error(exc) from exc
+
+
+@app.post("/api/v1/crm/base-data/sync")
+def crm_base_data_sync(request: Request) -> dict:
+    user = _require_permission(request, "crm:write")
+    try:
+        result = crm.sync_base_data(_crm_snapshot(), updated_by=user.get("username", ""))
+    except (ValueError, crm.CrmUnavailable) as exc:
+        raise _crm_base_error(exc) from exc
+    _audit_event(request, user, "crm_base_data_sync", **result)
+    return result
+
+
+@app.post("/api/v1/crm/base-data/{kind}")
+def crm_base_data_upsert(kind: str, request: Request, payload: dict) -> dict:
+    user = _require_permission(request, "crm:write")
+    try:
+        result = crm.BaseDataStore().upsert(kind, payload, updated_by=user.get("username", ""))
+    except (ValueError, crm.CrmUnavailable) as exc:
+        raise _crm_base_error(exc) from exc
+    return result
+
+
+@app.delete("/api/v1/crm/base-data/{kind}")
+def crm_base_data_delete(kind: str, request: Request, payload: dict) -> dict:
+    user = _require_permission(request, "crm:write")
+    try:
+        deleted = crm.BaseDataStore().delete(kind, payload, updated_by=user.get("username", ""))
+    except (ValueError, crm.CrmUnavailable) as exc:
+        raise _crm_base_error(exc) from exc
+    if not deleted:
+        raise HTTPException(404, "基础数据条目不存在")
+    return {"deleted": True, "kind": kind}
+
+
 # ---------------------------------------------------------------------------
 # Increment 4: knowledge base rebuild + cited Q&A
 # ---------------------------------------------------------------------------
