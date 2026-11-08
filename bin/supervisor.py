@@ -24,6 +24,9 @@
   F27 台账回写被"agent 忙就返回"挡住 → 记账与催办都必须在负载判断之前
   F28 任务标了 doing 却没有工单也没有 PR → 永远不会被自动收尾（INFRA_BACKLOG 卡了一天）
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
+  F30 漂移检测只覆盖目标机的 p0/，漏掉服务器自己的 bin/ → Supervisor 自身代码也会与 main 分叉
+      机制：每轮把 bin/*.py 与 origin/main 比对并自动同步，**但同步前先做语法检查**，
+      防止把写坏的文件同步上来把自己跑挂
       （2026-11-08 真实发生：#137/#138 交付后被丢下，agent 直接去做了 B10）
 
 用法：
@@ -245,6 +248,55 @@ def merge_commit_for(pr: int | None) -> bool:
 
 
 # ---------- 业务逻辑 ----------
+
+SELF_FILES = ("supervisor.py", "deploy.py", "decision.py", "budget.py", "heartbeat.py")
+
+
+def _compiles(source: str) -> bool:
+    try:
+        compile(source, "<sync>", "exec")
+        return True
+    except SyntaxError:
+        return False
+
+
+def sync_self(dry_run: bool) -> list[str]:
+    """F30：让服务器上的 bin/*.py 与 origin/main 保持一致。
+
+    为什么需要：漂移检测只覆盖目标机的 app/config/static/scripts，而 Supervisor
+    自己的代码在服务器的 bin/ 下。手工 scp 会让它和 main 分叉，且没人会发现。
+    """
+    updated = []
+    for name in SELF_FILES:
+        try:
+            proc = git(["show", f"origin/main:bin/{name}"])
+        except Exception:
+            continue
+        if proc.returncode != 0 or not proc.stdout.strip():
+            continue
+        if not _compiles(proc.stdout):
+            log(f"bin/{name} 在 main 上语法不通过，跳过同步（防止把自己跑挂）")
+            continue
+        target = BIN / name
+        try:
+            current = target.read_text(encoding="utf-8")
+        except Exception:
+            current = ""
+        if current == proc.stdout:
+            continue
+        if dry_run:
+            log(f"[dry-run] 将同步 bin/{name} ← main")
+        else:
+            try:
+                target.write_text(proc.stdout, encoding="utf-8")
+                os.chmod(target, 0o755)
+                log(f"同步 bin/{name} ← main")
+            except Exception as exc:
+                log(f"同步 bin/{name} 失败：{exc}")
+                continue
+        updated.append(name)
+    return updated
+
 
 def task_ids(backlog: dict) -> set[str]:
     return {str(t.get("id")) for t in backlog.get("tasks") or [] if t.get("id")}
@@ -750,6 +802,8 @@ def run(dry_run: bool) -> int:
     stuck = stale_doing(backlog)
     if stuck:
         log(f"任务标着 doing 但没有工单也没有 PR：{', '.join(stuck)}（需要人工确认完成或改回 todo）")
+
+    sync_self(dry_run)                     # F30：自己的代码也跟 main 对齐
 
     changed = reconcile(backlog)                       # 改的是内存
     if changed:
