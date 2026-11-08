@@ -473,7 +473,8 @@ tasks:
 
   - id: INFRA_VERIFY
     title: 双人验证（独立 agent 对抗性复核）
-    status: todo
+    pr: 159
+    status: done
     size: M
     deps: [INFRA_SUPERVISOR]
     acceptance: ["解析/判定类改动必须过第二道", "拒绝时能给出具体反例"]
