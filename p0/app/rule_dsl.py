@@ -227,63 +227,200 @@ _LIMIT_RULE_OPS = {
     "range": "not_between",
     "tolerance": "not_between",
 }
+_RULE_PREFIX = {"interval": "J", "combination": "C", "grade": "G"}
 
 
-def generate_judgment_rules(items: list[dict]) -> dict:
-    """Draft judgment rules from extracted standard limits.
+def generate_judgment_rules(
+    items: list[dict], record_template: dict | list | None = None
+) -> dict:
+    """Draft high-confidence interval, combination and grade rules.
 
-    Rule semantics follow ``RulePack.evaluate``: a hit means the value is out
-    of specification (``gt`` upper for a ≤ limit, ``not_between`` for a range).
-    Only high-confidence limits become rules.  Low-confidence table mappings
-    are returned under ``pending`` (待确认) and never enter ``rules``; a
-    direction-less ``kind=value`` limit is also held back, because judging it
-    would mean guessing a bound.  Drafts keep the source clause and table
-    evidence; binding them to record templates is B6 (SP-5.2).
+    A hit means out of specification (``RulePack.evaluate`` semantics).
+    Combination rules group same-unit limits (``and``, or ``or`` for an
+    explicit 或); grade rules require explicit ``level``/``grade`` metadata and
+    never infer levels.  Low-confidence or unusable limits stay in ``pending``.
     """
     rules: list[dict] = []
     pending: list[dict] = []
     for item in items:
-        for index, entry in enumerate(item.get("limits") or []):
-            if not is_high_confidence(entry):
-                pending.append(_pending_limit(item, entry, index, "低置信限值，待人工确认"))
+        checks, skipped = _item_checks(item)
+        pending.extend(skipped)
+        groups: dict[str, list[dict]] = {}
+        for check in checks:
+            groups.setdefault(check["unit"] or check["column"], []).append(check)
+        for members in groups.values():
+            leveled = [check for check in members if check["level"]]
+            if len(leveled) > 1:
+                rules.append(_rule(item, "grade", leveled))
+                members = [check for check in members if not check["level"]]
+            if len(members) > 1:
+                rules.append(_rule(item, "combination", members))
+            elif members:
+                rules.append(_rule(item, "interval", members))
+    counts = {kind: 0 for kind in _RULE_PREFIX}
+    for rule in rules:
+        counts[rule["type"]] += 1
+        rule["id"] = f"{_RULE_PREFIX[rule['type']]}{counts[rule['type']]:03d}"
+    result = {"version": 1, "rules": rules, "pending": pending, "counts": counts}
+    if record_template is not None:
+        result["rules"] = bind_rules_to_template(rules, record_template)
+    return result
+
+
+def _item_checks(item: dict) -> tuple[list[dict], list[dict]]:
+    """Return usable high-confidence checks plus the limits held for review."""
+    checks: list[dict] = []
+    pending: list[dict] = []
+    for index, entry in enumerate(item.get("limits") or []):
+        if not is_high_confidence(entry):
+            pending.append(_pending_limit(item, entry, index, "低置信限值，待人工确认"))
+            continue
+        op = _LIMIT_RULE_OPS.get(str(entry.get("kind") or ""))
+        if op is None:
+            pending.append(_pending_limit(item, entry, index, "限值缺少比较方向，待人工确认"))
+            continue
+        if op == "not_between":
+            if entry.get("lower") is None or entry.get("upper") is None:
+                pending.append(_pending_limit(item, entry, index, "区间上下限不完整，待人工确认"))
                 continue
-            op = _LIMIT_RULE_OPS.get(str(entry.get("kind") or ""))
-            if op is None:
-                pending.append(_pending_limit(item, entry, index, "限值缺少比较方向，待人工确认"))
-                continue
-            if op == "not_between":
-                if entry.get("lower") is None or entry.get("upper") is None:
-                    pending.append(_pending_limit(item, entry, index, "区间上下限不完整，待人工确认"))
-                    continue
-                value: Any = [entry["lower"], entry["upper"]]
+            value: Any = [entry["lower"], entry["upper"]]
+        elif entry.get("lower" if op == "lt" else "upper") is None:
+            pending.append(_pending_limit(item, entry, index, "限值边界缺失，待人工确认"))
+            continue
+        else:
+            value = entry["lower" if op == "lt" else "upper"]
+        checks.append({
+            "op": op, "value": value, "kind": entry.get("kind"),
+            "lower": entry.get("lower"), "upper": entry.get("upper"),
+            "unit": str(entry.get("unit") or ""), "raw": str(entry.get("raw") or ""),
+            "cell_raw": str(entry.get("cell_raw") or ""),
+            "level": str(entry.get("level") or entry.get("grade") or "").strip(),
+            "logic": str(entry.get("logic") or "").strip().lower(),
+            "page": entry.get("table_page") or item.get("page"),
+            "table_row": entry.get("table_row"), "column": entry.get("column") or "",
+            "item_clause": entry.get("item_clause") or item.get("clause") or "",
+        })
+    return checks, pending
+
+
+def _rule(item: dict, kind: str, checks: list[dict]) -> dict:
+    first = checks[0]
+    rule = {
+        "id": "", "type": kind, "clause": first["item_clause"],
+        "item_clause": first["item_clause"], "name": item.get("name") or "",
+        "unit": first["unit"], "page": first["page"],
+        "table_row": first["table_row"], "column": first["column"],
+        "confidence": "high", "status": "draft", "source": "standard",
+    }
+    payload = [{key: check[key] for key in
+                ("op", "value", "kind", "lower", "upper", "raw", "level")}
+               for check in checks]
+    if kind == "interval":
+        rule.update({**payload[0], "raw": first["raw"]})
+    elif kind == "combination":
+        rule["logic"] = "or" if any(
+            check["logic"] == "or" or "或" in check["raw"] or "或" in check["cell_raw"]
+            for check in checks) else "and"
+        rule["raw"] = (" 或 " if rule["logic"] == "or" else " 且 ").join(
+            check["raw"] or "—" for check in checks)
+        rule["checks"] = payload
+    else:
+        rule["raw"] = "；".join(check["raw"] or "—" for check in checks)
+        rule["levels"] = [{"level": check["level"], **data}
+                          for check, data in zip(checks, payload)]
+    return rule
+
+
+def bind_rules_to_template(
+    rules: list[dict], template: dict | list[dict]
+) -> list[dict]:
+    """Bind rules to explicit original-record template fields.
+
+    ``template`` is ``{"id": ..., "fields": [{"key", "clause", "unit"?}]}``.
+    A rule binds only to exactly one matching field; ambiguous rules stay
+    unbound, so no record field is guessed.
+    """
+    fields = template.get("fields") if isinstance(template, dict) else template
+    fields = [field for field in fields or []
+              if isinstance(field, dict) and field.get("key")]
+    template_id = str(template.get("id") or "") if isinstance(template, dict) else ""
+    bound: list[dict] = []
+    for rule in rules:
+        matches = [field for field in fields
+                   if str(field.get("clause") or "") == rule.get("item_clause")
+                   and (not field.get("unit") or str(field["unit"]) == rule.get("unit"))]
+        item = dict(rule)
+        item["binding"] = ({"template": template_id, "field": str(matches[0]["key"])}
+                           if len(matches) == 1 else None)
+        bound.append(item)
+    return bound
+
+
+def judge_record(record: dict, rules: list[dict] | dict) -> dict:
+    """Judge an entered original record against template-bound rules.
+
+    Returns 合格/不合格/待录入; a failed rule yields 不合格, while missing or
+    non-numeric values keep the record at 待录入.
+    """
+    if isinstance(rules, dict):
+        rules = rules.get("rules") or []
+    results: list[dict] = []
+    missing: list[str] = []
+    for rule in rules:
+        field = (rule.get("binding") or {}).get("field")
+        if not field:
+            continue
+        try:
+            value = float(record.get(field))
+        except (TypeError, ValueError):
+            missing.append(field)
+            continue
+        results.append({
+            "rule_id": rule.get("id"), "type": rule.get("type") or "interval",
+            "field": field, "value": value, **_judge(value, rule),
+        })
+    if any(result["passed"] is False for result in results):
+        verdict = "不合格"
+    elif results and not missing:
+        verdict = "合格"
+    else:
+        verdict = "待录入"
+    return {
+        "verdict": verdict, "evaluated": len(results),
+        "results": results, "missing": missing,
+    }
+
+
+def _judge(value: float, rule: dict) -> dict:
+    if rule.get("type") == "grade":
+        passed = [level for level in rule.get("levels") or []
+                  if _passes(value, level)]
+        if not passed:
+            return {"passed": False, "level": None}
+        ops = {level.get("op") for level in passed}
+        try:
+            if ops == {"gt"}:
+                chosen = min(passed, key=lambda level: float(level["value"]))
+            elif ops == {"lt"}:
+                chosen = max(passed, key=lambda level: float(level["value"]))
             else:
-                bound = "lower" if op == "lt" else "upper"
-                if entry.get(bound) is None:
-                    pending.append(_pending_limit(item, entry, index, "限值边界缺失，待人工确认"))
-                    continue
-                value = entry[bound]
-            rules.append(
-                {
-                    "id": f"J{len(rules) + 1:03d}",
-                    "clause": item.get("clause") or entry.get("clause") or "",
-                    "item_clause": entry.get("item_clause") or item.get("clause") or "",
-                    "name": item.get("name") or "",
-                    "kind": entry.get("kind"),
-                    "op": op,
-                    "lower": entry.get("lower"),
-                    "upper": entry.get("upper"),
-                    "value": value,
-                    "unit": entry.get("unit") or "",
-                    "raw": entry.get("raw") or "",
-                    "page": entry.get("table_page") or item.get("page"),
-                    "table_row": entry.get("table_row"),
-                    "column": entry.get("column") or "",
-                    "confidence": "high",
-                    "status": "draft",
-                    "source": "standard",
-                }
-            )
-    return {"version": 1, "rules": rules, "pending": pending}
+                chosen = passed[0]
+        except (KeyError, TypeError, ValueError):
+            chosen = passed[0]
+        return {"passed": True, "level": chosen.get("level")}
+    outcomes = [_passes(value, check) for check in rule.get("checks") or [rule]]
+    passed = any(outcomes) if rule.get("logic") == "or" else all(outcomes)
+    return {"passed": passed, "level": None}
+
+
+def _passes(value: float, check: dict) -> bool:
+    op = str(check.get("op") or "")
+    if op not in VALID_OPS:
+        return False
+    try:
+        return not _match(value, op, check.get("value"))
+    except (TypeError, ValueError, IndexError):
+        return False
 
 
 def _pending_limit(item: dict, entry: dict, index: int, reason: str) -> dict:
@@ -292,9 +429,7 @@ def _pending_limit(item: dict, entry: dict, index: int, reason: str) -> dict:
     pending.update(
         clause=item.get("clause") or entry.get("clause") or "",
         item_clause=entry.get("item_clause") or item.get("clause") or "",
-        name=item.get("name") or "",
-        limit_index=index,
-        page=entry.get("table_page") or item.get("page"),
-        reason=reason,
+        name=item.get("name") or "", limit_index=index,
+        page=entry.get("table_page") or item.get("page"), reason=reason,
     )
     return pending
