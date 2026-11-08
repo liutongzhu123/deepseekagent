@@ -356,7 +356,8 @@ tasks:
 
   - id: RA_RAWVER
     title: 原始记录版本有效性检查
-    status: todo
+    pr: 187
+    status: done
     size: S
     covers: [RA-4.7]
     acceptance: ["引用过期版本号能报出", "最新版本不报"]
@@ -364,7 +365,8 @@ tasks:
 
   - id: RA_FIXEDTEXT
     title: 固定内容校验（中文 8 条 / 英文 7 条注意事项）
-    status: todo
+    pr: 188
+    status: done
     size: M
     covers: [RA-4.11]
     acceptance: ["缺注意事项能逐条报出", "顺序或措辞错误能报出", "中英文各按 8/7 条核对"]
