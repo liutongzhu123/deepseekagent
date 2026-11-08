@@ -129,16 +129,17 @@ class Uat:
             return
         item = items[0]
         revision_before = int(record.get("revision", 0))
+        updates = [{
+            "clause": item.get("clause", ""),
+            "requirement": (item.get("requirement") or "") + "（UAT 复核）",
+            "method": item.get("method") or "",
+        }]
+        # 未确认不入库：UAT 发布前确认其余条目（SP-2.2）。
+        updates += [{"clause": other.get("clause", ""), "reviewed": True}
+                    for other in items[1:]]
         response = self.client.patch(
             f"/api/v1/standards/{record['id']}",
-            json={
-                "reviewer": "UAT",
-                "items": [{
-                    "clause": item.get("clause", ""),
-                    "requirement": (item.get("requirement") or "") + "（UAT 复核）",
-                    "method": item.get("method") or "",
-                }],
-            },
+            json={"reviewer": "UAT", "items": updates},
         )
         ok_review = response.status_code == 200
         detail = self.client.get(f"/api/v1/standards/{record['id']}")

@@ -238,7 +238,12 @@ def test_kb_stats_filters_projects(env):
         "items": [{"seq": 1, "clause": "5.1", "name": "外观", "requirement": "无缺陷", "method_clause": "6.1", "method": "目测", "page": 1, "method_page": 1}],
     }
     record_a = standard_store.create(parsed, b"pdf", "a.pdf", project="P-A", created_by="alice")
-    standard_store.create(parsed, b"pdf", "b.pdf", project="P-B", created_by="bob")
+    record_b = standard_store.create(parsed, b"pdf", "b.pdf", project="P-B", created_by="bob")
+    # 未确认不入库：重建索引只收已复核的标准（SP-2.2）。
+    for record in (record_a, record_b):
+        standard_store.update_review(
+            record["id"], [{"clause": "5.1", "reviewed": True}], reviewer="复核人"
+        )
     standard_store.rebuild_index()
 
     alice = TestClient(main.app)

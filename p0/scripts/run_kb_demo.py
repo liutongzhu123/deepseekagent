@@ -55,6 +55,13 @@ def main() -> int:
         pages = extract_pages(data)
         parsed = parse_standard(pages, file_name, pdf_bytes=data)
         record = standard_store.create(parsed, data, file_name)
+        # 未确认不入库：演示脚本先按“人工复核确认”确认全部条目再发布。
+        standard_store.update_review(
+            record["id"],
+            [{"clause": item.get("clause", ""), "reviewed": True}
+             for item in record["items"]],
+            reviewer="kb-demo",
+        )
         published = standard_store.publish(record["id"])
         created.append(
             {

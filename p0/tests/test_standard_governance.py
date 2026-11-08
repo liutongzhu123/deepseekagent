@@ -63,6 +63,16 @@ def _review(standard_id: str, value: str, reviewer: str = "复核人") -> dict:
     )
 
 
+def _confirm_all(standard_id: str, reviewer: str = "复核人") -> dict:
+    """未确认不入库：发布前确认全部条款（SP-2.2）。"""
+    record = standard_store.load(standard_id)
+    return standard_store.update_review(
+        standard_id,
+        [{"clause": item["clause"], "reviewed": True} for item in record["items"]],
+        reviewer=reviewer,
+    )
+
+
 def test_review_writes_revision_snapshots(std_env):
     record = _create(std_env)
     standard_id = record["id"]
@@ -84,6 +94,7 @@ def test_review_writes_revision_snapshots(std_env):
 def test_unpublish_removes_kb_and_allows_republish(std_env):
     record = _create(std_env)
     standard_id = record["id"]
+    _confirm_all(standard_id)
     standard_store.publish(standard_id)
     published = standard_store.load(standard_id)
     assert published["published"] is True
@@ -170,7 +181,7 @@ def test_standard_detail_exposes_high_confidence_rule_drafts(std_env):
 def test_versions_unpublish_and_rollback_api(std_env):
     record = _create(std_env)
     standard_id = record["id"]
-    _review(standard_id, "回滚前的新要求")
+    _confirm_all(standard_id)
 
     versions = std_env.client.get(f"/api/v1/standards/{standard_id}/versions")
     assert versions.status_code == 200
@@ -188,6 +199,8 @@ def test_versions_unpublish_and_rollback_api(std_env):
     assert rolled.json()["revision"] == 2
     assert rolled.json()["published"] is False
 
+    # 回滚到 r0 带回复核前的条目，需重新确认后才能入库（未确认不入库）。
+    _confirm_all(standard_id)
     standard_store.publish(standard_id)
     unpublished = std_env.client.post(f"/api/v1/standards/{standard_id}/unpublish")
     assert unpublished.status_code == 200

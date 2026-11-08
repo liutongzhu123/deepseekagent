@@ -79,10 +79,12 @@ def _handle_standard_publish(task: dict, report: Callable[[str, int], None]) -> 
     report("indexing", 45)
     result = standard_store.publish(standard_id)
     report("save", 92)
-    _audit_task(task, "standard_published", standard_id=standard_id, chunks=result.get("chunks", 0))
+    _audit_task(task, "standard_published", standard_id=standard_id,
+                chunks=result.get("chunks", 0), items=result.get("items", 0))
     return {
         "standard_id": standard_id,
         "chunks": result.get("chunks", 0),
+        "items": result.get("items", 0),
         "published_at": result.get("published_at", ""),
         "weknora": result.get("weknora"),
     }

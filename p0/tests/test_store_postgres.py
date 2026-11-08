@@ -116,6 +116,10 @@ def test_standard_roundtrip_and_objects(pg):
     assert updated["revision"] == 1
     assert standards.items_for(record["id"], 1)[0]["requirement"] == "复核后的要求"
 
+    # 未确认不入库：确认剩余条款后才能发布（SP-2.2）。
+    standard_store.update_review(
+        record["id"], [{"clause": "5.2", "reviewed": True}], reviewer="alice"
+    )
     published = standard_store.publish(record["id"])
     assert published["published"] is True
     assert standard_store.published_kbs(record["id"])[0]["chunks"]
@@ -422,6 +426,10 @@ def test_standard_versions_unpublish_and_rollback(pg):
     assert rolled["revision"] == 2
     assert rolled["items"][0]["requirement"] == "外观无缺陷"
 
+    # 回滚到 r0 带回复核前的条目，重新确认后才能发布。
+    standard_store.update_review(
+        record["id"], [{"clause": "5.1", "reviewed": True}], reviewer="bob"
+    )
     standard_store.publish(record["id"])
     assert standard_store.load(record["id"])["published"] is True
     standard_store.unpublish(record["id"], "bob")

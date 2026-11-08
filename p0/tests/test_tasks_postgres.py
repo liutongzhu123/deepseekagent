@@ -120,6 +120,9 @@ def test_async_publish_returns_task_and_updates_standard(task_env):
         ],
     }
     record = standard_store.create(parsed, b"%PDF-1.4 demo", "demo.pdf", project="P1", created_by="admin")
+    standard_store.update_review(
+        record["id"], [{"clause": "5.1", "reviewed": True}], reviewer="复核人"
+    )
     with TestClient(main.app) as client:
         response = client.post(f"/api/v1/standards/{record['id']}/publish")
         assert response.status_code == 202, response.text
