@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import store, weknora
-from .standard_extract.items_list import normalise_parts
+from .standard_extract import items_list
 from .xlsx_writer import write_xlsx
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -243,13 +243,13 @@ def update_review(standard_id: str, updates: list[dict], reviewer: str = "",
                 if field not in update or update[field] is None:
                     continue
                 value = (
-                    normalise_parts(update[field])
+                    items_list.normalise_parts(update[field])
                     if field == "applicable_parts"
                     else str(update[field]).strip()
                 )
                 current = item.get(field) or ([] if field == "applicable_parts" else "")
                 if field == "applicable_parts":
-                    current = normalise_parts(current)
+                    current = items_list.normalise_parts(current)
                 if value == current:
                     continue
                 reason = _review_reason(item, field)
@@ -303,6 +303,7 @@ def _recompute_summary(record: dict) -> dict:
             "feedback_samples": len(record.get("review_feedback") or []),
         }
     )
+    record["items_list"] = items_list.build(record.get("meta") or {}, items)
     return summary
 
 

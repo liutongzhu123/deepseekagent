@@ -72,6 +72,7 @@ def test_review_edits_parts_and_marks_list_ready(monkeypatch, tmp_path):
     assert item["applicable_parts_source"] == "manual"
     assert item["method_clause"] == "6.1.1" and item["reviewed"] is True
     assert updated["summary"]["items_with_applicable_parts"] == 1
+    assert updated["items_list"]["items"][0]["review_status"] == "confirmed"
     checklist = items_list.build(updated["meta"], updated["items"])
     assert checklist["items"][0]["review_status"] == "confirmed"
     assert checklist["summary"]["ready_for_store"] is True
