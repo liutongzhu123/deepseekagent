@@ -65,3 +65,21 @@ def test_r11_integration():
     assert _r11()["status"] == "pass"
     assert _r11(basis=JLY, client="", paragraphs=["比亚迪 检验报告"])["status"] == "fail"
     assert _r11(basis=JLY, client="")["status"] == "skip"
+
+def test_appledouble_file_does_not_break_loading(tmp_path, monkeypatch):
+    """回归：部署目录里混入 macOS 的 ._xxx 二进制文件时，配置加载不能崩。
+
+    2026-11-08 真实事故：._byd_odor.yaml 让 read_text 抛 UnicodeDecodeError，
+    未被捕获，导致 177 个测试失败、部署连续回滚。
+    """
+    from app import template_rules
+
+    cfg = tmp_path / "templates"
+    cfg.mkdir()
+    (cfg / "good.yaml").write_text("family: x\nmatch: [y]\n", encoding="utf-8")
+    (cfg / "._good.yaml").write_bytes(b"\x00\x05\x16\x07" + bytes(range(60)))
+
+    monkeypatch.setattr(template_rules, "CONFIG_DIR", cfg)
+    oems, families = template_rules.load_configs()
+    assert isinstance(oems, dict)
+    assert all(isinstance(item, dict) for item in families)
