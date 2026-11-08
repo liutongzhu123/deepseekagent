@@ -9,6 +9,8 @@ F4 已登记主机厂无模板配置（吉利）→ skip，绝不 pass
 F5 GB/T 等通用依据、无主机厂信号 → warn；F6 多个模板标记 → fail
 F7 配置缺失/不可读 → skip；F8/F9 页数变体/缺页数 → 模板族仍判
 F10 空值、重复标记、非字符串配置项 → 不崩
+F11 封面同一行既有标准号又有主机厂名称 → 只去掉标准号，不能把整行丢掉
+    （否则 Q/BYDQ 标准号会把「比亚迪」模板标记一起吞掉，错用模板判成 skip）
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ except ImportError:  # pragma: no cover - requirements installs PyYAML
     yaml = None
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config" / "templates"
-_STANDARD_RE = re.compile(r"Q\s*[/／-]\s*[A-Z]{2,}")
+_STANDARD_RE = re.compile(r"Q\s*[/／-]\s*[A-Z]{2,}(?:[.\-—–－][A-Za-z0-9]+)*")
 _TEMPLATE_HEAD = 40  # cover/notice only: body citations are content, not template proof
 
 
@@ -97,7 +99,13 @@ def _votes(oems: dict[str, dict], basis: str, client: str, supplier: str, sample
 
 
 def _marks(oems: dict[str, dict], paragraphs: Iterable[str]) -> dict[str, list[str]]:
-    text = "\n".join(str(line) for line in list(paragraphs or [])[:_TEMPLATE_HEAD] if line and not _STANDARD_RE.search(str(line)))
+    lines: list[str] = []
+    for line in list(paragraphs or [])[:_TEMPLATE_HEAD]:
+        if not line:
+            continue
+        # F11: 只去掉标准号本身；整行丢弃会连带吞掉同一行的主机厂模板名称。
+        lines.append(_STANDARD_RE.sub(" ", str(line)))
+    text = "\n".join(lines)
     return {key: hits for key, spec in oems.items() if (hits := _hits(text, spec.get("template_any") or []))}
 
 
