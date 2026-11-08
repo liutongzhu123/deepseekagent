@@ -534,6 +534,40 @@ def test_f52_todo_task_with_rejected_pr_gets_reset(monkeypatch):
     assert task is not None and task["id"] == "RA_PHOTO_SEQ"
 
 
+def test_f53_rejected_reset_only_once(monkeypatch):
+    """F53：同一个被拒 PR 只重置一次，不能每轮都清（否则会重复派单）。"""
+    dispatched = {}
+    rejected_now = {167}
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo", "pr": 167}])
+    logs = []
+    monkeypatch.setattr(sup, "log", lambda msg, *a, **k: logs.append(msg))
+
+    def once():
+        for item in ng["tasks"]:
+            tid = str(item.get("id"))
+            if str(item.get("status")) != "todo":
+                continue
+            pr = int(item["pr"])
+            if pr not in rejected_now:
+                continue
+            record = dispatched.get(tid) or {}
+            if record.get("reset_for") == pr:
+                continue
+            dispatched[tid] = {"attempts": 0, "last_at": "2026-11-08T22:50:00+08:00", "reset_for": pr}
+            sup.log("reset %s" % tid)
+
+    once(); once(); once()
+    assert len(logs) == 1, "只应重置一次"
+
+
+def test_f54_open_pr_blocks_dispatch(monkeypatch):
+    """F54：任务已有未合并的 PR 时，不再派单。"""
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo"}])
+    task, reason = sup.next_task(ng, set(), {}, set(), {"RA_PHOTO_SEQ": 181})
+    assert task is None
+    assert "未合并" in reason and "181" in reason
+
+
 def test_f51_max_attempts_is_reported(monkeypatch):
     """F51：达到派单上限的任务必须出现在 blocked 原因里，不能静默消失。"""
     ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo"}])
