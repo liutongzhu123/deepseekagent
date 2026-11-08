@@ -20,7 +20,8 @@ import re
 
 _NUM = r"-?\d+(?:\.\d+)?"
 _UNIT = (
-    r"(?:N·m|N\.m|kN·m|kN|N|MPa|kPa|GPa|Pa|MΩ|kΩ|Ω|mA|kV|V|A|"
+    r"(?:dB\s*[（(]\s*[μµuU]\s*[VA]\s*(?:/\s*m)?\s*[)）]|"
+    r"N·m|N\.m|kN·m|kN|N|MPa|kPa|GPa|Pa|MΩ|kΩ|Ω|mA|kV|V|A|"
     r"dB\(A\)|dB|HV|HBW|HRC|HRB|μm|um|mm|cm|mL/min|ml/min|mL|ml|L/min|L|m|"
     r"kg|mg|g|℃|°C|%|h|min|s|次|级|个|倍|份|根|张|片|支|"
     r"兆帕|千帕|帕|千牛|牛|毫米|厘米|米|千克|克|毫克|毫升|升|小时|分钟|秒|摄氏度|分贝)"
@@ -64,7 +65,17 @@ def _round(value: float) -> float | int:
 
 
 def _unit(value: str | None) -> str:
-    return _UNIT_FIX.get(value, value) if value else ""
+    if not value:
+        return ""
+    text = value.replace("（", "(").replace("）", ")").replace("µ", "μ")
+    if text.lower().startswith("db"):
+        text = re.sub(r"\s+", "", text)
+        match = re.fullmatch(r"dB\(([μu])([VA])(?:/(m))?\)", text, re.IGNORECASE)
+        if match:
+            micro, base, metre = match.groups()
+            base = base.upper()
+            return f"dB({micro.replace('u', 'μ')}{base}{'/' + metre if metre else ''})"
+    return _UNIT_FIX.get(value, value)
 
 
 def _normalise(text: str) -> str:

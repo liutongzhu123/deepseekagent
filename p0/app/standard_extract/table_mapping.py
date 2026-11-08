@@ -8,8 +8,11 @@ extra ``value`` kind keeps B2 fields); a condition column plus a ``℃`` header
 turns a bare ``-40～125`` into a temperature range.  Cell values stay
 distinguishable through ``raw``/``cell_raw``.  Unusable headers and rows are
 not guessed: ``mapping_confidence`` is ``low`` and the raw row stays in
-``tables[]``.  Table-mapped entries carry ``source=table``/``table_page``/
-``table_row``/``column`` for traceability.
+``tables[]``.  A unit stated only in a table footnote (``table["footnotes"]``
+or a merged note row) is applied when the column has no header unit; ambiguous
+or contradicting notes keep the entry ``low`` (see ``table_units``).
+Table-mapped entries carry ``source=table``/``table_page``/``table_row``/
+``column`` for traceability.
 """
 from __future__ import annotations
 
@@ -17,6 +20,12 @@ import re
 
 from .conditions import extract_conditions
 from .limits import _UNIT as _LIMIT_UNIT, extract_limits
+from .table_units import (
+    is_footnote_row,
+    normalise_unit,
+    resolve_footnote_units,
+    unit_compatible,
+)
 
 _NUM = r"-?\d+(?:\.\d+)?"
 _UNIT = rf"(?:ms|mΩ|{_LIMIT_UNIT})"
@@ -39,7 +48,11 @@ def _num(text: str) -> float | int:
     return int(value) if value.is_integer() else value
 
 def _unit(text: str | None) -> str:
-    return {"°C": "℃", "mΩ": "MΩ"}.get(text or "", text or "")
+    if not text:
+        return ""
+    if text.lower().startswith("db"):
+        return normalise_unit(text)
+    return {"°C": "℃", "mΩ": "MΩ"}.get(text, text)
 
 def _header_unit(label: str) -> str:
     """Unit stated once in a column header (``工作温度范围℃``, ``时间 min``)."""
@@ -110,7 +123,8 @@ def _fix_m_unit(entry: dict, cell: str) -> None:
             entry["unit"] = fixed
             return
 
-def _limit_cell(cell: str, hint: str) -> list[dict]:
+def _limit_cell(cell: str, hint: str, source: str = "header",
+                note: str = "") -> list[dict]:
     """Limits from one limit-column cell; bare values rely on the column."""
     entries: list[dict] = []
     for segment in _segments(cell):
@@ -118,7 +132,8 @@ def _limit_cell(cell: str, hint: str) -> list[dict]:
         if not segment or segment in _PLACEHOLDER:
             continue
         found = extract_limits(segment)
-        if not found and hint:
+        injected = not found and bool(hint)
+        if injected:
             found = extract_limits(f"{segment} {hint}")
         if not found:
             match = _RANGE.fullmatch(segment)
@@ -133,18 +148,27 @@ def _limit_cell(cell: str, hint: str) -> list[dict]:
                 entry = _entry("value", match.group("unit") or hint,
                                value=_num(match.group("num")), raw=segment)
             if hint and not match.group("unit"):
-                entry["unit_source"] = "header"
+                entry["unit_source"] = source
+                if note:
+                    entry["unit_note"] = note
             entries.append(entry)
             continue
         for entry in found:
             if not entry.get("unit") and hint:
                 entry["unit"] = _unit(hint)
-                entry["unit_source"] = "header"
+                entry["unit_source"] = source
+                if note:
+                    entry["unit_note"] = note
+            elif injected and hint and entry.get("unit") == _unit(hint):
+                entry["unit_source"] = source
+                if note:
+                    entry["unit_note"] = note
             _fix_m_unit(entry, cell)
             entries.append(entry)
     return entries
 
-def _condition_cell(cell: str, hint: str, kind: str) -> list[dict]:
+def _condition_cell(cell: str, hint: str, kind: str, source: str = "header",
+                    note: str = "") -> list[dict]:
     """Conditions from one condition-column cell; bare values use the header."""
     found = extract_conditions(cell)
     if found:
@@ -160,7 +184,9 @@ def _condition_cell(cell: str, hint: str, kind: str) -> list[dict]:
             if unit:
                 entries.append({"kind": kind, "value": _num(match.group("low")),
                                 "value_max": _num(match.group("high")), "tolerance": None,
-                                "unit": _unit(unit), "raw": segment})
+                                "unit": _unit(unit), "raw": segment,
+                                "unit_source": source if unit == hint else "default",
+                                **({"unit_note": note} if note and unit == hint else {})})
             continue
         match = _BARE.fullmatch(segment)
         if match:
@@ -168,8 +194,37 @@ def _condition_cell(cell: str, hint: str, kind: str) -> list[dict]:
             if unit:
                 entries.append({"kind": kind, "value": _num(match.group("num")),
                                 "value_max": None, "tolerance": None,
-                                "unit": _unit(unit), "raw": segment})
+                                "unit": _unit(unit), "raw": segment,
+                                "unit_source": source if unit == hint else "default",
+                                **({"unit_note": note} if note and unit == hint else {})})
     return entries
+
+def _repair_watermark_unit(entry: dict, footnote: dict) -> bool:
+    """A lone ``g``/``m`` after a number is a watermark, not a unit."""
+    unit = entry.get("unit")
+    if (not unit or unit == footnote.get("unit") or len(unit) != 1
+            or not unit.isascii() or not unit.isalpha()
+            or "除注明外" in footnote.get("note", "")):
+        return False
+    raw = re.sub(r"\s+", "", entry.get("raw") or "")
+    if not re.fullmatch(rf"[≤≥<>]?{_NUM}[A-Za-z]", raw):
+        return False
+    entry["unit"] = footnote["unit"]
+    entry["unit_source"] = "footnote"
+    entry["unit_note"] = footnote["note"]
+    return True
+
+
+def _all_notes(table: dict) -> list[str]:
+    """Footnotes from T1 page capture plus merged note rows in the grid."""
+    notes = list(table.get("footnotes") or [])
+    for row in table.get("rows") or []:
+        cells = [str(cell or "") for cell in row]
+        if is_footnote_row(cells):
+            notes.append(next((cell for cell in cells if cell), ""))
+    return [note for note in dict.fromkeys(
+        str(note).strip() for note in notes if note) if note]
+
 
 def _map_table(table: dict) -> tuple[dict, list[dict], list[dict]]:
     header = table.get("header") or []
@@ -179,8 +234,23 @@ def _map_table(table: dict) -> tuple[dict, list[dict], list[dict]]:
     limit_cols = [index for index, (role, _conf) in enumerate(roles) if role == "limit"]
     condition_cols = [index for index, (role, _conf) in enumerate(roles) if role == "condition"]
     warning = table.get("parse_warning")
+    structural = any(marker in (warning or "") for marker in
+                     ("未识别到表头", "未定位到所属条款", "条款按邻近条目推断"))
+    notes = _all_notes(table)
+    resolved = resolve_footnote_units(notes, header, roles)
+    note_warning = resolved.get("warning") or ""
+    applied_units: dict[str, str] = {}
+    for index, item in resolved["units"].items():
+        if index >= len(header):
+            continue
+        role, _conf = roles[index]
+        kind = _condition_kind(header[index]) if role == "condition" else ""
+        if unit_compatible(header[index], role, kind, item["unit"]):
+            applied_units[header[index][:80]] = item["unit"]
     meta = {"columns": columns, "confidence": "none", "mapped_rows": 0,
-            "low_confidence_rows": [], "warning": warning, "limits": 0, "conditions": 0}
+            "low_confidence_rows": [], "warning": warning, "limits": 0, "conditions": 0,
+            "footnotes": notes, "footnote_warning": note_warning or None,
+            "footnote_units": applied_units}
     if not header or not (limit_cols or condition_cols):
         meta["warning"] = "表头未识别到限值/条件列" + (f"；{warning}" if warning else "")
         return meta, [], []
@@ -188,6 +258,8 @@ def _map_table(table: dict) -> tuple[dict, list[dict], list[dict]]:
     conditions: list[dict] = []
     for row_index, row in enumerate(table.get("rows") or []):
         cells = [str(cell or "") for cell in row]
+        if is_footnote_row(cells):
+            continue
         row_label = next((cells[index] for index, (role, _conf) in enumerate(roles)
                           if role == "identifier" and cells[index].strip()), "")
         row_label = row_label or (cells[0] if cells else "")
@@ -203,17 +275,36 @@ def _map_table(table: dict) -> tuple[dict, list[dict], list[dict]]:
             if not cell or cell in _PLACEHOLDER or role not in {"limit", "condition"}:
                 continue
             label = header[index] if index < len(header) else ""
+            kind = _condition_kind(label) if role == "condition" else ""
             hint = _header_unit(label)
-            low = bool(warning) or (role == "condition" and len(cell) > 80)
+            source = "header"
+            unit_note = ""
+            conflict = False
+            if hint and role == "condition" and not unit_compatible(
+                    label, role, kind, hint):
+                note_warning = note_warning or "表头单位与列语义不符，未采用"
+                hint, conflict = "", True
+            footnote = resolved["units"].get(index)
+            if not hint and footnote:
+                if unit_compatible(label, role, kind, footnote["unit"]):
+                    hint, source = footnote["unit"], "footnote"
+                    unit_note = footnote["note"]
+                else:
+                    note_warning = note_warning or "脚注单位与列语义矛盾，未应用"
+                    conflict = True
+            low = structural or conflict or (role == "condition" and len(cell) > 80)
             if role == "limit":
                 strong = any(word in label for word in ("限值", "指标"))
-                for entry in _limit_cell(cell, hint):
+                repair = footnote if source == "footnote" else None
+                for entry in _limit_cell(cell, hint, source, unit_note):
+                    if repair:
+                        _repair_watermark_unit(entry, repair)
                     entry.update(column=label[:80], cell_raw=cell, table_role="limit",
                                  mapping_confidence="low" if low or not entry["unit"]
                                  or (entry["kind"] == "value" and not strong) else "high")
                     row_limits.append(entry)
             else:
-                for entry in _condition_cell(cell, hint, _condition_kind(label)):
+                for entry in _condition_cell(cell, hint, kind, source, unit_note):
                     entry.update(column=label[:80], cell_raw=cell, table_role="condition",
                                  source="table", mapping_confidence="low" if low else "high")
                     row_conditions.append(entry)
@@ -230,8 +321,11 @@ def _map_table(table: dict) -> tuple[dict, list[dict], list[dict]]:
             meta["low_confidence_rows"].append({"row": row_index, "reason": "未识别出限值/条件"})
     meta["limits"], meta["conditions"] = len(limits), len(conditions)
     high = any(entry["mapping_confidence"] == "high" for entry in limits + conditions)
-    meta["confidence"] = "high" if high and not warning else (
+    meta["confidence"] = "high" if high and not structural else (
         "low" if limits or conditions else "none")
+    if note_warning:
+        meta["warning"] = ((warning + "；") if warning else "") + note_warning
+        meta["footnote_warning"] = note_warning
     return meta, limits, conditions
 
 def _owner(items_by_clause: dict, items: list[dict], clause: str) -> dict | None:
@@ -249,7 +343,8 @@ def apply_table_mapping(items: list[dict], tables: list[dict]) -> dict:
     """Attach mapped table rows to items; return the T2 summary and totals."""
     by_clause = {item["clause"]: item for item in items if item.get("clause")}
     counts = {"limits": 0, "low_limits": 0, "conditions": 0, "low_conditions": 0,
-              "tables": 0, "low_tables": 0, "rows": 0, "low_rows": 0}
+              "tables": 0, "low_tables": 0, "rows": 0, "low_rows": 0,
+              "footnote_limits": 0, "footnote_conditions": 0}
     for table in tables:
         meta, limits, conditions = _map_table(table)
         table["mapping"] = meta
@@ -275,6 +370,9 @@ def apply_table_mapping(items: list[dict], tables: list[dict]) -> dict:
         counts["low_limits"] += sum(1 for e in limits if e["mapping_confidence"] == "low")
         counts["conditions"] += len(conditions)
         counts["low_conditions"] += sum(1 for e in conditions if e["mapping_confidence"] == "low")
+        counts["footnote_limits"] += sum(1 for e in limits if e.get("unit_source") == "footnote")
+        counts["footnote_conditions"] += sum(
+            1 for e in conditions if e.get("unit_source") == "footnote")
         counts["tables"] += 1
         counts["rows"] += meta["mapped_rows"]
         counts["low_rows"] += len(meta["low_confidence_rows"])
@@ -289,8 +387,10 @@ def apply_table_mapping(items: list[dict], tables: list[dict]) -> dict:
         "conditions_not_extracted": len(items) - with_conditions,
         "table_limits": counts["limits"],
         "table_limits_low_confidence": counts["low_limits"],
+        "table_limits_footnote_unit": counts["footnote_limits"],
         "table_conditions": counts["conditions"],
         "table_conditions_low_confidence": counts["low_conditions"],
+        "table_conditions_footnote_unit": counts["footnote_conditions"],
         "tables_mapped": counts["tables"], "tables_mapping_low": counts["low_tables"],
         "table_rows_mapped": counts["rows"],
         "table_rows_low_confidence": counts["low_rows"],

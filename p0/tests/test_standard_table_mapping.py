@@ -10,6 +10,7 @@ from app.standard_extract.table_mapping import (
     _segments,
     apply_table_mapping,
 )
+from app.standard_extract.tables import _clean_cell, _notes_below
 from app.standard_parser import parse_standard
 
 _SAMPLE = Path(
@@ -19,6 +20,11 @@ _GENERAL = Path(os.getenv(
     "P0_STANDARD_GENERAL_SAMPLE",
     "/opt/dsh-agent/samples/standards/Q-JLY J7111029E-2024-汽车电气和电子零部件通用技术规范.pdf",
 ))
+_EMC = Path(os.getenv(
+    "P0_STANDARD_EMC_SAMPLE",
+    "/opt/dsh-agent/samples/standards/Q-JLY J7110779E-2023-乘用车电气-电子零部件电磁兼容规范.pdf",
+))
+_NOTE = "注：1）限值单位为dB(μV)， “/”标识表示不适用。"
 
 
 def _item(clause: str = "5.2") -> dict:
@@ -150,3 +156,143 @@ def test_real_standard_general_table_limits_are_mapped_and_counted():
         if entry.get("source") == "table"]
     assert len(table_limits) == summary["table_limits"]
     assert any(entry["kind"] == "value" for entry in table_limits)
+
+
+def test_header_unit_keeps_dB_microvolt_denominator():
+    assert _clean_cell("电场峰值限值 .dB（μV/m）") == "电场峰值限值 .dB（μV/m）"
+    assert _header_unit("电场峰值限值 .dB（μV/m）") == "dB(μV/m)"
+    assert _header_unit("限值 dB(uV)") == "dB(μV)"
+
+
+def test_footnote_unit_raises_missing_unit_limits_to_high():
+    item = _item()
+    table = {"clause": "5.2", "page": 23, "parse_warning": None,
+             "header": ["项目", "限值"], "rows": [["辐射", "30"]],
+             "footnotes": [_NOTE]}
+    summary = apply_table_mapping([item], [table])
+    limit, = item["limits"]
+    assert (limit["unit"], limit["unit_source"]) == ("dB(μV)", "footnote")
+    assert limit["mapping_confidence"] == "high"
+    assert summary["table_limits_low_confidence"] == 0
+    assert summary["table_limits_footnote_unit"] == 1
+
+
+def test_header_watermark_note_does_not_erase_a_resolved_unit():
+    item = _item()
+    table = {"clause": "5.2", "page": 23,
+             "parse_warning": "表头含水印/页眉残留，需人工复核",
+             "header": ["项目", "限值"], "rows": [["辐射", "30"]],
+             "footnotes": [_NOTE]}
+    apply_table_mapping([item], [table])
+    assert item["limits"][0]["unit"] == "dB(μV)"
+    assert item["limits"][0]["mapping_confidence"] == "high"
+
+
+def test_structural_parse_warning_keeps_mapping_low():
+    item = _item()
+    table = {"clause": "5.2", "page": 23, "parse_warning": "未识别到表头",
+             "header": ["项目", "限值"], "rows": [["辐射", "30"]],
+             "footnotes": [_NOTE]}
+    apply_table_mapping([item], [table])
+    assert item["limits"][0]["mapping_confidence"] == "low"
+
+
+def test_watermarked_footnote_row_supplies_the_unit():
+    item = _item()
+    table = {"clause": "5.2", "page": 23, "parse_warning": None,
+             "header": ["项目", "限值"],
+             "rows": [["辐射", "30"], ["注：1）限值单位为dTB( O μV)", "", ""]],
+             "footnotes": []}
+    apply_table_mapping([item], [table])
+    limit, = item["limits"]
+    assert limit["unit"] == "dB(μV)" and limit["unit_source"] == "footnote"
+    assert limit["mapping_confidence"] == "high"
+    assert table["mapping"]["low_confidence_rows"] == []
+    assert table["mapping"]["mapped_rows"] == 1
+
+
+def test_single_letter_watermark_unit_is_replaced_by_the_footnote():
+    item = _item()
+    table = {"clause": "5.2", "page": 31, "parse_warning": None,
+             "header": ["项目", "限值"], "rows": [["辐射", "21g"]],
+             "footnotes": ["注：1)限值单位为dB(μV/m)， “/”标识表示不适用。"]}
+    apply_table_mapping([item], [table])
+    limit, = item["limits"]
+    assert (limit["unit"], limit["unit_source"]) == ("dB(μV/m)", "footnote")
+    assert limit["mapping_confidence"] == "high"
+
+
+def test_several_footnote_units_map_to_their_own_columns():
+    item = _item()
+    table = {"clause": "5.2", "page": 23, "parse_warning": None,
+             "header": ["项目", "峰值限值", "平均值限值"],
+             "rows": [["辐射", "30", "20"]],
+             "footnotes": ["注：峰值限值单位dB(μV)，平均值限值单位dB(μA)。"]}
+    apply_table_mapping([item], [table])
+    assert {(entry["unit"], entry["mapping_confidence"])
+            for entry in item["limits"]} == {("dB(μV)", "high"), ("dB(μA)", "high")}
+
+
+def test_ambiguous_footnote_units_are_not_guessed():
+    item = _item()
+    table = {"clause": "5.2", "page": 23, "parse_warning": None,
+             "header": ["项目", "限值"], "rows": [["辐射", "30"]],
+             "footnotes": ["注：峰值限值单位dB(μV)，平均值限值单位dB(μA)。"]}
+    apply_table_mapping([item], [table])
+    assert item["limits"][0]["unit"] == ""
+    assert item["limits"][0]["mapping_confidence"] == "low"
+    assert "未应用" in table["mapping"]["footnote_warning"]
+
+
+def test_several_units_in_one_statement_are_not_guessed():
+    item = _item()
+    table = {"clause": "5.2", "page": 23, "parse_warning": None,
+             "header": ["项目", "限值"], "rows": [["辐射", "30"]],
+             "footnotes": ["注：单位均为dB(μV)或dB(μA)。"]}
+    apply_table_mapping([item], [table])
+    assert item["limits"][0]["unit"] == ""
+    assert item["limits"][0]["mapping_confidence"] == "low"
+    assert "多个单位" in table["mapping"]["footnote_warning"]
+
+
+def test_footnote_unit_contradicting_a_temperature_column_stays_low():
+    item = _item()
+    table = {"clause": "5.2", "page": 23, "parse_warning": None,
+             "header": ["项目", "要求", "温度"],
+             "rows": [["辐射", "30", "40"]],
+             "footnotes": ["注：单位均为dB(μV)。"]}
+    apply_table_mapping([item], [table])
+    assert all(entry["mapping_confidence"] == "low"
+               for entry in item["limits"] + item["conditions"])
+    assert "矛盾" in table["mapping"]["warning"]
+
+
+def test_note_far_below_the_table_is_not_used():
+    class Page:
+        height = 842
+
+        def __init__(self, top: float):
+            self.top = top
+
+        def extract_text_lines(self):
+            return [{"text": _NOTE, "top": self.top}]
+
+    assert _notes_below(Page(400), (0, 0, 100, 100), None) == []
+    near = _notes_below(Page(140), (0, 0, 100, 100), None)
+    assert len(near) == 1 and near[0].startswith("注：1）限值单位")
+
+
+@pytest.mark.skipif(not _EMC.is_file(), reason="EMC 标准样例未挂载")
+def test_real_emc_footnotes_raise_low_confidence_table_limits():
+    from app import standard_parse
+
+    result = standard_parse.parse_pdf_standard(
+        _EMC.read_bytes(), _EMC.name, enable_ocr=False)
+    summary = result["summary"]
+    assert summary["table_limits"] >= 80
+    assert summary["table_limits_footnote_unit"] > 0
+    assert 0 < summary["table_limits_low_confidence"] < summary["table_limits"]
+    footnote_limits = [
+        entry for item in result["items"] for entry in item["limits"]
+        if entry.get("source") == "table" and entry.get("unit_source") == "footnote"]
+    assert footnote_limits and all(entry["unit"] for entry in footnote_limits)
