@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -20,6 +22,19 @@ def load_deploy():
 
 
 dep = load_deploy()
+
+
+@pytest.fixture(autouse=True)
+def no_target_cleanup(monkeypatch):
+    """所有用例默认不真的执行 clean_junk()——它会 ssh 到目标机跑 find -delete。
+
+    2026-11-08 第二轮验证指出：调用 run() 的用例没有 mock clean_junk()，测试会
+    真实连目标机执行 5 次 find -delete。用 autouse 兜底，新增 run() 用例也不会
+    再误连目标机；需要断言调用顺序的用例自行覆盖本 fixture。
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(dep, "clean_junk", lambda: calls.append("clean"))
+    return calls
 
 
 # ---------- F19：幂等 ----------
@@ -197,6 +212,28 @@ def test_f24_health_gives_up_after_retries(monkeypatch):
     monkeypatch.setattr(dep, "time", type("T", (), {"sleep": staticmethod(lambda _s: None)}))
     ok, detail = dep.wait_healthy(retries=3, delay=0)
     assert ok is False and detail == "000"
+
+
+# ---------- F40：目标机残留垃圾（._* / .DS_Store / __pycache__） ----------
+
+def test_f40_clean_junk_runs_before_and_after_payload(monkeypatch):
+    """回归：部署前后各清一次；移除 run() 里的 clean_junk() 调用本用例必须变红。"""
+    order: list[str] = []
+    monkeypatch.setattr(dep, "clean_junk", lambda: order.append("clean"))
+    monkeypatch.setattr(dep, "target_reachable", lambda: True)
+    monkeypatch.setattr(dep, "local_main_sha", lambda: "cafebabe")
+    monkeypatch.setattr(dep, "ENABLED", True)
+    monkeypatch.setattr(dep, "backup_target", lambda tag: "/root/backup.tgz")
+    monkeypatch.setattr(dep, "deploy_payload", lambda sha: order.append("payload") or True)
+    monkeypatch.setattr(dep, "restart_and_check", lambda: (True, "385 passed"))
+    monkeypatch.setattr(dep, "read_state", lambda: {"history": []})
+    monkeypatch.setattr(dep, "write_state", lambda data: None)
+    monkeypatch.setattr(dep, "tree_manifest", lambda: "manifest")
+    monkeypatch.setattr(dep, "log", lambda *_a, **_k: None)
+
+    dep.run(dry_run=False)
+
+    assert order == ["clean", "payload", "clean"], "部署前/解压后都必须清理目标机垃圾"
 
 
 # ---------- 成功路径 ----------
