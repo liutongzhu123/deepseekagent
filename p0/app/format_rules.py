@@ -1111,9 +1111,135 @@ def r27_raw_record_version(data: ReportData):
     )
 
 
+# --- R29: 产品名称异常识别（RA-5.2） ---------------------------------------
+# 判定输入只有「样品名称」(data.sample_name) 与「检验项目」(data.item) 两个
+# 字段；不读正文、不做语义推理，避免把合法组合误报。
+# Failure branches (each covered in p0/tests/test_product_name.py):
+# F1 样品名称为空 -> skip（空缺项由 R14 报出，不重复）。
+# F2 样品名称是占位符/不适用值（XXXXX、XX、___、待填、—、/ 等）-> skip（R14 负责）。
+# F3 样品名称是纯编号/代号（001、A-001、SN2024、2024-01、001号样品）-> fail。
+# F4 样品名称只由检测项目词构成（气味、拉伸强度、外观检查、门板尺寸）-> fail：
+#    与检验项目相同 -> “与检验项目相同”；与检验项目不同 -> “明显不符”。
+# F5 样品名称只是通用词（样品/产品/零部件/总成/材料）-> fail，无法判定种类。
+# F6 名称里还有检测项目词以外的产品/描述词（后视镜、袋子-100L、PP材料、气味瓶）-> pass。
+# F7 英文/字母名称没有编号特征（Seat、PP）-> pass，按可能的产品名处理，不误报。
+# F8 真实产品名与检验项目是否适配（后视镜做气味试验）不在本规则判定，理由见 README。
+_TEST_ITEM_TERMS = tuple(sorted((
+    "断裂伸长率", "压缩永久变形", "熔体流动速率", "挥发性有机物", "尺寸稳定性",
+    "拉伸强度", "拉伸性能", "弯曲强度", "弯曲模量", "冲击强度", "撕裂强度",
+    "粘合强度", "剥离强度", "耐刮擦性", "耐刮擦", "耐磨性", "耐磨",
+    "耐候性", "耐候", "耐化学性", "耐化学", "耐湿热", "耐低温", "耐高温",
+    "绝缘电阻", "耐电压", "熔融指数", "门板尺寸", "光泽度", "附着力",
+    "挥发性", "雾化值", "甲醛", "重金属", "色差", "硬度", "密度", "灰分",
+    "水分", "挥发分", "酸值", "粘度", "电导率", "温升", "振动", "噪声",
+    "疲劳", "腐蚀", "燃烧", "阻燃性", "阻燃", "雾化", "老化", "盐雾",
+    "密封性", "密封", "气密性", "水密性", "外观", "尺寸", "气味", "成分",
+    "含量", "迁移", "析出", "voc", "ph",
+), key=len, reverse=True))
+# 只去掉两端的通用词/字段后缀，避免把“气味瓶”“座椅气味”里的产品词一起吞掉。
+_NAME_WRAPPERS = (
+    "试验件", "样品", "试样", "样件", "检测", "测试", "试验", "检验",
+    "项目", "方法", "等级", "结果", "要求", "报告", "记录", "名称",
+    "检查", "编号", "号", "值",
+)
+_GENERIC_NAMES = {
+    "样品", "产品", "试样", "样件", "试验件", "零部件", "零件", "部件",
+    "总成", "材料", "物品", "东西", "其他",
+}
+# R14 已把以下值当“未填写/占位符”报出，R29 只 skip，不重复报。
+_NAME_PLACEHOLDERS = {
+    "待填", "待定", "未填", "未知", "无", "不适用", "不涉及",
+    "n/a", "na", "null", "none", "—", "-", "/", "□", "☐",
+}
+_CJK_RE = re.compile(r"[\u3400-\u9fff]")
+_PURE_ID_RE = re.compile(r"^(?=.*\d)[a-z0-9]+$")
+_NAME_SEPARATORS_RE = re.compile(r"[^0-9a-z\u3400-\u9fff]+")
+
+
+def _name_key(text: str) -> str:
+    """Drop punctuation/symbols and case so ``A-001`` and ``Ａ００１`` compare equal."""
+    return _NAME_SEPARATORS_RE.sub("", unicodedata.normalize("NFKC", str(text or "")).strip().lower())
+
+
+def _product_name_residual(key: str) -> tuple[str, list[str]]:
+    """Strip generic wrappers and test-item terms; return (residual, matched terms)."""
+    residual = key
+    matched: list[str] = []
+    changed = True
+    while changed and residual:
+        changed = False
+        for wrapper in _NAME_WRAPPERS:
+            if residual.startswith(wrapper):
+                residual = residual[len(wrapper):]
+                changed = True
+            elif residual.endswith(wrapper):
+                residual = residual[:-len(wrapper)]
+                changed = True
+        for term in _TEST_ITEM_TERMS:
+            if term in residual:
+                matched.append(term)
+                residual = residual.replace(term, "")
+                changed = True
+    return residual, matched
+
+
+def r29_product_name(data: ReportData):
+    title = "产品名称异常识别"
+    name_text = str(data.sample_name or "").strip()
+    item_text = str(data.item or "").strip()
+    evidence = f"样品名称={name_text or '（空）'}; 检验项目={item_text or '（空）'}"
+    compact = re.sub(r"\s+", "", unicodedata.normalize("NFKC", name_text).lower())
+    if not compact:
+        return _finding(
+            "R29", title, "skip", "info", "未识别到样品名称字段，无法判定产品种类（空缺项由 R14 报出）",
+            evidence, section="样品名称", cell="样品名称",
+        )
+    if (compact in _NAME_PLACEHOLDERS or re.fullmatch(r"x+", compact)
+            or re.fullmatch(r"[_＿.·…]+", compact)):
+        return _finding(
+            "R29", title, "skip", "info", "样品名称为占位符/不适用值，无法判定产品种类（占位符由 R14 报出）",
+            evidence, section="样品名称", cell=name_text[:40],
+        )
+    key = _name_key(name_text)
+    suggestion = "填写可识别的产品名称（产品类别+型号），不要只写编号、代号、检测项目或通用词"
+    if key in _GENERIC_NAMES:
+        return _finding(
+            "R29", title, "fail", "medium",
+            f"样品名称「{name_text}」仅含通用词，无法判定产品种类",
+            evidence, suggestion, section="样品名称", cell=name_text[:40],
+        )
+    residual, matched = _product_name_residual(key)
+    if not residual and matched:
+        item_key = _name_key(item_text)
+        if item_key and all(term in item_key for term in matched):
+            message = f"产品名称与检验项目相同（「{name_text}」），无法判定产品种类"
+        elif item_text:
+            message = f"产品名称「{name_text}」是检测项目名，与检验项目「{item_text}」明显不符，无法判定产品种类"
+        else:
+            message = f"样品名称「{name_text}」是检测项目名，无法判定产品种类"
+        return _finding("R29", title, "fail", "medium", message, evidence, suggestion,
+                        section="样品名称", cell=name_text[:40])
+    if not residual:
+        return _finding(
+            "R29", title, "fail", "medium",
+            f"样品名称「{name_text}」仅含通用词，无法判定产品种类",
+            evidence, suggestion, section="样品名称", cell=name_text[:40],
+        )
+    if not _CJK_RE.search(residual) and _PURE_ID_RE.match(residual) and not re.search(r"[a-z]{4,}", residual):
+        return _finding(
+            "R29", title, "fail", "medium",
+            f"样品名称「{name_text}」为纯编号/代号，无法判定产品种类",
+            evidence, suggestion, section="样品名称", cell=name_text[:40],
+        )
+    return _finding(
+        "R29", title, "pass", "info", f"样品名称「{name_text}」可识别产品种类",
+        evidence + "; 判定=可识别", section="样品名称", cell=name_text[:40],
+    )
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency, "R27": r27_raw_record_version}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency, "R27": r27_raw_record_version, "R29": r29_product_name}
