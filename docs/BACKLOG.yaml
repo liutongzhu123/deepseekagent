@@ -359,11 +359,13 @@ tasks:
 
   - id: RA_SAMPLENO
     title: 样品编号连续性与重复性
-    status: todo
+    status: done
+    pr: 154
     size: S
     covers: [RA-5.4, RA-1.8]
     acceptance: ["编号断号/重复能报出"]
-    files: [p0/app/format_rules.py]
+    files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_format_sample_numbers.py, docs/report-format-checks/README.md]
+    note: BYD 12 份草稿各仅 1 个样品编号 → R24 12/12 skip、0 误报；断号/重复/范围/数量不符由 16 条合成用例覆盖
 
   # ========== 待做：智能客服（尚未开始） ==========
   - id: CS_BASE
