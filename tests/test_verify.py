@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""双人验证的失败路径测试（对应 bin/verify.py 的 F31–F35）。"""
+"""双人验证的失败路径测试（对应 bin/verify.py 的 F31–F42）。"""
 
 from __future__ import annotations
 
@@ -211,3 +211,97 @@ def test_prompt_requires_evidence(monkeypatch):
     assert "gh-agent pr diff 9" in text
     assert "对抗性检查" in text
     assert "含糊" in text or "不许写" in text
+
+
+# ---------- F40：解析/判定类改动必须过第二道 ----------
+
+def test_f40_parse_judge_modules_are_risky():
+    for path in ("bin/verify.py", "bin/decision.py", "p0/app/docx_parser.py",
+                 "p0/app/partial_rules.py", "p0/app/quote_import.py",
+                 "p0/app/report_inputs.py"):
+        assert ver.is_risky([path]) is True, path
+        assert ver.is_parse_judge([path]) is True, path
+    assert ver.is_risky(["docs/PLAN.md"]) is False
+    assert ver.is_parse_judge(["docs/PLAN.md"]) is False
+
+
+def test_f40_unknown_files_still_parse_judge():
+    """F34/F40：拿不到文件列表时按解析/判定类处理。"""
+    assert ver.is_risky([]) is True
+    text = ver.verify_prompt(9, "feat(x): 改动", [])
+    assert "解析/判定类" in text
+
+
+def test_f40_prompt_requires_second_adversarial_pass():
+    text = ver.verify_prompt(9, "feat(verify): 判定", ["bin/verify.py"])
+    assert "解析/判定类" in text
+    assert "第二道" in text
+    assert "反例输入" in text and "反例输出" in text
+
+
+# ---------- F41/F42：拒绝必须有具体反例 ----------
+
+def test_f41_counterexample_parsing():
+    assert ver.counterexample_of("结论：拒绝\n反例：5.2 抽成 160~210 应为 160～210")
+    assert ver.counterexample_of(
+        "结论：拒绝\n反例输入：`echo 5.2`\n反例输出：160~210（应为 160～210）")
+    assert ver.counterexample_of("结论：拒绝\n反例：边界值没测") == ""
+    assert ver.counterexample_of("结论：拒绝\n理由：错了") == ""
+    assert ver.counterexample_of("结论：拒绝\n反例输入：5.2") == "", "只有输入没有输出不算"
+    # 纯文本反例（错别字/字符串判定）也要能收，不能只认数字
+    assert ver.counterexample_of("结论：拒绝\n反例输入：按装\n反例输出：未报错")
+
+
+def test_f41_reject_without_counterexample_not_confirmed(monkeypatch):
+    store = {"verified": {"501": {"status": "dispatched"}}}
+    sent = []
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: None)
+    monkeypatch.setattr(ver, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"}, "content": "验证 PR #501\n结论：拒绝\n理由：边界值错"}])
+    monkeypatch.setattr(ver, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+
+    assert ver.collect(dry_run=False) == 1
+    entry = store["verified"]["501"]
+    assert entry["status"] == "unverified", "没有反例的拒绝不能 confirmed"
+    assert entry["review"] == "pending"
+    assert entry["counterexample_requested"]
+    assert "反例输入" in sent[0]
+
+    # 再收一次同一条消息：不能重复补证、也不能变成 reject
+    ver.collect(dry_run=False)
+    assert len(sent) == 1, "补证只请求一次"
+    assert store["verified"]["501"]["status"] == "unverified"
+
+
+def test_f41_reject_with_counterexample_confirmed(monkeypatch):
+    store = {"verified": {"502": {"status": "dispatched"}}}
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: None)
+    monkeypatch.setattr(ver, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"}, "content":
+         "验证 PR #502\n结论：拒绝\n理由：边界值错\n"
+         "反例输入：`echo 5.2`\n反例输出：160~210（应为 160～210）"}])
+    monkeypatch.setattr(ver, "send_as_user", lambda text, dry=False: True)
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+
+    assert ver.collect(dry_run=False) == 1
+    entry = store["verified"]["502"]
+    assert entry["status"] == "reject"
+    assert entry["review"] == "confirmed"
+    assert "160" in entry["counterexample"]
+
+
+def test_f41_counterexample_send_failure_recorded(monkeypatch):
+    """补证发不出去要留痕（F35 同理），不能假装请求过。"""
+    store = {"verified": {"503": {"status": "dispatched"}}}
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: None)
+    monkeypatch.setattr(ver, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"}, "content": "验证 PR #503\n结论：拒绝"}])
+    monkeypatch.setattr(ver, "send_as_user", lambda text, dry=False: False)
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+
+    ver.collect(dry_run=False)
+    assert store["verified"]["503"]["counterexample_request_sent"] is False
