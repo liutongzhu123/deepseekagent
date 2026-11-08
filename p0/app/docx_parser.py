@@ -15,10 +15,7 @@ from pathlib import Path
 from typing import Iterable
 from xml.etree import ElementTree as ET
 
-try:  # optional in minimal deployments; defaults keep the BYD mapping working
-    import yaml
-except ImportError:  # pragma: no cover - requirements installs PyYAML
-    yaml = None
+from .template_rules import match_template
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -444,44 +441,10 @@ def _footer_pages(text: str) -> tuple[list[int], list[int]]:
     return pages, totals
 
 
-_TEMPLATE_CONFIG: dict | None = None
-
-
-def _template_config() -> dict:
-    global _TEMPLATE_CONFIG
-    if _TEMPLATE_CONFIG is not None:
-        return _TEMPLATE_CONFIG
-    path = Path(__file__).resolve().parent.parent / "config" / "templates" / "byd_odor.yaml"
-    if yaml is not None and path.exists():
-        try:
-            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                _TEMPLATE_CONFIG = loaded
-                return _TEMPLATE_CONFIG
-        except (OSError, yaml.YAMLError):
-            pass
-    _TEMPLATE_CONFIG = {
-        "family": "BYD-odor",
-        "match": {"basis_any": ["Q/BYDQ", "比亚迪"], "item_any": ["气味"]},
-        "variants": {"OTS": {"label": "OTS", "page_totals": [5]}, "MOBAN": {"label": "摸底", "page_totals": [4]}},
-    }
-    return _TEMPLATE_CONFIG
-
-
-def identify_template(basis: str, item: str, page_totals: list[int]) -> tuple[str, str]:
-    """Return (family, variant label) from the configurable BYD mapping."""
-    config = _template_config()
-    match = config.get("match") or {}
-    basis_any = [str(value) for value in match.get("basis_any") or []]
-    item_any = [str(value) for value in match.get("item_any") or []]
-    if not (any(value and value in (basis or "") for value in basis_any) or any(value and value in (item or "") for value in item_any)):
-        return "generic", ""
-    totals = set(page_totals or [])
-    for spec in (config.get("variants") or {}).values():
-        expected = set(spec.get("page_totals") or [])
-        if expected and totals and totals <= expected:
-            return str(config.get("family") or "BYD-odor"), str(spec.get("label") or "")
-    return str(config.get("family") or "BYD-odor"), ""
+def identify_template(basis: str, item: str, page_totals: list[int], **kwargs: object) -> tuple[str, str]:
+    """Return (family, variant) for the OEM template (backward-compatible wrapper)."""
+    match = match_template(basis=basis, item=item, page_totals=page_totals, **kwargs)
+    return (match.family or "generic", match.variant)
 
 
 def parse_docx(path: str | Path) -> ReportData:
@@ -626,7 +589,15 @@ def parse_docx(path: str | Path) -> ReportData:
 
     basis = summary.get("检验依据", "")
     item = summary.get("检验项目", "")
-    template_family, template_variant = identify_template(basis, item, page_totals)
+    template_family, template_variant = identify_template(
+        basis,
+        item,
+        page_totals,
+        client=summary.get("委托单位", ""),
+        supplier=summary.get("生产企业", ""),
+        sample_name=summary.get("样品名称", ""),
+        paragraphs=paragraphs,
+    )
 
     return ReportData(
         file_name=path.name,

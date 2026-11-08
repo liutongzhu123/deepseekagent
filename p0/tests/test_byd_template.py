@@ -43,6 +43,8 @@ def test_twelve_drafts_are_classified():
         data = parse_docx(path)
         assert data.template_family == "BYD-odor"
         assert data.template_variant in {"OTS", "摸底"}
+        finding = next(item for item in audit_report(data)["findings"] if item["rule_id"] == "R11")
+        assert finding["status"] == "pass"
         variants.append(data.template_variant)
     assert len(variants) == 12
     assert variants.count("OTS") == 6

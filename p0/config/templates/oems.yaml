@@ -1,0 +1,13 @@
+# 主机厂登记表（R11 / RA-4.18）。
+# basis_any / name_any：报告内容指向哪个主机厂（检验依据、委托单位、生产企业、样品名称）。
+# template_any：该主机厂报告模板的固定文字（封面/页眉/注意事项），用于发现“错用模板”。
+BYD:
+  label: 比亚迪
+  basis_any: ["Q/BYDQ", "比亚迪"]
+  name_any: ["比亚迪", "BYD"]
+  template_any: ["比亚迪", "BYD"]
+JLY:
+  label: 吉利
+  basis_any: ["Q/JLY", "JLY", "吉利"]
+  name_any: ["吉利", "JLY"]
+  template_any: ["吉利", "JLY"]

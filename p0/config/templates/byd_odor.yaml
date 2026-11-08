@@ -1,6 +1,7 @@
 # BYD odor report template (POC sample). No customer values, only field/variant mapping.
 family: BYD-odor
 label: 比亚迪气味
+oem: BYD
 match:
   basis_any:
     - Q/BYDQ
