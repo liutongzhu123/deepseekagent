@@ -66,6 +66,20 @@ def test_r11_integration():
     assert _r11(basis=JLY, client="", paragraphs=["比亚迪 检验报告"])["status"] == "fail"
     assert _r11(basis=JLY, client="")["status"] == "skip"
 
+
+def test_cover_standard_number_does_not_mask_template_mark():  # F11
+    """封面同一行的 Q/BYDQ 标准号不能把「比亚迪」模板标记一起吞掉。"""
+    cover = "Q/BYDQ-A1901.404—2025 比亚迪汽车工业有限公司 检验报告"
+
+    match = _match(basis=JLY, client="", paragraphs=[cover])
+    assert match.status == "fail" and "错用模板" in match.message
+    assert "版式=比亚迪" in match.evidence
+    assert _r11(basis=JLY, client="", paragraphs=[cover])["status"] == "fail"
+
+    # 只有标准号、没有主机厂名称的封面行仍不能当作模板标记。
+    only_standard = _match(basis=JLY, client="", paragraphs=["Q/BYDQ-A1901.404—2025"])
+    assert only_standard.status == "skip" and "版式=-" in only_standard.evidence
+
 def test_appledouble_file_does_not_break_loading(tmp_path, monkeypatch):
     """回归：部署目录里混入 macOS 的 ._xxx 二进制文件时，配置加载不能崩。
 
