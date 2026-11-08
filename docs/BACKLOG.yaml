@@ -328,7 +328,8 @@ tasks:
 
   - id: RA_STDVER
     title: 检测依据标准年代号检查
-    status: done
+    status: todo
+    note: 验证 #149 拒绝：①`Q/JLY J7110109C` 缺年代号未报出（token 识别不到字母开头的编号）②`GB/T 1037-2021：xxx` 冒号被吞进 token 导致误报格式不合法
     pr: 149
     size: S
     covers: [RA-4.15]
