@@ -540,18 +540,22 @@ def r18_toc_pages(data: ReportData):
 # F8 多个标准号混合（合法/缺年代号/格式错）-> 只报问题项，计数准确。
 # F9 同一标准号重复出现 -> 只报一次。
 # F10 只检查检验依据字段（含“检验依据：”行与标题下一行回退），不扫正文其他引用；F11 名称/方案号/限值数字不误识别为标准号。
+# F12 企业标准 Q/ 组织代号后隔空格、编号以字母开头（Q/JLY J7110109C）-> 识别并判缺年代号，不能 skip。
+# F13 冒号只在紧跟数字时并进标准号（2021:2015 保留；2021：说明文字 或 结尾冒号 断掉），
+#     否则合法标准号后接冒号会被误判格式不合法。
 _BASIS_LABELS = ("检验依据", "检测依据")
 _STD_DASHES = str.maketrans({"–": "-", "—": "-", "−": "-", "－": "-", "―": "-"})
+_STD_TOKEN_TAIL = r"(?:[A-Za-z0-9.\-]|:(?=\d))*"
 _STD_QT_RE = re.compile(
     r"(?<![A-Za-z0-9/])(?P<kind>Q|T)/[A-Za-z][A-Za-z0-9]*(?:[.\-][A-Za-z0-9]+)*"
-    r"(?:[ \t]*\d[A-Za-z0-9.\-:]*)?"
+    r"(?:[ \t]*(?:[A-Z]+)?\d" + _STD_TOKEN_TAIL + r")?"
 )
 _STD_GENERAL_RE = re.compile(
     r"(?<![A-Za-z0-9])"
     r"(?P<prefix>GB/T|GB/Z|GBJ|GBZ|GJB|GB|DB\d{2}(?:/[TZ])?"
     r"|[A-Z]{2,3}/[TZ]"
     r"|(?:ISO|IEC|EN|DIN|JIS|ASTM|SAE|ANSI|UL|CSA|FMVSS|ECE|UN)(?![A-Za-z]))"
-    r"[ \t]*(?P<body>[A-Za-z]{0,3}[ \t]?\d[A-Za-z0-9.\-:]*)"
+    r"[ \t]*(?P<body>[A-Za-z]{0,3}[ \t]?\d" + _STD_TOKEN_TAIL + r")"
 )
 
 
