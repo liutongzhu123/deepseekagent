@@ -389,6 +389,72 @@ def test_long_narrative_is_still_skipped(line):
 
 
 # ---------------------------------------------------------------------------
+# Round 6b: prose words count only when they touch 照片N.  A description after
+# punctuation ("…，试验前可见划痕。") and a series name containing the same
+# word ("显示面板照片1") are still captions; the word before/after 照片N must
+# give the same verdict.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("zero_line", [
+    "外包装照片0，试验前可见破损。",
+    "外包装照片0，试验前检查结果如下。",
+])
+def test_long_photo_zero_with_description_fails(zero_line):
+    finding = _r23([APPENDIX, zero_line, "外包装照片1", "外包装照片2"])
+
+    assert finding["status"] == "fail"
+    assert "序号从 0 开始" in finding["evidence"]
+
+
+@pytest.mark.parametrize("middle", [
+    "外包装照片2，试验中完整外观检查，可见轻微划痕。",
+    "外包装照片2，试验中完整外观检查，结果如下。",
+    "外包装照片2，试验中完整外观检查，详见正文。",
+])
+def test_long_caption_description_is_not_narrative(middle):
+    finding = _r23([
+        APPENDIX,
+        "外包装照片1，试验前完整外观检查，无破损。",
+        middle,
+        "外包装照片3，试验后完整外观检查，无破损。",
+    ])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
+@pytest.mark.parametrize("before,after", [
+    ("拍摄照片1", "照片1拍摄于试验前。"),
+    ("记录照片1", "照片1记录了试验过程。"),
+    ("显示照片2", "照片2显示了外包装。"),
+    ("可见照片1", "照片1可见破损。"),
+    ("如下照片1", "照片1如下所述。"),
+])
+def test_narrative_word_position_is_consistent(before, after):
+    before_finding = _r23([APPENDIX, before])
+    after_finding = _r23([APPENDIX, after])
+
+    assert before_finding["status"] == after_finding["status"] == "skip"
+    assert "未识别到附录照片题注" in before_finding["message"]
+    assert "未识别到附录照片题注" in after_finding["message"]
+
+
+@pytest.mark.parametrize("caption", [
+    "显示面板照片1",
+    "记录仪照片1",
+    "说明书照片1",
+    "可见光照片1",
+])
+def test_series_name_containing_narrative_word_is_judged(caption):
+    finding = _r23([APPENDIX, caption])
+
+    assert finding["status"] != "fail"
+    assert "标准题注=1" in finding["evidence"]
+    assert "未识别到" not in finding["message"]
+
+
+# ---------------------------------------------------------------------------
 # Round-4 regressions that must now be skips, not failures.
 # ---------------------------------------------------------------------------
 
