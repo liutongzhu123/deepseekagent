@@ -494,6 +494,30 @@ def test_f25_missing_task_returns_false(tmp_path):
     assert sup.set_task_status(path, "NOPE", "done") is False
 
 
+def test_f41_reconcile_keeps_partial(monkeypatch):
+    """F41：人工标成 partial 的任务，不能被 reconcile 覆盖回 done。
+
+    2026-11-08 实测：人工把 CS_BASE 标 partial，5 秒后被 reconcile 改回 done。
+    """
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "CS_BASE 基础数据", "pr": 155}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    ng = backlog([
+        {"id": "CS_BASE", "status": "partial"},
+        {"id": "OTHER", "status": "doing"},
+    ])
+    changed = sup.reconcile(ng)
+    assert "CS_BASE" not in changed, "不能覆盖人工判断"
+    assert ng["tasks"][0]["status"] == "partial"
+
+
+def test_f41_reconcile_keeps_waiting(monkeypatch):
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "CS_QUOTE 报价", "pr": 300}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    ng = backlog([{"id": "CS_QUOTE", "status": "waiting"}])
+    assert sup.reconcile(ng) == []
+    assert ng["tasks"][0]["status"] == "waiting"
+
+
 def test_f30_sync_self_updates_from_main(monkeypatch, tmp_path):
     """F30：服务器 bin/ 与 main 不一致时要自动同步。"""
     bin_dir = tmp_path / "bin"
