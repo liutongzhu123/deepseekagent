@@ -139,6 +139,73 @@ def test_f35_send_failure_recorded(monkeypatch):
     assert ver.read_state is not None
 
 
+def test_f38_collect_reads_verdict(monkeypatch):
+    """F38：从飞书消息里回收验证结论，状态不能永远停在 dispatched。"""
+    store = {"verified": {"201": {"status": "dispatched"}}, "baseline_at": "x"}
+    written = {}
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: written.update(d))
+    monkeypatch.setattr(ver, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"}, "create_time": "2026-11-08 18:00",
+         "content": "验证 PR #201\n结论：通过\n理由：边界都跑了\n证据：pytest 12 passed"}])
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+
+    assert ver.collect(dry_run=False) == 1
+    assert store["verified"]["201"]["status"] == "pass"
+    assert store["verified"]["201"]["review"] == "pending", "通过的结论要等复核"
+
+
+def test_f39_reject_is_confirmed_not_pending(monkeypatch):
+    store = {"verified": {"202": {"status": "dispatched"}}}
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: None)
+    monkeypatch.setattr(ver, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"}, "create_time": "2026-11-08 18:01",
+         "content": "验证 PR #202\n结论：拒绝\n反例：5.2 抽成 160~210 应为 160～210"}])
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+
+    ver.collect(dry_run=False)
+    assert store["verified"]["202"]["status"] == "reject"
+    assert store["verified"]["202"]["review"] == "confirmed"
+
+
+def test_f38_collect_ignores_user_and_vague(monkeypatch):
+    store = {"verified": {"203": {"status": "dispatched"}}}
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: None)
+    monkeypatch.setattr(ver, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "user"}, "content": "PR #203\n结论：通过"},
+        {"sender": {"sender_type": "app"}, "content": "PR #203 基本没问题"}])
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+
+    assert ver.collect(dry_run=False) == 0
+    assert store["verified"]["203"]["status"] == "dispatched"
+
+
+def test_f39_pending_review_lists_pass_only(monkeypatch):
+    monkeypatch.setattr(ver, "read_state", lambda: {"verified": {
+        "301": {"status": "pass", "review": "pending"},
+        "302": {"status": "reject", "review": "confirmed"},
+        "303": {"status": "pass", "review": "ok"},
+    }})
+    items = ver.pending_review()
+    assert [i["pr"] for i in items] == [301]
+
+
+def test_f39_mark_reviewed_ok_and_overturn(monkeypatch):
+    store = {"verified": {"401": {"status": "pass", "review": "pending"}}}
+    monkeypatch.setattr(ver, "read_state", lambda: store)
+    monkeypatch.setattr(ver, "write_state", lambda d: None)
+    monkeypatch.setattr(ver, "log", lambda *_a, **_k: None)
+
+    assert ver.mark_reviewed(401, "ok") is True
+    assert store["verified"]["401"]["review"] == "ok"
+
+    store["verified"]["401"] = {"status": "pass", "review": "pending"}
+    assert ver.mark_reviewed(401, "overturn", "边界值没测") is True
+    assert store["verified"]["401"]["status"] == "reject", "推翻要把状态改成拒绝"
+
+
 def test_prompt_requires_evidence(monkeypatch):
     text = ver.verify_prompt(9, "feat(x): 改动", ["p0/app/rules.py"])
     assert "gh-agent pr diff 9" in text
