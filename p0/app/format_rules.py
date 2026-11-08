@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 
 from .docx_parser import ReportData, _expand_table
 
@@ -674,9 +675,161 @@ def r22_standard_years(data: ReportData):
     )
 
 
+# --- R24: 样品编号连续性与重复性 -------------------------------------------
+# Failure branches (each covered in p0/tests/test_format_sample_numbers.py):
+# F1 没有任何可判定编号 -> skip，不冒充 pass。
+# F2 只有 1 个编号 -> skip（无断号/重复可判）。
+# F3 同前缀 01、02、04 -> fail，报“编号断档 缺 03”。
+# F4 同一清单内同一编号出现多次 -> fail，报“编号重复”。
+# F5 检验项目表里同一编号被多个项目复用 -> 不算重复。
+# F6 不同前缀（TS…/QA…）分组判定，不互相制造断档。
+# F7 范围写法 01～03 -> 展开为 01、02、03。
+# F8 样品数量可解析且与编号个数不一致 -> fail；XX/空/非数字 -> 不判数量。
+# F9 不同表/字段各自独立判重，跨表引用不报重复。
+# F10 纯数字长串（日期/流水号）不当编号序列，避免误报。
+_SAMPLE_LINE = re.compile(r"^\s*[*＊]?\s*样品编号\s*[:：]\s*(.*)$")
+_SAMPLE_SPLIT = re.compile(r"[、,，;；\s]+")
+_SAMPLE_RANGE = re.compile(r"^(.+?)\s*(?:[～~—–－]|至)\s*(.+)$")
+_SAMPLE_NUMBER = re.compile(r"^(?P<prefix>.*[^0-9])?(?P<num>\d+)$")
+_SAMPLE_QTY = re.compile(r"^\s*(\d+)\s*(?:件|个|份|支|块|只|套|根|片|颗|瓶|袋|组)?\s*$")
+_SAMPLE_ITEM_LABELS = {"检验项目", "试验项目", "检测项目", "测试项目"}
+
+
+def _sample_label(text: str) -> str:
+    return re.sub(r"^[*\s]+|[\s:：]+$", "", unicodedata.normalize("NFKC", text or "").strip())
+
+
+def _sample_parts(token: str) -> tuple[str, str] | None:
+    match = _SAMPLE_NUMBER.match(token)
+    if not match or len(token) > 40:
+        return None
+    prefix, number = match.group("prefix") or "", match.group("num")
+    if prefix and not re.search(r"[A-Za-z]", prefix):
+        return None
+    if not prefix and len(number) > 4:  # F10: 日期/流水号不当作编号序列
+        return None
+    return prefix, number
+
+
+def _expand_sample_range(part: str) -> list[str] | None:
+    match = _SAMPLE_RANGE.match(part)
+    if not match:
+        return None
+    left, right = _sample_parts(match.group(1).strip()), _sample_parts(match.group(2).strip())
+    if not left or not right or (right[0] and right[0] != left[0]):
+        return None
+    start, end = int(left[1]), int(right[1])
+    if not 0 <= end - start <= 50:
+        return None
+    return [f"{left[0]}{str(value).zfill(len(left[1]))}" for value in range(start, end + 1)]
+
+
+def _sample_tokens(text: str) -> list[str]:
+    tokens: list[str] = []
+    for part in _SAMPLE_SPLIT.split(unicodedata.normalize("NFKC", text or "")):
+        part = part.strip()
+        if not part:
+            continue
+        expanded = _expand_sample_range(part)
+        if expanded:
+            tokens.extend(expanded)
+        elif _sample_parts(part):
+            tokens.append(part)
+    return tokens
+
+
+def _sample_scopes(data: ReportData) -> list[tuple[str, list[str], bool]]:
+    scopes: list[tuple[str, list[str], bool]] = []
+    if (data.sample_no or "").strip():
+        scopes.append(("样品编号字段", [data.sample_no], False))
+    for number, table in enumerate(data.tables, start=1):
+        for row_index, row in enumerate(table):
+            column = next((index for index, cell in enumerate(row) if _sample_label(cell.text) == "样品编号"), None)
+            if column is None:
+                continue
+            value = row[column + 1].text if column + 1 < len(row) else ""
+            if _sample_tokens(value):
+                scopes.append((f"表{number}样品编号", [value], False))
+            else:
+                reuse = any(_sample_label(cell.text) in _SAMPLE_ITEM_LABELS for cell in row)
+                below = [below[column].text for below in table[row_index + 1:] if column < len(below)]
+                if any(cell.strip() for cell in below):
+                    scopes.append((f"表{number}样品编号列", below, reuse))
+            break
+    for line in data.paragraphs:
+        match = _SAMPLE_LINE.match(line)
+        value = match.group(1).strip() if match else ""
+        if value and _sample_tokens(value):
+            scopes.append(("正文样品编号", [value], False))
+    return scopes
+
+
+def _sample_issues(scopes: list[tuple[str, list[str], bool]]):
+    issues: list[str] = []
+    all_tokens: set[str] = set()
+    groups: set[str] = set()
+    occurrences = 0
+    for source, values, reuse in scopes:
+        cells = [_sample_tokens(value) for value in values]
+        tokens = [token for cell in cells for token in cell]
+        if not tokens:
+            continue
+        occurrences += len(tokens)
+        all_tokens.update(tokens)
+        if reuse:  # F5: 检验项目表跨行复用同一编号是正常的，只查单元格内重复
+            counts = Counter(token for cell in cells for token in cell if cell.count(token) > 1)
+        else:
+            counts = Counter(tokens)
+        for token, count in counts.items():
+            if count > 1:
+                issues.append(f"编号重复：{token}（{source}，{count} 次）")
+        by_prefix: dict[str, list[str]] = {}
+        for token in tokens:
+            parsed = _sample_parts(token)
+            if parsed:
+                by_prefix.setdefault(parsed[0], []).append(parsed[1])
+        for prefix, numbers in by_prefix.items():
+            groups.add(prefix)
+            unique = sorted({int(number) for number in numbers})
+            if len(unique) < 2:
+                continue
+            missing = [value for value in range(unique[0], unique[-1] + 1) if value not in unique]
+            if missing:
+                width = max(len(number) for number in numbers)
+                labels = [f"{prefix}{str(value).zfill(width)}" for value in missing[:5]]
+                issues.append(f"编号断档：{prefix or '无前缀'} 缺 {'、'.join(labels)}")
+    return list(dict.fromkeys(issues)), all_tokens, groups, occurrences
+
+
+def _sample_quantity(text: str) -> int | None:
+    match = _SAMPLE_QTY.match(unicodedata.normalize("NFKC", text or ""))
+    if not match:
+        return None
+    value = int(match.group(1))
+    return value if 1 <= value <= 9999 else None
+
+
+def r24_sample_numbers(data: ReportData):
+    title = "样品编号连续性与重复性"
+    issues, all_tokens, groups, occurrences = _sample_issues(_sample_scopes(data))
+    if not all_tokens:
+        return _finding("R24", title, "skip", "info", "未识别到可判定的样品编号，无法检查断号或重复", section="样品信息", cell="样品编号")
+    quantity = _sample_quantity(data.sample_qty)
+    evidence = f"样品编号={len(all_tokens)}; 编号出现={occurrences}; 前缀组={len(groups)}"
+    if quantity is not None:
+        evidence += f"; 样品数量={quantity}"
+        if quantity != len(all_tokens):
+            issues.append(f"样品数量 {quantity} 与样品编号 {len(all_tokens)} 个不对应")
+    if issues:
+        return _finding("R24", title, "fail", "medium", f"样品编号问题 {len(issues)} 处：" + "；".join(issues[:6]), evidence, "按样品编号顺序补齐缺号、删除重复；核对样品数量与编号个数", section="样品信息", cell="样品编号/样品数量")
+    if len(all_tokens) <= 1:
+        return _finding("R24", title, "skip", "info", f"仅识别到 {len(all_tokens)} 个样品编号，无法检查断号或重复", evidence, section="样品信息", cell="样品编号")
+    return _finding("R24", title, "pass", "info", f"样品编号 {len(all_tokens)} 个（{len(groups)} 组前缀），未发现断号或重复", evidence, section="样品信息", cell="样品编号")
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers}
