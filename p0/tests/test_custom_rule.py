@@ -40,6 +40,25 @@ def test_missing_or_bad_date_does_not_hit():
                   {"production_date": "bad", "test_start": "2025-08-20"}]:
         assert evaluate_custom_rules(_data(**dates), _config()) == []
 
+def test_missing_date_comparison_does_not_hit():
+    for expression in ["approval_date <= test_end", "approval_date == test_end",
+                       "approval_date != ''"]:
+        for dates in [{}, {"approval_date": "2025-08-20"},
+                      {"test_end": "2025-08-19"},
+                      {"approval_date": "bad", "test_end": "2025-08-19"}]:
+            assert evaluate_custom_rules(_data(**dates),
+                                         _config(expression=expression)) == []
+
+def test_date_fields_compare_as_dates():
+    data = _data(approval_date="2025-09-01", test_end="2025-10-01")
+    findings = evaluate_custom_rules(
+        data, _config(expression="approval_date < test_end"))
+    assert [f.rule_id for f in findings] == ["C01"]
+    data = _data(approval_date="2025-09-01")
+    findings = evaluate_custom_rules(
+        data, _config(expression="approval_date == '2025-09-01'"))
+    assert [f.rule_id for f in findings] == ["C01"]
+
 def test_empty_disabled_and_not_met_do_not_hit():
     data = _data(production_date="2025-07-01", test_start="2025-08-20")
     assert evaluate_custom_rules(data, {"custom_rules": []}) == []

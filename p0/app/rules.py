@@ -178,6 +178,10 @@ CUSTOM_RULE_FIELDS = {
     "cover_number": "报告编号",
 }
 CUSTOM_RULE_FUNCTIONS = {"days_between": 2, "abs": 1}
+CUSTOM_DATE_FIELDS = {
+    "production_date", "sample_date", "receive_date",
+    "test_start", "test_end", "approval_date",
+}
 _ALLOWED_NODES = (
     ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
     ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
@@ -223,6 +227,11 @@ def validate_custom_rule_expression(expression: str) -> str:
 def _custom_compare(op: ast.cmpop, left: Any, right: Any) -> bool:
     if left is None or right is None:
         return False
+    if isinstance(left, date) or isinstance(right, date):
+        left = left if isinstance(left, date) else parse_date(str(left or ""))
+        right = right if isinstance(right, date) else parse_date(str(right or ""))
+        if left is None or right is None:
+            return False
     try:
         return {
             ast.Eq: left == right, ast.NotEq: left != right,
@@ -237,9 +246,13 @@ def _eval_custom_node(node, data, used, diffs):
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.Name):
-        used[node.id] = value = (
-            data.template_family if node.id == "template" else getattr(data, node.id, "")
-        )
+        if node.id == "template":
+            value = data.template_family
+        else:
+            value = getattr(data, node.id, "")
+            if node.id in CUSTOM_DATE_FIELDS:
+                value = parse_date(str(value or ""))
+        used[node.id] = value
         return value
     if isinstance(node, ast.BoolOp):
         values = [_eval_custom_node(item, data, used, diffs) for item in node.values]
