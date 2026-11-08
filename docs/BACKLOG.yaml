@@ -296,11 +296,13 @@ tasks:
 
   - id: RA_TIME
     title: 时间顺序与设备溯源（R04/R05 已有，补单项时间范围）
-    status: todo
+    status: done
     size: S
+    pr: 144
     covers: [RA-2.1, RA-2.2, RA-2.3]
     acceptance: ["单项时间落在汇总区间内", "最早/最晚与区间端点一致"]
-    files: [p0/app/rules.py]
+    files: [p0/app/rules.py, p0/tests/test_time_item_range.py]
+    note: BYD 12 份草稿无单项时间列，R19 实测 12/12 skip；单项表由用例覆盖
 
   - id: RA_CALC
     title: 计算结果正确性（平均/最大/变化率）
