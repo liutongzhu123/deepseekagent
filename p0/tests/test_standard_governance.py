@@ -164,8 +164,7 @@ def test_standard_detail_exposes_high_confidence_rule_drafts(std_env):
     judgment = detail.json()["judgment_rules"]
     assert [rule["raw"] for rule in judgment["rules"]] == ["≤3mL/min"]
     assert [entry["raw"] for entry in judgment["pending"]] == ["90"]
-    assert judgment["rules"][0]["clause"] == "5.1"
-    assert judgment["pending"][0]["reason"]
+    assert judgment["rules"][0]["clause"] == "5.1" and judgment["pending"][0]["reason"]
 
 
 def test_versions_unpublish_and_rollback_api(std_env):

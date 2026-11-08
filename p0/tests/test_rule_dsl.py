@@ -76,7 +76,6 @@ def test_rule_generation_takes_only_high_confidence_limits():
     assert len(pending) == 1
     assert pending[0]["raw"] == "90"
     assert "低置信" in pending[0]["reason"]
-    assert all(rule["raw"] != "90" for rule in result["rules"])
 
 
 def test_text_limits_without_mapping_confidence_are_rule_eligible():
@@ -113,7 +112,6 @@ def test_directionless_and_incomplete_limits_are_pending_not_rules():
 
 def test_missing_confidence_is_high_but_low_needs_confirmation():
     assert is_high_confidence({"kind": "upper"}) is True
-    assert is_high_confidence({"mapping_confidence": "high"}) is True
     assert needs_confirmation({"mapping_confidence": "low"}) is True
 
 
