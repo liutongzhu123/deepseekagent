@@ -26,6 +26,11 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F55 派单时整体替换 record，把 F53 的 reset_for 字段丢了 → 每轮都判"没重置过"→ 又重置又派
+      （2026-11-08 实测：23:08 与 23:10 连续两轮 try 重置 + 派单）
+      → 更新 record 时保留原有字段
+  F56 PR 已合并、验证还在跑，任务仍是 todo → 会被当成"没干过"再派一次
+      → 验证状态为 dispatched 的 PR 视为在途
   F53 F52 写成"只要 pr 被拒就清空计数"，导致每轮清、每轮派（22:43/22:45/22:47 连派三次）
       → 同一个被拒 PR 只重置一次，并保留冷却窗口
   F54 任务已有未合并 PR 时仍会再派（计数器可被重置，挡不住）→ 开着的 [任务ID] PR 视为在途
@@ -653,6 +658,19 @@ def stale_doing(backlog: dict, days: float = 1.0) -> list[str]:
     return stuck
 
 
+def verifying_prs() -> set[int]:
+    """F56：已经派了验证、但还没出结论的 PR。这些 PR 的改动还没被确认，不能再派同一任务。"""
+    data = read_json(VERIFY_STATE, {})
+    result = set()
+    for pr, item in (data.get("verified") or {}).items():
+        if (item or {}).get("status") == "dispatched":
+            try:
+                result.add(int(pr))
+            except (TypeError, ValueError):
+                continue
+    return result
+
+
 def open_task_prs() -> dict[str, int]:
     """F54：列出带着 [任务ID] 的未合并 PR，视为"在途"，避免重复派单。
 
@@ -1004,6 +1022,8 @@ def run(dry_run: bool) -> int:
                 pr_now = int(item.get("pr"))
             except (TypeError, ValueError):
                 continue
+            if pr_now in verifying_prs():          # F56：等验证，别重复派
+                continue
             if pr_now not in rejected_now:
                 continue
             record = dispatched.get(tid_now) or {}
@@ -1027,8 +1047,10 @@ def run(dry_run: bool) -> int:
     attempt = int(record.get("attempts") or 0) + 1
     if send_as_user(dispatch_message(task, attempt), dry_run):
         if not dry_run:
-            dispatched[task["id"]] = {"attempts": attempt,
-                                      "last_at": now().isoformat(timespec="seconds")}
+            record = dict(record)                      # F55：保留 reset_for 等既有字段
+            record["attempts"] = attempt
+            record["last_at"] = now().isoformat(timespec="seconds")
+            dispatched[task["id"]] = record
             write_json(DISPATCHED, dispatched)
         log(f"{'[dry-run] ' if dry_run else ''}派单 {task['id']} 第 {attempt} 次")
     else:
