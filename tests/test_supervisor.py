@@ -261,6 +261,124 @@ def test_decision_success_marks_resumed(monkeypatch):
 
 # ---------- 派单文本包含关键约束 ----------
 
+def test_f11_awaiting_merge_blocks_redispatch():
+    """F11：已交出 PR 但没合并 → 不能重派（B8/B9 被重复派的真实原因）。"""
+    ng = backlog([{"id": "B8", "status": "todo", "deps": []}])
+    task, reason = sup.next_task(ng, busy=set(), dispatched={}, awaiting={"B8"})
+    assert task is None
+    assert "等 PR 合并" in reason
+
+
+def test_awaiting_merge_detects_unmerged_pr(monkeypatch):
+    monkeypatch.setattr(sup, "_ticket_rows", lambda: [
+        {"title": "B8 标准版本管理与对比", "assignments": [
+            {"report": {"summary": "B8 完成：PR #137 已就绪"}}]},
+        {"title": "B9 检测项目清单提取", "assignments": [
+            {"report": {"summary": "B9 完成：PR #138 已合并"}}]},
+    ])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: pr == 138)
+    waiting = sup.awaiting_merge({"B8", "B9"})
+    assert waiting == {"B8": 137}, "只有 PR 未合并的 B8 应被拦住，且要带回 PR 号"
+
+
+def test_f12_nag_when_two_pending(monkeypatch):
+    """F12：两个以上 PR 待合并就该催办（#137/#138 被丢下的真实场景）。"""
+    sent = []
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: {})
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    sup.nag_pending({"B8": 137, "B9": 138}, dry_run=False)
+    assert sent and "#137" in sent[0] and "#138" in sent[0]
+
+
+def test_f12_no_nag_for_single_recent(monkeypatch):
+    """只有一个、且刚交付 → 不打扰。"""
+    sent = []
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: {})
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    sup.nag_pending({"B8": 137}, dry_run=False)
+    assert sent == []
+
+
+def test_f12_nag_when_single_overdue(monkeypatch):
+    """只有一个但等了很久 → 也要催。"""
+    old = (datetime.now(TZ) - timedelta(seconds=sup.NAG_AFTER_SECONDS + 60)).isoformat(timespec="seconds")
+    sent = []
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: {"B8": {"pr": 137, "since": old}})
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    sup.nag_pending({"B8": 137}, dry_run=False)
+    assert sent and "#137" in sent[0]
+
+
+def test_f12_cooldown_suppresses_repeat(monkeypatch):
+    """冷却期内不重复催。"""
+    recent = (datetime.now(TZ) - timedelta(seconds=60)).isoformat(timespec="seconds")
+    sent = []
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: {"_last_nag_at": recent})
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    sup.nag_pending({"B8": 137, "B9": 138}, dry_run=False)
+    assert sent == []
+
+
+def test_f13_records_reply_with_id(monkeypatch):
+    """F13：飞书回 `DEC-001 C` → 记进决策表。"""
+    store = {"decisions": [{"id": "DEC-001", "options": {"A": "甲", "C": "丙"}, "answer": None}]}
+    written = {}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, data: written.update(data))
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=10: [
+        {"sender": {"sender_type": "user"}, "content": "DEC-001 C"}])
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.poll_decisions(dry_run=False) == 1
+    assert store["decisions"][0]["answer"] == "C"
+
+
+def test_f13_ignores_app_messages(monkeypatch):
+    """agent（飞书里 sender_type=app）自己的消息不能当成人答复。
+
+    2026-11-08 实测：飞书返回的 sender_type 只有 `user` 和 `app`，没有 `bot`。
+    """
+    store = {"decisions": [{"id": "DEC-001", "options": {"C": "丙"}, "answer": None}]}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=10: [
+        {"sender": {"sender_type": "app"}, "content": "DEC-001 C"}])
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.poll_decisions(dry_run=False) == 0
+    assert store["decisions"][0]["answer"] is None
+
+
+def test_f13_bare_letter_only_when_single_pending(monkeypatch):
+    """裸回字母：只有唯一开放决策时才接受，多个决策时不猜。"""
+    store = {"decisions": [
+        {"id": "DEC-001", "options": {"A": "甲"}, "answer": None},
+        {"id": "DEC-002", "options": {"A": "甲"}, "answer": None}]}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=10: [
+        {"sender": {"sender_type": "user"}, "content": "A"}])
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.poll_decisions(dry_run=False) == 0, "两个开放决策时不能猜"
+
+
+def test_f13_rejects_invalid_option(monkeypatch):
+    store = {"decisions": [{"id": "DEC-001", "options": {"A": "甲"}, "answer": None}]}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=10: [
+        {"sender": {"sender_type": "user"}, "content": "DEC-001 Z"}])
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.poll_decisions(dry_run=False) == 0
+    assert store["decisions"][0]["answer"] is None
+
+
 def test_dispatch_message_contains_acceptance_and_protocol():
     text = sup.dispatch_message({
         "id": "B7", "title": "标准类型分类", "covers": ["SP-10.1"],
@@ -269,3 +387,5 @@ def test_dispatch_message_contains_acceptance_and_protocol():
     assert "B7" in text and "SP-10.1" in text and "误判率 <10%" in text
     assert "第 2 次派发" in text
     assert "10.3c" in text, "派单必须带上『超阈值继续做下一件』的协议约束"
+    assert "gh-agent pr merge" in text, "派单必须给出自合命令"
+    assert "gh-agent auth status" in text, "派单必须先验证权限再下结论"
