@@ -48,9 +48,14 @@ def _hits(text: str, needles: Iterable[object]) -> list[str]:
 def _load_yaml(path: Path) -> dict:
     if yaml is None or not path.exists():
         return {}
+    # 跳过 macOS 的 AppleDouble 元数据（._xxx）与 .DS_Store：
+    # 2026-11-08 生产事故——部署目录里混入 ._byd_odor.yaml（二进制），
+    # read_text 抛 UnicodeDecodeError，而这个异常没被捕获，导致 177 个测试全挂。
+    if path.name.startswith("._") or path.name == ".DS_Store":
+        return {}
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+    except (OSError, yaml.YAMLError, UnicodeDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
 
