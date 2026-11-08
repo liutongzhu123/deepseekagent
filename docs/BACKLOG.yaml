@@ -339,7 +339,8 @@ tasks:
 
   - id: RA_JUDGE_CONSIST
     title: 结论页无判定时结果表不得出现判定表述
-    status: todo
+    pr: 185
+    status: done
     size: S
     covers: [RA-1.6]
     acceptance: ["结论页无判定表述时结果表有判定即报出", "两边都有判定不报"]
