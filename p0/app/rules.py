@@ -14,6 +14,7 @@ from typing import Iterable
 from . import rule_dsl, semantic_audit
 from .docx_parser import DATE_RE, ReportData, fields_for_consistency, parse_date
 from .format_rules import FORMAT_RULES, evaluate_format_rules
+from .template_rules import check_fixed_content
 
 
 @dataclass
@@ -66,6 +67,7 @@ RULES: list[tuple[str, str, str]] = [
     ("R24", "样品编号连续性与重复性", "样品编号按前缀分组检测断号/重复；样品数量可解析时核对编号个数"),
     ("R25", "结论页无判定时结果表不得判定", "结论页无判定表述时，检验结果表的符合性判定不得出现判定表述；两边都有判定不报"),
     ("R27", "原始记录版本有效性", "原始记录引用的检验依据标准版本应为最新有效版本；过期版本号报出，最新版本不报"),
+    ("R28", "固定注意事项", "中文 8 条/英文 7 条固定注意事项逐条核对：缺条、顺序或措辞错误逐条报出"),
 ]
 
 
@@ -86,6 +88,7 @@ _RULE_FUNCTIONS = {
     "R11": "r11_template",
     "R19": "r19_item_times",
     "R20": "r20_calculations",
+    "R28": "r28_fixed_content",
 }
 
 
@@ -692,6 +695,14 @@ def r08_notes(data: ReportData, expected_notices: int = DEFAULT_EXPECTED_NOTICES
     )
 
 
+def r28_fixed_content(data: ReportData) -> Finding:
+    title = "固定注意事项"
+    result = check_fixed_content(data.paragraphs)
+    if result.status == "fail":
+        return _fail("R28", title, result.message, result.evidence, "medium", result.suggestion)
+    return Finding("R28", title, result.status, "info", result.message, result.evidence)
+
+
 def r09_markup(data: ReportData) -> Finding:
     if data.highlights or data.red_runs:
         return _fail(
@@ -948,6 +959,7 @@ _LOCATIONS = {
     "R19": {"page": 1, "section": "检验项目表", "cell": "单项检验时间"},
     "R20": {"page": 1, "section": "检验结果表", "cell": "平均值/最大值/变化率"},
     "R23": {"page": 1, "section": "附录照片", "cell": "照片序号/试验前中后"},
+    "R28": {"page": 0, "section": "注意事项", "cell": "固定文本"},
 }
 
 
@@ -959,7 +971,7 @@ def _location_for(rule_id: str, data: ReportData) -> dict:
             (entry["page"] for entry in data.toc_entries if "检验结果" in entry.get("title", "")),
             3,
         )
-    elif rule_id in {"R05", "R08", "R10", "R23"}:
+    elif rule_id in {"R05", "R08", "R10", "R23", "R28"}:
         location["page"] = total or 1
     return location
 
