@@ -111,6 +111,18 @@ def test_risky_dispatched(monkeypatch):
     assert written["verified"]["201"]["status"] == "dispatched"
 
 
+def test_f47_only_merge_commits(monkeypatch):
+    """F47：只认 Merge pull request #N，别把标题里提到的 PR 当合并对象。"""
+    log_output = (
+        "aaa|Merge pull request #167 from liutongzhu123/agent/x|2026-11-08T20:00:00+08:00\n"
+        "bbb|chore(backlog): RA_STDVER 回退——双人验证 #149 拒绝|2026-11-08T19:50:00+08:00\n"
+        "ccc|feat(report): R22 (#164)|2026-11-08T19:40:00+08:00\n")
+    monkeypatch.setattr(ver, "git", lambda args, timeout=120: type(
+        "R", (), {"returncode": 0, "stdout": log_output, "stderr": ""})())
+    merges = ver.recent_merges()
+    assert [m["pr"] for m in merges] == [167], "只应认合并提交里的 167"
+
+
 def test_f36_dedupe_same_pr(monkeypatch):
     """F36：合并提交与分支提交都带 #号时，同一个 PR 只算一次。"""
     log_output = ("abc|Merge pull request #200 from x|2026-11-08T10:00:00+08:00\n"

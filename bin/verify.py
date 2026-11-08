@@ -17,6 +17,9 @@
   F38 只派验证任务、却不回收结论 → 状态永远是 dispatched，等于没验证
       方案：从飞书消息里回收「结论：通过/拒绝」，写进状态
   F39 agent 判「通过」的结论不能直接信 → 标记为待人工/他模型复核（B 方案）
+  F47 从提交标题里抓第一个 #号当 PR 号 → 实际常抓到"被引用的 PR"而不是"合并的 PR"
+      （2026-11-08：`chore(backlog): … 验证 #149 …` 被当成 #149 的合并提交）
+      → 只认 `Merge pull request #N` 这种权威合并提交
   F46 风险路径写成白名单，agent 新加的模块永远漏检（#167 改 visual_checks.py 被判"非风险"）
       → 按目录判定：p0/app/ 下任何 .py 都算风险
   F43 结论解析过严：只认「结论：拒绝」，而 agent 实际写「验证 #149：拒绝。」
@@ -113,7 +116,8 @@ def recent_merges(depth: int = 40) -> list[dict]:
         if len(parts) != 3:
             continue
         sha, subject, when = parts
-        match = re.search(r"#(\d+)", subject)
+        # F47：只认权威的合并提交，避免把"提交标题里提到的 PR"当成"合并的 PR"
+        match = re.match(r"Merge pull request #(\d+)", subject)
         if not match:
             continue
         pr = int(match.group(1))
