@@ -527,9 +527,157 @@ def r18_toc_pages(data: ReportData):
     )
 
 
+# --- R22: 检测依据标准年代号 ------------------------------------------------
+# Failure branches (each covered in p0/tests/test_format_standard_years.py):
+# F1 检验依据为空 -> skip, never pass.
+# F2 检验依据里没有标准号 -> skip (nothing to judge), never fail.
+# F3 标准号带具体年代号 -> pass.
+# F4 标准号缺年代号 -> fail，逐条列出缺失的标准号。
+# F5 年代号位数不是 4 位（ASTM 允许 2 位）-> fail 格式不合法。
+# F6 年代号不在 1900–2099 -> fail 格式不合法。
+# F7 标准号前缀后直接跟字母（如 GBT 1037）-> fail 格式不合法。
+# F8 多个标准号混合（合法/缺年代号/格式错）-> 只报问题项，计数准确。
+# F9 同一标准号重复出现 -> 只报一次。
+# F10 只检查检验依据字段（含“检验依据：”行与标题下一行回退），不扫正文其他引用。
+# F11 标准名称/方案号/限值中的数字不误识别为标准号。
+_BASIS_LABELS = ("检验依据", "检测依据")
+_STD_DASHES = str.maketrans({"–": "-", "—": "-", "−": "-", "－": "-", "―": "-"})
+_STD_QT_RE = re.compile(
+    r"(?<![A-Za-z0-9/])(?P<kind>Q|T)/[A-Za-z][A-Za-z0-9]*(?:[.\-][A-Za-z0-9]+)*"
+    r"(?:[ \t]*\d[A-Za-z0-9.\-:]*)?"
+)
+_STD_GENERAL_RE = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?P<prefix>GB/T|GB/Z|GBJ|GBZ|GJB|GB|DB\d{2}(?:/[TZ])?"
+    r"|[A-Z]{2,3}/[TZ]"
+    r"|(?:ISO|IEC|EN|DIN|JIS|ASTM|SAE|ANSI|UL|CSA|FMVSS|ECE|UN)(?![A-Za-z]))"
+    r"[ \t]*(?P<body>[A-Za-z]{0,3}[ \t]?\d[A-Za-z0-9.\-:]*)"
+)
+
+
+def _norm_standard_text(text: str) -> str:
+    return unicodedata.normalize("NFKC", text or "").translate(_STD_DASHES)
+
+
+def _basis_text(data: ReportData) -> str:
+    basis = (data.basis or "").strip()
+    if basis:
+        return basis
+    paragraphs = [line.strip() for line in data.paragraphs if line and line.strip()]
+    for index, line in enumerate(paragraphs):
+        for label in _BASIS_LABELS:
+            match = re.match(rf"^{label}\s*[:：]\s*(\S.*)$", line)
+            if match:
+                return match.group(1).strip()
+        if line in _BASIS_LABELS and index + 1 < len(paragraphs):
+            return paragraphs[index + 1]
+    return ""
+
+
+def _standard_tokens(text: str) -> list[tuple[str, str, str]]:
+    """Return (token, prefix, body) for standard numbers found in ``text``."""
+    normalised = _norm_standard_text(text)
+    found: list[tuple[int, str, str, str]] = []
+    for match in _STD_QT_RE.finditer(normalised):
+        token = match.group(0).strip()
+        prefix = match.group("kind") + "/"
+        found.append((match.start(), token, prefix, token[2:]))
+    for match in _STD_GENERAL_RE.finditer(normalised):
+        token = match.group(0).strip()
+        found.append((match.start(), token, match.group("prefix"), match.group("body")))
+    found.sort(key=lambda item: item[0])
+    tokens: list[tuple[str, str, str]] = []
+    last_end = -1
+    for start, token, prefix, body in found:
+        if start < last_end or not re.search(r"\d", token):
+            continue
+        tokens.append((token, prefix, body))
+        last_end = start + len(token)
+    return tokens
+
+
+def _is_chinese_standard(prefix: str) -> bool:
+    return prefix.startswith(("GB", "GJB", "DB")) or bool(re.fullmatch(r"[A-Z]{2,3}/[TZ]", prefix))
+
+
+def _standard_issue(prefix: str, body: str) -> str:
+    """Return an empty string for a legal token, otherwise the problem text."""
+    body = (body or "").strip()
+    if (prefix in {"ISO", "IEC", "EN", "DIN"} or _is_chinese_standard(prefix)) and body[:1].isalpha():
+        return "标准号格式不合法（前缀后应为数字）"
+    if prefix == "ASTM":
+        body = re.sub(r"e\d+$", "", body)
+    if ":" in body:
+        year_part = body.rsplit(":", 1)[1]
+        if re.fullmatch(r"\d{4}", year_part):
+            if 1900 <= int(year_part) <= 2099:
+                return ""
+            return f"年代号 {year_part} 超出 1900–2099"
+        if re.fullmatch(r"\d+", year_part):
+            return "年代号应为 4 位数字"
+        return "标准号格式不合法（年代号应为数字）"
+    match = re.search(r"-(\d{4})$", body)
+    if match:
+        year = int(match.group(1))
+        if 1900 <= year <= 2099:
+            return ""
+        return f"年代号 {year} 超出 1900–2099"
+    if prefix == "ASTM" and re.search(r"-\d{2}$", body):
+        return ""
+    last = body.rsplit("-", 1)[-1]
+    if _is_chinese_standard(prefix) and last.isdigit() and len(last) != 4:
+        return "年代号应为 4 位数字"
+    return "缺年代号"
+
+
+def r22_standard_years(data: ReportData):
+    title = "检测依据标准年代号"
+    basis = _basis_text(data)
+    if not basis:
+        return _finding("R22", title, "skip", "info", "未识别到检验依据（检测依据）字段，无法检查标准年代号")
+    tokens = _standard_tokens(basis)
+    seen: set[str] = set()
+    unique: list[tuple[str, str, str]] = []
+    for item in tokens:
+        if item[0] not in seen:
+            seen.add(item[0])
+            unique.append(item)
+    if not unique:
+        return _finding(
+            "R22", title, "skip", "info",
+            f"检验依据中未识别到标准号，无法检查年代号：{basis[:60]}",
+            f"检验依据={basis[:80]}",
+            section="检验依据", cell="标准号",
+        )
+    missing: list[str] = []
+    invalid: list[str] = []
+    for token, prefix, body in unique:
+        issue = _standard_issue(prefix, body)
+        if issue == "缺年代号":
+            missing.append(token)
+        elif issue:
+            invalid.append(f"{token} {issue}")
+    if missing or invalid:
+        details = [f"{token} 缺年代号" for token in missing] + invalid
+        return _finding(
+            "R22", title, "fail", "medium",
+            f"检测依据标准问题 {len(details)} 处：" + "；".join(details[:6]),
+            f"检验依据={basis[:80]}; 标准号={len(unique)}; 缺年代号={len(missing)}; 格式不合法={len(invalid)}",
+            "在标准号后补具体年代号（如 GB/T 1037-2021）；年代号用 4 位数字、以“-”连接",
+            section="检验依据",
+            cell="、".join((missing + invalid))[:80],
+        )
+    return _finding(
+        "R22", title, "pass", "info",
+        f"检测依据含 {len(unique)} 个标准号，均带具体年代号且格式合法",
+        "标准号=" + "、".join(token for token, _, _ in unique[:10]),
+        section="检验依据", cell="标准号",
+    )
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years}
