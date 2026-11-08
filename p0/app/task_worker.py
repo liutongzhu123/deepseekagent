@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from . import auth, report_batch, standard_store
-from .standard_parse import parse_pdf_standard
+from .standard_parse import parse_standard_document
 from .store import db, objects, tasks
 
 
@@ -43,7 +43,7 @@ def _handle_standard_parse(task: dict, report: Callable[[str, int], None]) -> di
     with db.engine().connect() as conn:
         _, data = objects.read_file(conn, file_id)
     report("extract", 8)
-    parsed = parse_pdf_standard(
+    parsed = parse_standard_document(
         data,
         str(payload.get("file_name") or "standard.pdf"),
         enable_ocr=bool(payload.get("enable_ocr", True)),

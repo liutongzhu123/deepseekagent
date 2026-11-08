@@ -211,7 +211,7 @@
           <div>
             <div class="eyebrow">Standard parsing</div>
             <h1>标准解析与复核</h1>
-            <p>从标准 PDF 抽取“技术要求 / 试验方法”与条款页码；逐条复核后，发布为带引用的知识片段。</p>
+            <p>从标准 PDF / Word / 图片抽取“技术要求 / 试验方法”与条款页码；逐条复核后，发布为带引用的知识片段。</p>
           </div>
           <div class="page-actions"><span class="pill info" id="stdHeadPill">0 份标准</span></div>
         </div>
@@ -236,11 +236,11 @@
             <div class="upload-block" id="stdUploadBlock">
               <h3>上传新标准</h3>
               <div class="dropzone compact" id="stdDrop">
-                <input type="file" id="stdFile" accept=".pdf" hidden>
+                <input type="file" id="stdFile" accept=".pdf,.docx,.docm,.png,.jpg,.jpeg,.webp,.bmp" hidden>
                 <span class="dz-icon"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg></span>
                 <div class="dz-body">
-                  <div class="dz-title" id="stdFileTitle">选择标准 PDF</div>
-                  <div class="dz-sub" id="stdFileSub">数字版 / 扫描件均可</div>
+                  <div class="dz-title" id="stdFileTitle">选择标准文档</div>
+                  <div class="dz-sub" id="stdFileSub">PDF / Word（.docx）/ 图片；数字版与扫描件均可</div>
                 </div>
               </div>
               <input type="text" id="stdProject" class="mt-10" placeholder="项目标识（受限账号必填，留空=不限定）">

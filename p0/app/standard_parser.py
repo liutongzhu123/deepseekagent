@@ -1272,11 +1272,11 @@ def parse_standard(
     total_chars = sum(len(page) for page in pages)
     if total_chars < 500 and not ocr:
         warnings.append(
-            f"PDF 文本层仅 {total_chars} 字符，可能是扫描件；请启用 OCR 后再解析"
+            f"文本层仅 {total_chars} 字符，内容较少；若为扫描件请启用 OCR 后再解析"
         )
     if ocr:
         warnings.append(
-            "扫描件已通过 OCR 抽取，平均置信度 "
+            "已通过 OCR 抽取，平均置信度 "
             f"{ocr.get('avg_confidence', 0):.3f}，所有字段需按置信度人工复核"
         )
 

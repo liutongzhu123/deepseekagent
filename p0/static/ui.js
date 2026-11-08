@@ -2013,7 +2013,7 @@ function bindEvents() {
   $('navBackdrop').addEventListener('click', closeSidebar);
 
   setupDropzone('reportDrop', 'reportFile', { title: '点击选择，或把报告拖到这里', sub: '只看结构、字段与标记，不上传外部服务' });
-  setupDropzone('stdDrop', 'stdFile', { title: '选择标准 PDF', sub: '数字版 / 扫描件均可' });
+  setupDropzone('stdDrop', 'stdFile', { title: '选择标准文档', sub: 'PDF / Word（.docx）/ 图片；数字版与扫描件均可' });
   setupDropzone('quoteDrop', 'quoteFile', { title: '选择报价输入', sub: '.xlsx / .xls / .pdf / .png / .jpg' });
   setupDropzone('templateDrop', 'quoteTemplate', { title: '选择销售报价表模板', sub: '不提供时只生成 CRM 草稿' });
 
@@ -2158,7 +2158,7 @@ function bindEvents() {
   });
   $('parseBtn').addEventListener('click', async () => {
     const file = $('stdFile').files[0];
-    if (!file) { toast('请先选择标准 PDF', 'info'); return; }
+    if (!file) { toast('请先选择标准文档', 'info'); return; }
     busy($('parseBtn'), true, '解析中…');
     $('stdTaskError').classList.add('hidden');
     try {
