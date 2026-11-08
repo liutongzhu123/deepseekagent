@@ -23,10 +23,10 @@ def test_executable_percentage_rule_and_missing_variable():
     assert (entry["target"], entry["uses"]) == ("变化率", ["A", "B"])
     assert entry["rule"]["expression"] == "(A-B)/B*100"
     assert evaluate_formula(entry, {"A": 120, "B": 100})["value"] == 20.0
-    entry = _e("变化率=（A-B）/B×100%。")[0]
-    assert entry["missing_variables"] == ["A", "B"]
+    entry = _e("变化率=（A-B）/B×100%。式中：A——实测值。")[0]
+    assert entry["missing_variables"] == ["B"]
     assert entry["rule"]["status"] == "missing_variables"
-    assert evaluate_formula(entry, {"A": 1})["missing"] == ["A", "B"]
+    assert evaluate_formula(entry, {"A": 1})["missing"] == ["B"]
 
 
 def test_fullwidth_operators_and_sqrt_are_normalised():
@@ -73,3 +73,28 @@ def test_apply_formulas_summary_reports_missing_variables():
     items = [{"clause": "5.1", "method_clause": "6.1", "requirement": "", "method": text}]
     _, summary = apply_formulas(items, [("5.1 变化率", 1), (text, 1)])
     assert (summary["formulas_executable"], summary["formulas_missing_variables"]) == (0, 1)
+
+
+def test_equation_without_variable_definitions_is_ignored():
+    for text in ("注：1）脉冲PRR=217Hz，PD=577usec。", "T=Tmin。", "Itest=Iblock。"):
+        assert _e(text) == []
+
+
+def test_trailing_comma_equation_is_consistent_and_reports_missing_values():
+    entry = _e("变化率=（A-B）/B×100%，式中：A——值；B——值。")[0]
+    assert entry["rule"]["status"] == "executable"
+    assert evaluate_formula(entry, {"A": 120, "B": 100})["value"] == 20.0
+    assert evaluate_formula(entry, {})["status"] == "missing_values"
+    assert set(entry["rule"]["inputs"]) == {"A", "B"}
+
+
+def test_undefined_multi_letter_variable_is_reported():
+    entry = _e("y=Tmin+1。式中：x——值。")[0]
+    assert entry["missing_variables"] == ["Tmin"]
+    assert entry["rule"]["inputs"] == ["Tmin"]
+
+
+def test_unlisted_executable_name_reports_missing_instead_of_keyerror():
+    result = evaluate_formula(
+        {"status": "executable", "expression": "Tmin", "inputs": []}, {})
+    assert (result["status"], result["missing"]) == ("missing_values", ["Tmin"])

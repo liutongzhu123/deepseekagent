@@ -14,7 +14,8 @@ with ``status="not_extracted"``; no formula is invented.  Each item gains
 
 SP_FORMULAVAR (SP-6.2): target/expression, uses/missing_variables (reported) and a
 restricted-AST rule.  F1 no 式中, F2 unused, F3 separators, F4 full-width, F5 ellipsis,
-F6 reference-only, F7 Greek/subscripts, F8 eval error, F9 unsafe AST, F10 series.
+F6 reference-only, F7 Greek/subscripts, F8 eval error, F9 unsafe AST, F10 series,
+F11 equation without 式中, F12 trailing comma, F13 eval KeyError.
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ _VARIABLE = re.compile(
 )
 _CLAUSE = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+\S")
 _LHS = r"(?:[A-Za-zα-ωΑ-Ω][A-Za-z0-9_\u0304′̄]{0,5}|[\u4e00-\u9fff]{2,6})"
-_RHS = r"[0-9A-Za-zα-ωΑ-Ω+\-−－＋*/×÷·().,，、%％√²³_′̄\s^…（）]+"
+_RHS = r"[0-9A-Za-zα-ωΑ-Ω+\-−－＋*/×÷·().%％√²³_′̄\s^…（）]+"
 _EQUATION = re.compile(rf"(?P<lhs>{_LHS})\s*[=＝]\s*(?P<rhs>{_RHS})")
 _SYMBOL = re.compile(r"[A-Za-zα-ωΑ-Ω][A-Za-z0-9_\u0304′̄]*")
 _SERIES_MEAN = re.compile(
@@ -164,6 +165,10 @@ def evaluate_formula(formula: dict | None, values: dict | None = None) -> dict:
         value = _eval(ast.parse(rule["expression"], mode="eval").body, values or {})
     except ZeroDivisionError:
         return {"status": "error", "value": None, "missing": [], "error": "除数为 0"}
+    except KeyError as exc:
+        name = str(exc.args[0]) if exc.args else ""
+        return {"status": "missing_values", "value": None, "missing": [name],
+                "error": ""}
     except Exception as exc:  # noqa: BLE001 - report, never crash
         return {"status": "error", "value": None, "missing": [], "error": str(exc)}
     return {"status": "ok", "value": value, "missing": [], "error": ""}
@@ -193,6 +198,13 @@ def _used(rhs: str, variables: list[dict]) -> list[str]:
     return used
 
 
+def _names(expression: str) -> list[str]:
+    return sorted({
+        node.id for node in ast.walk(ast.parse(expression, mode="eval"))
+        if isinstance(node, ast.Name) and node.id not in _FUNCTIONS
+    })
+
+
 def _rule(kind, target: str, rhs: str, variables: list[dict],
           used: list[str], missing: list[str]) -> dict:
     rule = {"kind": kind or "expression", "target": target, "inputs": used,
@@ -203,8 +215,9 @@ def _rule(kind, target: str, rhs: str, variables: list[dict],
         python = _python(rhs)
         if python and _safe(python):
             base = _series_base(rhs)
+            inputs = [base] if base else used
             return {**rule, "status": "executable", "expression": python,
-                    "inputs": [base] if base else used}
+                    "inputs": sorted(set(inputs) | set(_names(python)))}
         return {**rule, "status": "not_executable"}
     symbol = next((variable["symbol"] for variable in variables
                    if "次数" not in variable["definition"]), "")
@@ -218,6 +231,8 @@ def _entry(kind, status, sentence, variables, clause, item_clause,
            expression=None) -> dict:
     target, rhs = expression or ("", "")
     used = _used(rhs, variables) if rhs else []
+    if rhs and (python := _python(rhs)) and _safe(python):
+        used = list(dict.fromkeys(used + _names(python)))
     missing = [s for s in used
                if not _covers(s, [v["symbol"] for v in variables])]
     return {"kind": kind, "status": status, "variables": variables,
@@ -234,6 +249,8 @@ def _classify(sentence, variables, clause, item_clause) -> dict | None:
         (kind == "percentage" and _PERCENT_CALC.search(sentence))
         or (kind not in (None, "percentage") and _CALC.search(sentence))
     )
+    if expression is not None and not variables:
+        return None
     if calculated or expression is not None:
         return _entry(kind, "extracted", sentence, variables, clause,
                       item_clause, expression)
