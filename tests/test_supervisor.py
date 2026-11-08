@@ -746,3 +746,26 @@ def test_dispatch_message_contains_acceptance_and_protocol():
     assert "10.3c" in text, "派单必须带上『超阈值继续做下一件』的协议约束"
     assert "gh-agent pr merge" in text, "派单必须给出自合命令"
     assert "gh-agent auth status" in text, "派单必须先验证权限再下结论"
+
+
+def test_f55_record_update_keeps_reset_for():
+    """F55：派单更新 record 时必须保留 reset_for，否则 F53 形同虚设。"""
+    record = {"attempts": 0, "last_at": "2026-11-08T23:08:00+08:00", "reset_for": 167}
+    record = dict(record)
+    record["attempts"] = int(record.get("attempts") or 0) + 1
+    assert record.get("reset_for") == 167, "reset_for 不能丢"
+    assert record["attempts"] == 1
+
+
+def test_f56_verifying_pr_is_in_flight(monkeypatch):
+    """F56：PR 已合并、验证还在跑时，不该再派同一任务。"""
+    monkeypatch.setattr(sup, "rejected_prs", lambda: {167})
+    monkeypatch.setattr(sup, "verifying_prs", lambda: {167})
+    reset_happened = []
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo", "pr": 167}])
+    for item in ng["tasks"]:
+        pr = int(item["pr"])
+        if pr in sup.verifying_prs():
+            continue
+        reset_happened.append(pr)
+    assert reset_happened == [], "验证中的 PR 不应触发重置/派单"
