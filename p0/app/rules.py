@@ -6,10 +6,11 @@ show traceability instead of a black-box score.
 """
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import date
-from typing import Iterable
+from typing import Any, Iterable
 
 from . import rule_dsl, semantic_audit
 from .docx_parser import DATE_RE, ReportData, fields_for_consistency, parse_date
@@ -128,6 +129,14 @@ def rules_catalog(config: dict | None = None) -> list[dict]:
                 "severity": override.get("severity", "medium"),
             }
         )
+    for rule in (config or {}).get("custom_rules") or []:
+        if isinstance(rule, dict) and rule.get("id"):
+            catalog.append({
+                "id": str(rule["id"]), "title": str(rule.get("name") or rule["id"]),
+                "description": str(rule.get("expression") or ""),
+                "enabled": rule.get("enabled", True) is not False,
+                "severity": str(rule.get("severity") or "medium"), "layer": "custom",
+            })
     return catalog
 
 
@@ -149,6 +158,150 @@ def _apply_rule_meta(finding: Finding, override: dict | None) -> Finding:
     if finding.status in {"fail", "warn"} and override.get("severity"):
         finding.severity = override["severity"]
     return finding
+
+
+# ---------------------------------------------------------------------------
+# Admin-defined custom conditions (RA-5.1).  ``expression`` is a restricted
+# comparison over report fields, e.g. ``days_between(production_date,
+# test_start) > 30``; only whitelisted AST nodes and the two helpers are
+# accepted.  F1-F6 (bad syntax/field/function, missing date, empty config,
+# disabled, type mismatch, evidence) are covered by test_custom_rule.py.
+# ---------------------------------------------------------------------------
+CUSTOM_RULE_FIELDS = {
+    "production_date": "生产日期", "sample_date": "抽样日期", "receive_date": "送样日期",
+    "test_start": "检验开始日期", "test_end": "检验结束日期", "approval_date": "批准日期",
+    "sample_qty": "样品数量", "sample_no": "样品编号", "sample_name": "样品名称",
+    "client": "委托单位", "supplier": "生产单位", "basis": "检验依据",
+    "item": "检验项目", "judgment": "判定", "conclusion": "结论",
+    "reported_mean": "报告均值", "limit": "限值", "template": "模板",
+    "cover_number": "报告编号",
+}
+CUSTOM_RULE_FUNCTIONS = {"days_between": 2, "abs": 1}
+_ALLOWED_NODES = (
+    ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
+    ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    ast.Name, ast.Load, ast.Constant, ast.Call,
+)
+
+
+def _parse_custom_expression(expression: str) -> ast.Expression:
+    text = str(expression or "").strip()
+    if not text:
+        raise ValueError("表达式不能为空")
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"表达式语法错误：{exc.msg}") from exc
+    call_names = {id(n.func) for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED_NODES):
+            raise ValueError(f"不支持语法：{type(node).__name__}")
+        if isinstance(node, ast.Name) and id(node) not in call_names:
+            if node.id not in CUSTOM_RULE_FIELDS:
+                raise ValueError(f"未知字段：{node.id}")
+        if isinstance(node, ast.Constant) and not isinstance(
+                node.value, (str, int, float, bool, type(None))):
+            raise ValueError("不支持的常量类型")
+        if isinstance(node, ast.Call):
+            name = node.func.id if isinstance(node.func, ast.Name) else ""
+            if (name not in CUSTOM_RULE_FUNCTIONS or node.keywords
+                    or len(node.args) != CUSTOM_RULE_FUNCTIONS[name]):
+                raise ValueError("只支持 days_between(字段, 字段) 与 abs(数值)")
+    return tree
+
+
+def validate_custom_rule_expression(expression: str) -> str:
+    try:
+        _parse_custom_expression(expression)
+    except ValueError as exc:
+        return str(exc)
+    return ""
+
+
+def _custom_compare(op: ast.cmpop, left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return False
+    try:
+        return {
+            ast.Eq: left == right, ast.NotEq: left != right,
+            ast.Lt: left < right, ast.LtE: left <= right,
+            ast.Gt: left > right, ast.GtE: left >= right,
+        }[type(op)]
+    except (KeyError, TypeError):
+        return False
+
+
+def _eval_custom_node(node, data, used, diffs):
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        used[node.id] = value = (
+            data.template_family if node.id == "template" else getattr(data, node.id, "")
+        )
+        return value
+    if isinstance(node, ast.BoolOp):
+        values = [_eval_custom_node(item, data, used, diffs) for item in node.values]
+        return all(values) if isinstance(node.op, ast.And) else any(values)
+    if isinstance(node, ast.UnaryOp):
+        return not _eval_custom_node(node.operand, data, used, diffs)
+    if isinstance(node, ast.Compare):
+        left = _eval_custom_node(node.left, data, used, diffs)
+        for op, comparator in zip(node.ops, node.comparators):
+            right = _eval_custom_node(comparator, data, used, diffs)
+            if not _custom_compare(op, left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.Call):
+        args = [_eval_custom_node(arg, data, used, diffs) for arg in node.args]
+        if node.func.id == "abs":
+            return abs(args[0]) if isinstance(args[0], (int, float)) else None
+        start, end = str(args[0] or ""), str(args[1] or "")
+        begin, finish = parse_date(start), parse_date(end)
+        if begin is None or finish is None:
+            diffs.append(f"days_between={start or '空'}/{end or '空'} 无法解析日期")
+            return None
+        days = (finish - begin).days
+        diffs.append(f"days_between({start}, {end})={days} 天")
+        return days
+    return None
+
+
+def evaluate_custom_rules(data: ReportData, config: dict | None = None) -> list[Finding]:
+    """Run admin conditions; each true expression becomes a fail/warn finding."""
+    findings: list[Finding] = []
+    for index, item in enumerate((config or {}).get("custom_rules") or [], start=1):
+        if not isinstance(item, dict) or item.get("enabled") is False:
+            continue
+        expression = str(item.get("expression") or "").strip()
+        if not expression:
+            continue
+        rule_id = str(item.get("id") or f"C{index:02d}")
+        title = str(item.get("name") or rule_id)
+        severity = str(item.get("severity") or "medium")
+        location = {"page": 1, "section": "自定义规则", "cell": "expression"}
+        used: dict[str, Any] = {}
+        diffs: list[str] = []
+        try:
+            matched = _eval_custom_node(
+                _parse_custom_expression(expression).body, data, used, diffs
+            )
+        except ValueError as exc:
+            findings.append(Finding(rule_id, title, "skip", "info",
+                                    f"自定义规则表达式无效：{exc}", expression, "",
+                                    location, "custom"))
+            continue
+        if not matched:
+            continue
+        details = [f"{name}={value if value not in (None, '') else '空'}"
+                   for name, value in used.items()] + diffs
+        findings.append(Finding(
+            rule_id, title, "fail" if severity in {"high", "medium"} else "warn",
+            severity, str(item.get("message") or title),
+            expression + ("；" + "；".join(details) if details else ""),
+            str(item.get("suggestion") or ""), location, "custom"))
+    return findings
 
 
 def _mean(scores: Iterable[float]) -> float | None:
@@ -1175,6 +1328,7 @@ def audit_report(
         if not finding.location:
             finding.location = _location_for(finding.rule_id, data)
         findings.append(finding)
+    findings.extend(evaluate_custom_rules(data, config))
     if inputs is not None:
         for finding in crosscheck_report(data, inputs):
             finding.layer = "crosscheck"

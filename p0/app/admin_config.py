@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .rules import RULES
+from .rules import RULES, validate_custom_rule_expression
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("P0_DATA_DIR", ROOT / "data"))
@@ -184,6 +184,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mean_tolerance": 0.05,
         "expected_notices": 8,
         "rules": DEFAULT_REPORT_RULES,
+        "custom_rules": [],
     },
     "standard": DEFAULT_STANDARD,
     "quote": DEFAULT_QUOTE,
@@ -267,6 +268,41 @@ def _string_list(
     return output
 
 
+def _validate_custom_rules(items: Any) -> list[dict[str, Any]]:
+    """Validate admin-defined report conditions (RA-5.1)."""
+    if not isinstance(items, list) or len(items) > 50:
+        raise ConfigError("report.custom_rules 必须是不超过 50 条的数组")
+    builtin = {rule_id for rule_id, _, _ in RULES}
+    clean: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise ConfigError(f"第 {index} 条自定义规则必须是对象")
+        rule_id = _text(item.get("id"), f"第 {index} 条自定义规则 id", limit=20)
+        if rule_id in builtin or rule_id in seen:
+            raise ConfigError(f"自定义规则 id 重复或与内置规则冲突：{rule_id}")
+        seen.add(rule_id)
+        expression = _text(item.get("expression"), f"{rule_id} 表达式", limit=500)
+        error = validate_custom_rule_expression(expression)
+        if error:
+            raise ConfigError(f"{rule_id} {error}")
+        severity = item.get("severity", "medium")
+        if severity not in SEVERITIES:
+            raise ConfigError(f"{rule_id} 的严重级别必须是 {', '.join(SEVERITIES)}")
+        clean.append({
+            "id": rule_id,
+            "name": _text(item.get("name"), f"{rule_id} 名称", limit=100),
+            "expression": expression,
+            "severity": severity,
+            "enabled": _bool(item.get("enabled", True), f"{rule_id} 启用状态"),
+            "message": _text(item.get("message", ""), f"{rule_id} 提示",
+                             limit=500, allow_empty=True),
+            "suggestion": _text(item.get("suggestion", ""), f"{rule_id} 建议",
+                                limit=500, allow_empty=True),
+        })
+    return clean
+
+
 def _validate_report(section: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(section, dict):
         raise ConfigError("report 配置必须是对象")
@@ -308,6 +344,7 @@ def _validate_report(section: dict[str, Any]) -> dict[str, Any]:
             section.get("expected_notices", 8), "注意事项条数", low=0, high=50
         ),
         "rules": [seen[rule_id] for rule_id in known],
+        "custom_rules": _validate_custom_rules(section.get("custom_rules") or []),
     }
 
 
@@ -576,7 +613,10 @@ def update_section(
         raise ConfigError("配置分区必须是对象")
     with _LOCK:
         current = load()
-        merged = _deep_merge(DEFAULT_CONFIG[section], payload)
+        # Merge onto the saved section (not the defaults) so a client that only
+        # sends the fields it renders — e.g. the report form, which does not
+        # render custom_rules — cannot silently drop admin-defined rules.
+        merged = _deep_merge(current.get(section) or DEFAULT_CONFIG[section], payload)
         validated = validate_section(section, merged)
         current[section] = validated
         current["revision"] = int(current.get("revision", 0)) + 1
