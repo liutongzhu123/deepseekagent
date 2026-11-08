@@ -11,16 +11,17 @@ a model in, without blocking on customer sample data:
   until ``P0_VISUAL_LABEL_ENDPOINT`` is set *and* the customer supplies label
   photos (waiting/repair/running) so the model can be calibrated.
 * ``evaluate_photo_rules`` — text-only caption check (rule ``R23``, on by
-  default). It verifies that appendix photo numbers are consecutive and that
-  every item with stage captions has 试验前/中/后.  It returns ``skip`` when the
-  report embeds no photo, so the current drafts are not falsely failed.
+  default), A12 v5.  It reports only 照片0 / gap / duplicate for standard
+  captions and skips ambiguous forms; 试验前/中/后 completeness is not
+  auto-judged.  It returns ``skip`` when the report embeds no photo, so the
+  current drafts are not falsely failed.
 
 Requirements covered by this scaffold:
 
 * 1.2-15 同一份报告中照片是否有完全一样的  → ``duplicate_photos``
 * 1.4-35 识别照片中设备标签运行状态          → ``equipment_label_states``
 * RA-4.16 附录中照片序号无编错或漏编          → ``evaluate_photo_rules``
-* RA-4.17 每个测试项目图片都有完整试验前、中、后 → ``evaluate_photo_rules``
+* RA-4.17 每个测试项目图片都有完整试验前、中、后 → 暂不自动判定（``skip``，待 D3）
 
 Environment:
 
@@ -188,84 +189,82 @@ def extract_images(docx_bytes: bytes) -> list[bytes]:
 # ---------------------------------------------------------------------------
 # Appendix photo captions (RA-4.16 / RA-4.17, deterministic rule R23).
 #
-# Algorithm (docs/report-format-checks/README.md A12, 2026-11-08 rewrite):
-#   1. split one line at every ``[前缀][阶段]照片N`` position;
-#   2. drop body narrative (step-2 patterns);
-#   3. series name = prefix minus photo word/number/stage, normalised;
-#      empty -> nearest heading;
-#   4. group by series name; each group must be 1..N in document order;
-#   5. completeness: only unnamed groups must carry 试验前/中/后;
-#   6. no embedded photo -> skip; no stage word anywhere -> skip.
+# A12 v5 (2026-11-08, conservative rewrite): judge only a *standard caption* —
+# a line with exactly one ``照片N`` and a series name it owns or inherits from
+# the nearest heading.  Everything else is skipped with an explicit reason.
 #
-# Failure scenarios, each covered in ``p0/tests/test_photo_sequence.py``:
-# F1  no caption at all -> skip, never pass.
-# F2  a number is skipped inside a group (1, 3) -> fail with the missing value.
-# F3  the same number appears twice in one group -> fail.
-# F4  a group starts above 1 -> fail (group numbers must be 1..N).
-# F5  a number goes backwards inside one group -> fail.
-# F6  an unnamed group misses a stage while the report labels stages -> fail.
-# F7  no stage word anywhere -> skip completeness, never claim pass.
-# F8  captions exist but the report embeds no photo -> skip completeness (D3 gap).
-# F9  one line may hold several series; split by position (外包装照片1、内包装照片1).
-# F10 multi-series interleaving (A1,B1,A2,B2) is counted per group, not globally.
-# F11 body narrative (随报告附照片2张。) mentions a photo but is not a caption.
-# F12 an unnamed group inherits its nearest heading; named groups are not forced.
-# F13 1号样品照片1 is a named sample caption, not a test item.
-# F14 取样后 is not 试验后.
-# F15 the bracketed annotation (照片1（外观）) is the series name only without a prefix.
-# F16 normalization (spaces, full-width, 的/共/计) must not split a group.
-# F17 a new heading starts a new unnamed group.
-# F18 numbering is text-only and checked even without embedded photos.
+# The only failures are the three unambiguous numbering defects:
+#   F1 number 0 (or lower);
+#   F2 a gap inside one group (numbers must be 1..N);
+#   F3 a duplicate inside one group.
+# There is no stage-completeness failure, no "backwards" failure and no
+# splitting of a line that carries several ``照片N`` captions.
+#
+# Scenarios, each covered in ``p0/tests/test_photo_sequence.py``:
+# F1  ``照片0`` -> fail 序号从 0 开始.
+# F2  group 1,3 -> fail 缺 2; a group starting at 2 -> fail 缺 1.
+# F3  group 1,2,2 -> fail 序号重复.
+# S1  two or more ``照片N`` on one line -> skip (do not split).
+# S2  list-style numbering ``1、2、3`` without 照片 -> skip.
+# S3  non-numeric number ``照片一`` / ``照片A`` -> skip.
+# S4  no series name and no heading -> skip (grouping unreliable).
+# S5  no embedded photo / no stage word in the report -> skip.
+# S6  narrative that only mentions photos (``随报告附照片2张。``) -> skip.
+# S7  zero standard captions -> skip, never pass.
 # ---------------------------------------------------------------------------
 
 PHOTO_RULE_ID = "R23"
 PHOTO_TITLE = "附录照片完整性"
-_PHOTO_WORD_RE = re.compile(r"(?:照片|图片|相片|附图|photo)", re.IGNORECASE)
-_PHOTO_NUMBER_RE = re.compile(r"(?:照片|图片|相片|附图|photo)\s*(\d+)", re.IGNORECASE)
+_PHOTO_WORD_RE = re.compile(r"照片")
+_PHOTO_NUMBER_RE = re.compile(r"照片\s*([0-9０-９]+)")
+_NONNUMERIC_NUMBER_RE = re.compile(
+    r"照片\s*(?:[一二三四五六七八九十百千万零〇两]+|[A-Za-z])"
+    r"(?=\s*(?:$|[（(、，,。.;；]|试验[前中后]))"
+)
+_LIST_SEQUENCE_RE = re.compile(r"^\s*[0-9０-９]+(?:\s*[、,，；;]\s*[0-9０-９]+)+\s*$")
 _STAGE_RE = re.compile(r"试验\s*([前中后])")
 _STAGE_NAMES = {"前": "before", "中": "middle", "后": "after"}
-_STAGE_LABELS = {"before": "试验前", "middle": "试验中", "after": "试验后"}
-# F11 / step 2: body narrative mentions photos but is not a caption.
+# Step 2: body narrative mentions photos but is not a caption.
 _NARRATIVE_PATTERN_RE = re.compile(r"(?:附照片\s*\d+\s*张|详见照片\s*\d+|见照片\s*\d+\s*张)")
-_NARRATIVE_SUFFIX_RE = re.compile(r"(?:照片|图片|相片|附图|photo)\s*\d+\s*(?:张|页|所示|为)", re.IGNORECASE)
+_NARRATIVE_SUFFIX_RE = re.compile(r"照片\s*\d+\s*(?:张|页|所示|为)")
 _HEADING_RE = re.compile(
-    r"^(?:附\s*录|附\s*件|[一二三四五六七八九十]+[、.]|\d+(?:\.\d+)*[、.．]|[（(]\d+[)）]"
+    r"^(?:附\s*录|附\s*件|[一二三四五六七八九十]+[、.]|\d+(?:\.\d+)*[、.．](?!\d)|[（(]\d+[)）]"
     r"|(?:分项|项目)\s*[一二三四五六七八九十\d]+)"
 )
 _ANNOTATION_RE = re.compile(r"^\s*[（(]([^）)]*)[）)]")
 _SEPARATOR_CHARS = "、，,；;：:·-—–_()（）[]【】 \t　"
 
 
+def _normalise_line(text: str) -> str:
+    """Strip one paragraph; full-width digits are handled by the regexes."""
+    return (text or "").strip()
+
+
 def _is_photo_narrative(text: str) -> bool:
-    """Step 2: True for a prose sentence that merely mentions photos."""
+    """True for a prose sentence that merely mentions photos."""
     stripped = (text or "").strip()
     if not stripped:
         return False
-    if stripped.endswith("。") and len(stripped) > 20:  # step 2a
+    if stripped.endswith("。") and len(stripped) > 20:
         return True
-    if _NARRATIVE_PATTERN_RE.search(stripped):  # step 2b
+    if _NARRATIVE_PATTERN_RE.search(stripped):
         return True
-    return bool(_NARRATIVE_SUFFIX_RE.search(stripped))  # step 2c
+    return bool(_NARRATIVE_SUFFIX_RE.search(stripped))
 
 
 def _normalise(text: str) -> str:
-    """Step 3: normalise a series name (spaces, full-width, 的/共/计, separators)."""
+    """Normalise a series name (spaces, full-width, 的/共/计, separators)."""
     value = unicodedata.normalize("NFKC", text or "")
     value = re.sub(r"\s+", "", value)
     value = value.replace("的", "").replace("共", "").replace("计", "")
     return value.strip(_SEPARATOR_CHARS)
 
 
-def _without_photo_words(text: str) -> str:
-    return _PHOTO_WORD_RE.sub(" ", text or "")
-
-
 def _split_stage(prefix: str) -> tuple[str, str]:
-    """Step 3: pull one stage attribute out of the prefix and return the rest.
+    """Pull one stage attribute out of a prefix/tail and return the rest.
 
-    ``试验前/中/后`` count anywhere; a bare ``前/中/后`` only when it is the whole
-    remaining label.  Thus ``取样后照片`` stays a named group (F14) instead of
-    being counted as 试验后.
+    ``试验前/中/后`` count anywhere; a bare ``前/中/后`` only when it is the
+    whole remaining label.  Thus ``取样后`` stays part of a named group.
     """
     stages: list[str] = []
 
@@ -281,15 +280,6 @@ def _split_stage(prefix: str) -> tuple[str, str]:
     return (stages[0] if stages else ""), remainder
 
 
-def _caption_series(prefix_text: str, annotation: str) -> tuple[str, str]:
-    """Step 3: (stage, series name) for one caption; empty series inherits."""
-    stage, remainder = _split_stage(_without_photo_words(prefix_text))
-    series = _normalise(remainder)
-    if not series and annotation:  # F15: annotation only when there is no prefix
-        series = _normalise(annotation)
-    return stage, series
-
-
 def _annotation_after(text: str, start: int) -> tuple[str, int]:
     match = _ANNOTATION_RE.match(text[start:])
     if not match:
@@ -297,59 +287,83 @@ def _annotation_after(text: str, start: int) -> tuple[str, int]:
     return match.group(1), start + match.end()
 
 
-def _make_photo_entry(index: int, text: str, number: int | None, stage: str,
-                      series: str, section: str) -> dict:
+def _caption_parts(text: str, match: re.Match) -> tuple[int, str, str]:
+    """(number, stage, series) for one ``照片N``; stage may be before/after."""
+    number = int(match.group(1))
+    annotation, caption_end = _annotation_after(text, match.end())
+    prefix = text[:match.start()]
+    tail = text[caption_end:]
+    stage, remainder = _split_stage(prefix)
+    tail_stage, _ = _split_stage(tail)
+    stage = stage or tail_stage
+    series = _normalise(remainder)
+    if not series and annotation:
+        annotation_stage, annotation_rest = _split_stage(annotation)
+        stage = stage or annotation_stage
+        series = _normalise(annotation_rest)
+    return number, stage, series
+
+
+def _make_photo_entry(index: int, text: str, number: int, stage: str,
+                      series: str, group: str) -> dict:
     return {
         "index": index,
         "text": text,
         "number": number,
         "stage": stage,
         "series": series,
-        "group": series or section or "照片",
-        "unnamed": not series,
-        "section": section,
+        "group": group,
     }
 
 
-def _photo_entries_for_line(text: str, index: int, section: str) -> list[dict]:
-    """Steps 1-3: parse one line into caption entries; ``[]`` when not a caption."""
-    if not text or not _PHOTO_WORD_RE.search(text):
-        return []
-    if _is_photo_narrative(text):  # F11
-        return []
-    number_matches = list(_PHOTO_NUMBER_RE.finditer(text))
-    if not number_matches:
-        # Stage-only caption (``试验前照片``); ``照片宽5cm`` has neither.
-        word = _PHOTO_WORD_RE.search(text)
-        annotation, _ = _annotation_after(text, word.end())
-        stage, series = _caption_series(text[:word.start()], annotation)
-        if not stage:
-            return []
-        return [_make_photo_entry(index, text, None, stage, series, section)]
+def _parse_caption_line(text: str, index: int, section: str) -> tuple[dict | None, str | None]:
+    """One line -> (standard-caption entry, skip reason), never split a line."""
+    if _is_photo_narrative(text):  # S6
+        return None, None
+    matches = list(_PHOTO_NUMBER_RE.finditer(text))
+    if len(matches) > 1:  # S1
+        zero = next((int(m.group(1)) for m in matches if int(m.group(1)) < 1), None)
+        entry = None
+        if zero is not None:  # F1 wins even on an otherwise skipped line
+            entry = _make_photo_entry(index, text, zero, "", "", section or "照片")
+        return entry, "一行多个照片N"
+    if not matches:
+        if _NONNUMERIC_NUMBER_RE.search(text):  # S3
+            return None, "序号不是纯数字"
+        return None, None
+    number, stage, series = _caption_parts(text, matches[0])
+    group = series or section
+    if number < 1:  # F1: a zero is always a definite failure
+        return _make_photo_entry(index, text, number, stage, series, group or "照片"), None
+    if not group:  # S4
+        return None, "无法确定分组"
+    return _make_photo_entry(index, text, number, stage, series, group), None
 
+
+def _photo_entries(paragraphs: Sequence[str]) -> tuple[list[dict], list[dict]]:
+    """Scan paragraphs; return (standard captions, skipped caption forms)."""
     entries: list[dict] = []
-    previous_end = 0
-    for match in number_matches:
-        annotation, caption_end = _annotation_after(text, match.end())
-        stage, series = _caption_series(text[previous_end:match.start()], annotation)
-        entries.append(_make_photo_entry(index, text, int(match.group(1)), stage, series, section))
-        previous_end = caption_end
-    return entries
-
-
-def _photo_entries(paragraphs: Sequence[str]) -> list[dict]:
-    entries: list[dict] = []
+    skipped: list[dict] = []
     section = ""
     for index, raw in enumerate(paragraphs, 1):
-        text = (raw or "").strip()
+        text = _normalise_line(raw)
         if not text:
             continue
-        line_entries = _photo_entries_for_line(text, index, section)
-        if line_entries:
-            entries.extend(line_entries)
-        elif _is_heading(text):
+        if not _PHOTO_WORD_RE.search(text):
+            if _LIST_SEQUENCE_RE.match(text):  # S2
+                skipped.append({"index": index, "text": text, "reason": "列表型序号题注"})
+            elif _is_heading(text):
+                section = text
+            continue
+        if _is_heading(text) and not _PHOTO_NUMBER_RE.search(text):
             section = text
-    return entries
+            continue
+        entry, reason = _parse_caption_line(text, index, section)
+        if entry is not None:
+            entries.append(entry)
+        if reason:
+            skipped.append({"index": index, "text": text, "reason": reason})
+    return entries, skipped
 
 
 def _is_heading(text: str) -> bool:
@@ -362,91 +376,97 @@ def _is_heading(text: str) -> bool:
     return len(text) <= 20 and text.endswith(("试验", "测试", "检测", "评价"))
 
 
-def _number_issues(entries: Sequence[dict]) -> list[str]:
-    """Step 4: per-series numbering; every group must be 1..N (F2-F5, F10)."""
+def _zero_issues(entries: Sequence[dict]) -> list[str]:
+    """F1: a zero (or lower) is a definite failure, even on a mixed line."""
+    zero_groups = sorted({
+        entry["group"] for entry in entries
+        if entry["number"] is not None and entry["number"] < 1
+    })
+    return [f"{label} 序号从 0 开始，至少应从 1 开始" for label in zero_groups]
+
+
+def _group_issues(entries: Sequence[dict]) -> list[str]:
+    """F2/F3: per-group gap and duplicate; no backwards rule in A12 v5."""
     groups: dict[str, list[int]] = {}
     for entry in entries:
-        if entry["number"] is None:
-            continue
-        groups.setdefault(entry["group"], []).append(entry["number"])
+        if entry["number"] is not None:
+            groups.setdefault(entry["group"], []).append(entry["number"])
     issues: list[str] = []
     for label, numbers in groups.items():
-        seen: set[int] = set()
-        duplicates: list[int] = []
-        backwards: list[tuple[int, int]] = []
-        previous: int | None = None
-        for number in numbers:
-            if number in seen and number not in duplicates:
-                duplicates.append(number)
-            if previous is not None and number < previous:
-                backwards.append((previous, number))
-            seen.add(number)
-            previous = number
+        seen = set(numbers)
         missing = [value for value in range(1, max(seen) + 1) if value not in seen]
         if missing:
             start = min(seen)
-            missing_text = "、".join(str(value) for value in missing)
-            issues.append(f"{label} 序号从 {start} 开始，缺 {missing_text}")
-        for number in duplicates:
-            issues.append(f"{label} 序号 {number} 重复")
-        for before, after in backwards:
-            issues.append(f"{label} 序号 {before} 之后出现 {after}（倒退）")
+            issues.append(f"{label} 序号从 {start} 开始，缺 " + "、".join(map(str, missing)))
+        duplicates = sorted({value for value in numbers if numbers.count(value) > 1})
+        if duplicates:
+            issues.append(f"{label} 序号重复（{'、'.join(map(str, duplicates))}）")
     return issues
 
 
-def _stage_issues(entries: Sequence[dict]) -> tuple[list[str], dict[str, dict]]:
-    """Step 5: only unnamed groups (captions that inherit a heading) are forced.
-
-    A group is unnamed only when every caption in it inherited its name (F12),
-    so a named group that happens to share the heading text is not forced and
-    naming never flips the verdict.
-    """
-    groups: dict[str, dict] = {}
-    for entry in entries:
-        group = groups.setdefault(entry["group"], {"stages": set(), "unnamed": True})
-        if entry["stage"]:
-            group["stages"].add(entry["stage"])
-        if not entry["unnamed"]:
-            group["unnamed"] = False
-    unnamed = {label: group for label, group in groups.items() if group["unnamed"]}
-    issues = [
-        f"{label} 缺{'、'.join(_STAGE_LABELS[key] for key in _STAGE_LABELS if key not in group['stages'])}照片"
-        for label, group in unnamed.items()
-        if len(group["stages"]) < len(_STAGE_LABELS)
-    ]
-    return issues, unnamed
+def _skip_evidence(skipped: Sequence[dict]) -> str:
+    counts: dict[str, int] = {}
+    for item in skipped:
+        counts[item["reason"]] = counts.get(item["reason"], 0) + 1
+    return "跳过=" + "; ".join(f"{reason}×{count}" for reason, count in counts.items())
 
 
 def evaluate_photo_rules(data: ReportData) -> list[Finding]:
-    """R23: appendix photo numbering and 试验前/中/后 completeness."""
-    entries = _photo_entries(data.paragraphs)
-    if not entries:
-        return [_photo_finding("skip", "info", "未识别到附录照片题注，无法核对照片序号与试验前/中/后", "", "题注使用「照片N」「试验前照片」等写法后重试", 1)]
-    number_issues = _number_issues(entries)
-    stage_issues, stage_groups = _stage_issues(entries)
-    has_stage = any(entry["stage"] for entry in entries)
+    """R23: only standard-caption numbering; skip everything ambiguous."""
+    entries, skipped = _photo_entries(data.paragraphs)
     numbered = sum(1 for entry in entries if entry["number"] is not None)
-    evidence = f"题注={len(entries)}; 有序号={numbered}; 阶段组={len(stage_groups)}; 嵌入图片={data.embedded_images}"
+    evidence = f"标准题注={len(entries)}; 有序号={numbered}; 嵌入图片={data.embedded_images}"
+    if skipped:
+        evidence += "; " + _skip_evidence(skipped)
     page = max(data.page_totals) if data.page_totals else 1
-    if number_issues:  # step 4: numbering is text-only, keep it even without photos (F18)
-        return [_photo_finding("fail", "medium", f"附录照片序号存在 {len(number_issues)} 处不连续",
-                               evidence + "; " + "; ".join(number_issues[:6]),
-                               "按附录题注顺序连续编号，补齐缺号并删除重复号", page)]
-    if not data.embedded_images:  # step 6a: F8
-        return [_photo_finding("skip", "info", f"附录题注序号连续（{len(entries)} 条），但报告未嵌入照片，完整性无法核对",
-                               evidence, "客户 D3 带嵌入照片的样例到位后复核试验前/中/后", page)]
-    if not has_stage:  # step 6b: F7
-        return [_photo_finding("skip", "info", "照片题注未标注试验前/中/后，完整性无法核对",
-                               evidence, "题注补充试验前/中/后后复核", page)]
-    if stage_issues:  # step 5: F6
-        return [_photo_finding("fail", "medium", f"照片完整性存在 {len(stage_issues)} 处缺失",
-                               evidence + "; " + "; ".join(stage_issues[:6]),
-                               "每个检验项目补齐试验前/中/后照片", page)]
-    if stage_groups:
-        message = f"{len(stage_groups)} 组照片均含试验前/中/后，序号连续"
-    else:
-        message = "照片序号连续（具名照片组不强制试验前/中/后）"
-    return [_photo_finding("pass", "info", message, evidence, "", page)]
+    zero_issues = _zero_issues(entries)
+    if zero_issues:  # F1: text-only, kept even without embedded photos
+        summary = "；".join(zero_issues[:3])
+        return [_photo_finding(
+            "fail", "medium", f"附录照片序号存在 {len(zero_issues)} 处问题：{summary}",
+            evidence + "; " + "; ".join(zero_issues[:6]),
+            "照片序号至少应从 1 开始，把照片0 改为照片1 后重试", page,
+        )]
+    if not entries or skipped:
+        # A skipped caption form may carry numbers of a group judged here
+        # (外包装照片1、内包装照片1 followed by 外包装照片2), so a gap would be
+        # an artefact of the skip.  Never report it, never claim pass.
+        reasons = "；".join(sorted({item["reason"] for item in skipped})) if skipped else ""
+        if not entries:
+            message = (f"未识别到可判定的标准照片题注（{reasons}），未核对照片序号"
+                       if skipped else "未识别到附录照片题注，无法核对照片序号")
+        else:
+            message = (f"仅核对 {len(entries)} 条标准题注，另有 {len(skipped)} 行"
+                       f"非标准题注已跳过（{reasons}），无法确认整体序号")
+        return [_photo_finding("skip", "info", message, evidence,
+                               "将待判题注改为一行一个「照片N」后重试", page)]
+    group_issues = _group_issues(entries)  # F2/F3
+    if group_issues:
+        summary = "；".join(group_issues[:3])
+        return [_photo_finding(
+            "fail", "medium", f"附录照片序号存在 {len(group_issues)} 处问题：{summary}",
+            evidence + "; " + "; ".join(group_issues[:6]),
+            "按标准题注顺序连续编号：从 1 开始，补齐缺号并删除重复号", page,
+        )]
+    if not data.embedded_images:  # S5a
+        return [_photo_finding(
+            "skip", "info",
+            f"标准题注序号连续（{len(entries)} 条），但报告未嵌入照片，无法核对",
+            evidence, "客户 D3 带嵌入照片的样例到位后复核", page,
+        )]
+    has_stage = (
+        any(_STAGE_RE.search(paragraph or "") for paragraph in data.paragraphs)
+        or any(entry["stage"] for entry in entries)
+    )
+    if not has_stage:  # S5b
+        return [_photo_finding(
+            "skip", "info",
+            "标准题注序号连续，但全篇未标注试验前/中/后，无法核对",
+            evidence, "题注补充试验前/中/后后复核", page,
+        )]
+    return [_photo_finding(
+        "pass", "info", f"标准题注序号连续（{len(entries)} 条）", evidence, "", page,
+    )]
 
 
 def _photo_finding(status: str, severity: str, message: str, evidence: str, suggestion: str, page: int) -> Finding:
