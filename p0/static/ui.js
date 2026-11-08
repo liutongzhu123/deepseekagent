@@ -30,6 +30,16 @@ const PERMISSIONS = {
   'audit:read': ['admin'],
   'config:read': ['admin'],
   'config:manage': ['admin'],
+  'config:manage:report': ['admin', 'reviewer'],
+  'config:manage:standard': ['admin', 'reviewer'],
+  'config:manage:quote': ['admin', 'sales'],
+  'config:manage:business': ['admin', 'sales'],
+};
+const CONFIG_SECTION_PERMISSIONS = {
+  report: 'config:manage:report',
+  standard: 'config:manage:standard',
+  quote: 'config:manage:quote',
+  business: 'config:manage:business',
 };
 
 const EVENT_LABELS = {
@@ -354,7 +364,11 @@ async function loadMe() {
     state.me = data.user;
     setSignedInUser(state.me);
     applyRoleUi();
-    $('adminNavSection').classList.toggle('hidden', state.me.role !== 'admin');
+    if (!can('user:manage')) {
+      $('adminPageTitle').textContent = '规则配置';
+      $('adminPageDesc').textContent = '维护你所负责业务链路的规则；保存后对新的请求生效，并写入审计日志。';
+    }
+    $('adminNavSection').classList.toggle('hidden', !canAnyConfig());
     return true;
   } catch (error) {
     $('userBox').innerHTML = `<span class="avatar">!</span><div class="user-meta"><b>未登录</b><span>请重新登录</span></div>`;
@@ -363,7 +377,7 @@ async function loadMe() {
 }
 function switchTab(name) {
   if (!TAB_META[name]) name = 'report';
-  if (name === 'admin' && (!state.me || state.me.role !== 'admin')) name = 'report';
+  if (name === 'admin' && !canAnyConfig()) name = 'report';
   $$('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.tab === name));
   $$('.panel').forEach((panel) => panel.classList.toggle('hidden', panel.id !== `panel-${name}`));
   $('crumbCurrent').textContent = TAB_META[name].title;
@@ -380,8 +394,8 @@ function switchTab(name) {
   }
   if (name === 'quote' && can('quote:generate')) loadQuotes().catch(showError);
   if (name === 'admin') {
-    loadAdmin().catch(showError);
-    switchAdminView(state.adminView || 'users');
+    if (can('user:manage')) loadAdmin().catch(showError);
+    switchAdminView(state.adminView || (can('user:manage') ? 'users' : 'config'));
   }
   const nextParams = new URLSearchParams(location.search);
   nextParams.set('tab', name);
@@ -402,11 +416,17 @@ function configMetaText(config) {
 function configFact(label, value) {
   return `<span class="config-fact"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b></span>`;
 }
-function configAccessText() {
-  return can('config:manage') ? '' : ' · 由管理员维护';
+function canConfig(section) {
+  return can(CONFIG_SECTION_PERMISSIONS[section] || 'config:manage');
+}
+function canAnyConfig() {
+  return Object.keys(CONFIG_SECTION_PERMISSIONS).some(canConfig);
+}
+function configAccessText(section) {
+  return canConfig(section) ? '' : ' · 由管理员维护';
 }
 function applyConfigAccessory() {
-  $$('.js-open-admin-config').forEach((button) => button.classList.toggle('hidden', !can('config:manage')));
+  $$('.js-open-admin-config').forEach((button) => button.classList.toggle('hidden', !canConfig(button.dataset.configSection)));
 }
 function aliasRow(label, values) {
   const chips = (values || []).map((value) => `<span class="chip">${escapeHtml(value)}</span>`).join('');
@@ -444,7 +464,7 @@ function renderReportModuleConfig(config) {
     `均值容差 ${report.mean_tolerance ?? 0.05} 分`,
     report.expected_notices ? `注意事项 ${report.expected_notices} 条` : '注意事项不校验',
     `已停用 ${rules.length - enabled} 条`,
-  ].join(' · ') + configAccessText();
+  ].join(' · ') + configAccessText('report');
   $('reportRules').innerHTML = rules.map((rule) => {
     const { severity, tone } = severityOf(rule);
     return `<div class="rule-item ${rule.enabled === false ? 'rule-disabled' : ''}">
@@ -491,7 +511,7 @@ function renderStandardModuleConfig(config) {
   const exported = fields.filter((field) => field.export).length;
   $('stdConfigRev').textContent = `v${config.revision ?? 0}`;
   $('stdConfigInline').textContent = `技术要求：${tech.join(' / ') || '—'} · 试验方法：${method.join(' / ') || '—'}`;
-  $('stdConfigMeta').textContent = `${configMetaText(config)}${configAccessText()}`;
+  $('stdConfigMeta').textContent = `${configMetaText(config)}${configAccessText('standard')}`;
   $('stdConfigFacts').innerHTML = [
     configFact('技术要求别名', `${tech.length} 个`),
     configFact('试验方法别名', `${method.length} 个`),
@@ -520,7 +540,7 @@ function renderQuoteModuleConfig(config) {
   const number = (value) => String(Math.round(value * 100) / 100);
   $('quoteConfigRev').textContent = `v${config.revision ?? 0}`;
   $('quoteConfigInline').textContent = `折扣 ${number(discount)}% · 产品税 ${number(productTax)}% · 服务税 ${number(serviceTax)}% · 单位映射 ${units.length} 条 · CRM ${columns.length} 列`;
-  $('quoteConfigMeta').textContent = `${configMetaText(config)}${configAccessText()}`;
+  $('quoteConfigMeta').textContent = `${configMetaText(config)}${configAccessText('quote')}`;
   $('quoteConfigFacts').innerHTML = [
     configFact('默认折扣', `${number(discount)}%`),
     configFact('产品税率', `${number(productTax)}%`),
@@ -1716,6 +1736,9 @@ function renderAdminConfig() {
   const report = config.report || { rules: [] };
   const standard = config.standard || { section_aliases: {}, fields: [] };
   const quote = config.quote || { headers: {}, unit_map: {}, crm_columns: [] };
+  const business = config.business || {};
+  const businessRush = business.rush || {};
+  const businessIntermediary = business.intermediary || {};
 
   $('configMeta').textContent = `配置版本 ${config.revision ?? 0} · ${configTime(config.updated_at)}${config.updated_by ? ` · ${config.updated_by}` : ''}`;
   if (wrapper.warning) {
@@ -1761,6 +1784,18 @@ function renderAdminConfig() {
       <td><input type="text" data-column-prop="label" value="${escapeHtml(column.label)}" maxlength="40" aria-label="${escapeHtml(column.label)} 列名"></td>
       <td><input type="checkbox" data-column-prop="enabled" ${column.enabled ? 'checked' : ''} aria-label="${escapeHtml(column.label)} 启用"></td>
     </tr>`).join('');
+
+  $('cfgBizDiscountTiers').value = (business.discount_tiers || []).map((tier) => `${tier.min_amount}=${tier.discount}`).join('\n');
+  $('cfgBizRushEnabled').checked = Boolean(businessRush.enabled);
+  $('cfgBizRushFee').value = businessRush.fee_rate ?? 0;
+  $('cfgBizRushLead').value = businessRush.lead_days ?? 0;
+  $('cfgBizIntermediaryEnabled').checked = Boolean(businessIntermediary.enabled);
+  $('cfgBizIntermediaryBlock').checked = Boolean(businessIntermediary.block);
+  $('cfgBizIntermediaryKeywords').value = (businessIntermediary.keywords || []).join(', ');
+  $('cfgBizBlacklist').value = (business.blacklist?.companies || []).join('\n');
+  $('cfgBizWhitelist').value = (business.whitelist?.companies || []).join('\n');
+
+  Object.entries(ADMIN_CONFIG_SECTIONS).forEach(([section, meta]) => $(meta.id).classList.toggle('hidden', !canConfig(section)));
 }
 async function loadAdminConfig() {
   state.config = await jsonFetch('api/v1/admin/config');
@@ -1830,6 +1865,34 @@ function collectQuoteConfig() {
     crm_columns: columns,
   };
 }
+function parseDiscountTiers(value) {
+  return String(value || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+    const parts = line.split(/[=＝]/);
+    const minAmount = Number(parts[0].trim());
+    const discount = Number(parts[1]?.trim());
+    if (parts.length !== 2 || !Number.isFinite(minAmount) || !Number.isFinite(discount)) {
+      throw new Error(`梯度折扣行格式不正确：${line}（应为「最低金额=折扣%」）`);
+    }
+    return { min_amount: minAmount, discount };
+  });
+}
+function collectBusinessConfig() {
+  return {
+    discount_tiers: parseDiscountTiers($('cfgBizDiscountTiers').value),
+    rush: {
+      enabled: $('cfgBizRushEnabled').checked,
+      fee_rate: Number($('cfgBizRushFee').value),
+      lead_days: Number($('cfgBizRushLead').value),
+    },
+    intermediary: {
+      enabled: $('cfgBizIntermediaryEnabled').checked,
+      block: $('cfgBizIntermediaryBlock').checked,
+      keywords: splitList($('cfgBizIntermediaryKeywords').value),
+    },
+    blacklist: { companies: splitList($('cfgBizBlacklist').value) },
+    whitelist: { companies: splitList($('cfgBizWhitelist').value) },
+  };
+}
 async function saveConfigSection(section, button, collector) {
   let body;
   try {
@@ -1875,6 +1938,7 @@ const ADMIN_CONFIG_SECTIONS = {
   report: { id: 'config-section-report', label: '报告审核规则' },
   standard: { id: 'config-section-standard', label: '标准解析规则字段' },
   quote: { id: 'config-section-quote', label: '报价助手规则字段' },
+  business: { id: 'config-section-business', label: '业务规则' },
 };
 let adminConfigLoad = Promise.resolve();
 let configFocusTimer = null;
@@ -1891,7 +1955,7 @@ function syncAdminLocation(view, section = '') {
 }
 function focusAdminConfigSection(section) {
   const meta = adminConfigSection(section);
-  if (!meta || !can('config:manage')) return false;
+  if (!meta || !canConfig(section)) return false;
   const target = $(meta.id);
   if (!target) return false;
   target.classList.remove('config-target');
@@ -1903,8 +1967,13 @@ function focusAdminConfigSection(section) {
   return true;
 }
 function switchAdminView(view, section = '') {
+  const canManageUsers = can('user:manage');
+  if (!canManageUsers && view !== 'config') view = 'config';
   state.adminView = view;
-  $$('#adminTabs button').forEach((button) => button.classList.toggle('active', button.dataset.adminView === view));
+  $$('#adminTabs button').forEach((button) => {
+    button.classList.toggle('hidden', !canManageUsers && button.dataset.adminView !== 'config');
+    button.classList.toggle('active', button.dataset.adminView === view);
+  });
   $('adminUsersView').classList.toggle('hidden', view !== 'users');
   $('adminAuditView').classList.toggle('hidden', view !== 'audit');
   $('adminConfigView').classList.toggle('hidden', view !== 'config');
@@ -1913,7 +1982,7 @@ function switchAdminView(view, section = '') {
   syncAdminLocation(view, view === 'config' ? section : '');
 }
 async function openAdminConfig(section = '') {
-  if (!can('config:manage')) return;
+  if (!canConfig(section)) return;
   closeModal('modalStdConfig');
   closeModal('modalQuoteConfig');
   state.adminView = 'config';
@@ -2378,9 +2447,11 @@ function bindEvents() {
   $('reportConfigSave').addEventListener('click', () => saveConfigSection('report', $('reportConfigSave'), collectReportConfig));
   $('standardConfigSave').addEventListener('click', () => saveConfigSection('standard', $('standardConfigSave'), collectStandardConfig));
   $('quoteConfigSave').addEventListener('click', () => saveConfigSection('quote', $('quoteConfigSave'), collectQuoteConfig));
+  $('businessConfigSave').addEventListener('click', () => saveConfigSection('business', $('businessConfigSave'), collectBusinessConfig));
   $('reportConfigReset').addEventListener('click', () => resetConfigSection('report', '审核规则'));
   $('standardConfigReset').addEventListener('click', () => resetConfigSection('standard', '解析规则'));
   $('quoteConfigReset').addEventListener('click', () => resetConfigSection('quote', '报价规则'));
+  $('businessConfigReset').addEventListener('click', () => resetConfigSection('business', '业务规则'));
   $('userSearch').addEventListener('input', renderUsers);
   $('roleCards').addEventListener('click', (event) => {
     const card = event.target.closest('[data-role]');
@@ -2577,7 +2648,7 @@ function boot() {
   loadMe().then((signedIn) => {
     if (!signedIn) return;
     switchTab(initialTab);
-    if (initialConfigSection && can('config:manage') && !$('panel-admin').classList.contains('hidden')) {
+    if (initialConfigSection && canConfig(initialConfigSection) && !$('panel-admin').classList.contains('hidden')) {
       syncAdminLocation('config', initialConfigSection);
       adminConfigLoad.then(() => {
         requestAnimationFrame(() => requestAnimationFrame(() => {
