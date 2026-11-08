@@ -144,6 +144,29 @@ def test_rollback_restores_earlier_items_as_new_revision(std_env):
         standard_store.rollback(standard_id, 2, "复核人")
 
 
+def test_standard_detail_exposes_high_confidence_rule_drafts(std_env):
+    parsed = parsed_standard()
+    parsed["items"][0]["limits"] = [
+        {"kind": "upper", "upper": 3, "unit": "mL/min", "raw": "≤3mL/min",
+         "mapping_confidence": "high", "table_page": 2, "table_row": 0,
+         "column": "限值"},
+        {"kind": "upper", "upper": 90, "unit": "", "raw": "90",
+         "mapping_confidence": "low", "table_page": 3, "table_row": 1,
+         "column": "限值"},
+    ]
+    parsed["items"][1]["limits"] = []
+    record = standard_store.create(
+        parsed, b"%PDF-1.4 demo", "demo.pdf", project="P1", created_by="alice"
+    )
+
+    detail = std_env.client.get(f"/api/v1/standards/{record['id']}")
+    assert detail.status_code == 200
+    judgment = detail.json()["judgment_rules"]
+    assert [rule["raw"] for rule in judgment["rules"]] == ["≤3mL/min"]
+    assert [entry["raw"] for entry in judgment["pending"]] == ["90"]
+    assert judgment["rules"][0]["clause"] == "5.1" and judgment["pending"][0]["reason"]
+
+
 def test_versions_unpublish_and_rollback_api(std_env):
     record = _create(std_env)
     standard_id = record["id"]

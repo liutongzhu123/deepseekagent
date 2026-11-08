@@ -195,12 +195,13 @@ tasks:
 
   - id: A_LOWCONF
     title: 低置信限值隔离（不进判定规则）
-    status: todo
+    status: done
     size: S
+    pr: 132
     deps: [C1]
     covers: [SP-4.1, SP-5.1]
     acceptance: ["规则生成只取 high 置信", "低置信在 UI 标待确认"]
-    files: [p0/app/standard_extract/table_mapping.py, p0/app/rule_dsl.py]
+    files: [p0/app/standard_extract/table_mapping.py, p0/app/rule_dsl.py, p0/app/main.py, p0/static/ui.js]
 
   # ========== 待做：标准解析剩余 ==========
   - id: B5

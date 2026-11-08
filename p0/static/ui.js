@@ -1113,6 +1113,41 @@ function renderStdVersions() {
     </span>`;
   }).join('');
 }
+function renderJudgmentRules(judgment) {
+  const box = $('stdRules');
+  if (!box) return;
+  const rules = (judgment && judgment.rules) || [];
+  const pending = (judgment && judgment.pending) || [];
+  if (!rules.length && !pending.length) {
+    box.innerHTML = '';
+    return;
+  }
+  const pendingItems = pending.map((entry) => {
+    const evidence = [
+      entry.page ? `第 ${entry.page} 页` : '',
+      entry.table_row !== null && entry.table_row !== undefined ? `第 ${Number(entry.table_row) + 1} 行` : '',
+      entry.column ? `列 ${entry.column}` : '',
+    ].filter(Boolean).join(' · ');
+    return `<div class="pending-limit">
+      <span class="pill warn">待确认</span>
+      <span class="finding-rule">${escapeHtml(entry.clause || '—')}</span>
+      <b>${escapeHtml(entry.name || '未命名条目')}</b>
+      <span class="pending-limit-value">${escapeHtml(entry.raw || '—')}${entry.unit ? ` ${escapeHtml(entry.unit)}` : ''}</span>
+      <span class="pending-limit-desc">${escapeHtml(entry.reason || '')}${evidence ? ` · ${escapeHtml(evidence)}` : ''}</span>
+    </div>`;
+  }).join('');
+  box.innerHTML = `<div class="banner ${pending.length ? 'warn' : 'info'}">
+    ${ic(pending.length ? 'alert' : 'check')}
+    <div class="judgment-box">
+      <b>判定规则草稿</b>
+      <div>高置信限值生成 ${escapeHtml(rules.length)} 条规则草稿；${pending.length
+        ? `${escapeHtml(pending.length)} 条低置信或缺少比较方向的限值已隔离，不参与判定，请人工确认。`
+        : '没有待确认限值。'}</div>
+      ${pending.length ? `<div class="pending-limit-list">${pendingItems}</div>` : ''}
+    </div>
+  </div>`;
+}
+
 function renderStdDetail() {
   const current = state.current;
   if (!current) return;
@@ -1120,6 +1155,9 @@ function renderStdDetail() {
   $('stdDetail').classList.remove('hidden');
   const meta = current.meta || {};
   const summary = current.summary || {};
+  const judgment = current.judgment_rules || {};
+  const judgmentRules = judgment.rules || [];
+  const pendingLimits = judgment.pending || [];
   $('stdNo').textContent = meta.standard_no || 'STANDARD';
   $('stdName').textContent = meta.name || '未命名标准';
   $('stdMeta').innerHTML = [
@@ -1140,6 +1178,8 @@ function renderStdDetail() {
     kpi(summary.clauses_traced ?? 0, '条款可溯源', 'info', 'activity'),
     kpi(summary.reviewed_items ?? 0, '已复核', 'success', 'check'),
     kpi(summary.pages ?? meta.pages ?? 0, '标准页数', 'neutral', 'file'),
+    kpi(judgmentRules.length, '判定规则草稿', 'info', 'shield'),
+    kpi(pendingLimits.length, '限值待确认', pendingLimits.length ? 'warn' : 'neutral', 'alert'),
   ].join('');
   const reviewed = summary.reviewed_items || 0;
   const total = summary.items || 0;
@@ -1149,16 +1189,18 @@ function renderStdDetail() {
   $('stdWarnings').innerHTML = warnings.length
     ? `<div class="banner warn">${ic('alert')}<div><b>解析提示</b><div>${warnings.map(escapeHtml).join('<br>')}</div></div></div>`
     : '';
+  renderJudgmentRules(judgment);
   const items = current.items || [];
   $('itemsBody').innerHTML = items.map((item, index) => {
     const selected = index === state.selectedIndex ? 'selected' : '';
+    const itemPending = (item.limits || []).filter((limit) => limit.mapping_confidence === 'low').length;
     return `<tr data-i="${index}" class="${selected}">
       <td class="muted">${escapeHtml(item.seq ?? index + 1)}</td>
       <td><span class="pill neutral">${escapeHtml(item.clause || '—')}</span></td>
       <td><span class="cell-main">${escapeHtml(item.name || '—')}</span><span class="cell-sub">方法 ${escapeHtml(item.method_clause || '—')}</span></td>
       <td>${escapeHtml(item.method_clause || '—')}</td>
       <td>${escapeHtml(item.page ?? '—')}</td>
-      <td>${item.reviewed ? '<span class="pill success">已复核</span>' : '<span class="pill info">待复核</span>'}</td>
+      <td>${item.reviewed ? '<span class="pill success">已复核</span>' : '<span class="pill info">待复核</span>'}${itemPending ? `<span class="pill warn">${escapeHtml(itemPending)} 条限值待确认</span>` : ''}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="6" class="muted">没有抽取到项目</td></tr>';
   $('exportBtn').disabled = !items.length;

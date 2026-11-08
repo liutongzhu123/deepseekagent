@@ -31,3 +31,16 @@ def test_version_strip_styles_are_present():
     css = read("ui.css")
     for selector in (".version-strip", ".version-list", ".version-chip"):
         assert selector in css
+
+
+def test_standard_detail_marks_pending_low_confidence_limits():
+    html = read("index.html")
+    js = read("ui.js")
+    css = read("ui.css")
+    for marker in ("judgment-box", "pending-limit-list", "限值待确认", "待确认"):
+        assert marker in js
+    for marker in (".pending-limit-list", ".pending-limit", ".kpi-grid.six"):
+        assert marker in css
+    assert 'id="stdRules"' in html
+    assert "renderJudgmentRules" in js
+    assert "judgment_rules" in js
