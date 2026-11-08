@@ -11,8 +11,10 @@ left alone.  Each parsed item gains ``limits`` and ``limits_status``::
 ``kind`` is ``lower``/``upper``/``range``/``tolerance``.  For ``tolerance``
 ``lower``/``upper`` are the nominal value plus/minus the stated tolerance.
 
-Known follow-up (B5/B6): relative limits such as "不应大于图样规定值的 30%"
-are intentionally skipped; judging them needs the referenced base value × ratio.
+B5 adds relative-baseline limits such as "不应大于图样规定值的 30%".  They keep
+``relative=True``, ``reference`` and ``ratio`` with ``lower``/``upper`` unset:
+judging one needs the referenced base value × ratio, so a consumer must not
+turn the bare percentage into a numeric bound.
 """
 from __future__ import annotations
 
@@ -51,6 +53,19 @@ _CMP = re.compile(
     r"(?P<op>≥|≤|＞|＜|>=|<=|>|<|不应大于|不得大于|不应小于|不得小于|"
     r"不小于|不大于|不低于|不高于|不少于|不超过|至少|最多|最大|最小)"
     rf"\s*[:：]?\s*(?P<num>{_NUM})\s*(?P<unit>{_UNIT})?"
+)
+
+# Relative-baseline limits ("不应大于图样规定值的 30%") keep the percentage
+# symbolic: no numeric bound is valid until the referenced base is resolved.
+_REL_REF = (
+    r"(?:图样|图纸|设计|标称|额定|规定|基准|名义|公称)"
+    r"(?:规定)?(?:值|要求|参数|尺寸)"
+)
+_REL_CMP = re.compile(
+    r"(?P<op>不应大于|不得大于|不大于|不应超过|不得超过|不超过|不高于|"
+    r"不得高于|不应小于|不得小于|不小于|不应低于|不得低于|不低于|"
+    r"不少于|不得少于|≥|≤|＞|＜|>=|<=|>|<)"
+    rf"\s*(?:为|到|至)?\s*(?P<ref>{_REL_REF})\s*(?:的)?\s*(?P<num>{_NUM})\s*%"
 )
 
 
@@ -130,10 +145,24 @@ def _comparison(match: re.Match) -> dict:
                   lower=None if upper else value, value=value)
 
 
+def _relative(match: re.Match) -> dict:
+    """A percentage of a referenced base; bounds stay symbolic (``None``)."""
+    value = _num(match.group("num"))
+    upper = match.group("op") in _UPPER_OPS
+    entry = _entry("upper" if upper else "lower", "%", value=value)
+    entry.update(
+        relative=True,
+        reference=match.group("ref"),
+        ratio=_round(value / 100),
+    )
+    return entry
+
+
 def _collect(text: str) -> list[dict]:
     """Apply the limit patterns in priority order, masking matched spans."""
     found: list[dict] = []
     for regex, build in (
+        (_REL_CMP, _relative),
         (_TOL_PAREN, _tolerance),
         (_TOL, _tolerance),
         (_TOL_BARE, _bare_tolerance),
@@ -158,7 +187,7 @@ def _dedupe(entries: list[dict]) -> list[dict]:
     for entry in entries:
         key = (
             entry["kind"], entry["lower"], entry["upper"], entry["value"],
-            entry["tolerance"], entry["unit"],
+            entry["tolerance"], entry["unit"], entry.get("reference"),
         )
         if key in seen:
             continue

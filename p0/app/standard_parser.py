@@ -27,6 +27,7 @@ from typing import Iterable
 from .standard_extract.conditions import apply_conditions
 from .standard_extract.formula import apply_formulas
 from .standard_extract.limits import apply_limits
+from .standard_extract.rounding import apply_rounding
 from .standard_extract.samples import apply_samples
 from .standard_extract.table_mapping import apply_table_mapping
 from .standard_extract.tables import apply_tables
@@ -1468,6 +1469,7 @@ def parse_standard(
     line_meta = [(line.text, line.page) for line in lines]
     formula_entries, formulas_summary = apply_formulas(items, line_meta)
     sample_entries, samples_summary = apply_samples(items, line_meta)
+    rounding_entries, roundings_summary = apply_rounding(items, line_meta)
     table_entries, tables_summary = apply_tables(pdf_bytes, pages, items)
     mapping_summary = apply_table_mapping(items, table_entries)
 
@@ -1518,6 +1520,7 @@ def parse_standard(
         **limits_summary,
         **samples_summary,
         **formulas_summary,
+        **roundings_summary,
         **tables_summary,
         **mapping_summary,
     }
@@ -1530,6 +1533,7 @@ def parse_standard(
         "items": items,
         "samples": sample_entries,
         "formulas": formula_entries,
+        "roundings": rounding_entries,
         "tables": table_entries,
         "summary": summary,
         "warnings": warnings,
