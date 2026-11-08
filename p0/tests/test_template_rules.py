@@ -81,19 +81,28 @@ def test_cover_standard_number_does_not_mask_template_mark():  # F11
     assert only_standard.status == "skip" and "版式=-" in only_standard.evidence
 
 def test_appledouble_file_does_not_break_loading(tmp_path, monkeypatch):
-    """回归：部署目录里混入 macOS 的 ._xxx 二进制文件时，配置加载不能崩。
+    """回归：._ 元数据与损坏的 YAML 都不能让配置加载崩溃/被误加载。
 
     2026-11-08 真实事故：._byd_odor.yaml 让 read_text 抛 UnicodeDecodeError，
     未被捕获，导致 177 个测试失败、部署连续回滚。
+
+    本用例同时覆盖两层修复，任一层被移除都会变红：
+    - 移除「跳过 ._*」→ ._trap.yaml 会被当成模板配置（TRAP）；
+    - 移除「捕获 UnicodeDecodeError」→ corrupt.yaml（非 ._ 文件）直接抛错；
+    - 两层都移除 → `._bad.yaml` 直接抛 UnicodeDecodeError。
+    注意字节必须是**非法 UTF-8**：合法 UTF-8 的伪二进制不会触发 read_text 抛错。
     """
     from app import template_rules
 
     cfg = tmp_path / "templates"
     cfg.mkdir()
     (cfg / "good.yaml").write_text("family: x\nmatch: [y]\n", encoding="utf-8")
-    (cfg / "._good.yaml").write_bytes(b"\x00\x05\x16\x07" + bytes(range(60)))
+    (cfg / "._bad.yaml").write_bytes(b"\x80\x05\xff" + bytes(range(60)))
+    (cfg / "._trap.yaml").write_text("family: TRAP\nmatch: [x]\n", encoding="utf-8")
+    (cfg / "corrupt.yaml").write_bytes(b"\x80\x05\xff" + bytes(range(60)))
 
     monkeypatch.setattr(template_rules, "CONFIG_DIR", cfg)
     oems, families = template_rules.load_configs()
     assert isinstance(oems, dict)
     assert all(isinstance(item, dict) for item in families)
+    assert [item.get("family") for item in families] == ["x"]
