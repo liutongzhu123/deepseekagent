@@ -337,6 +337,86 @@ tasks:
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_format_standard_years.py, docs/report-format-checks/README.md]
     note: BYD 12 份草稿 R22 实测 12/12 pass、0 误报；只查检验依据字段，不校验标准现行版本
 
+  - id: RA_JUDGE_CONSIST
+    title: 结论页无判定时结果表不得出现判定表述
+    status: todo
+    size: S
+    covers: [RA-1.6]
+    acceptance: ["结论页无判定表述时结果表有判定即报出", "两边都有判定不报"]
+    files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_judge_consistency.py, docs/report-format-checks/README.md]
+
+  - id: RA_VALUE_RANGE
+    title: 数值合理性、单位正确性、小数位数检查
+    status: todo
+    size: M
+    covers: [RA-2.4, RA-2.5]
+    acceptance: ["数值超出判定要求范围能报出", "单位与标准不一致能报出", "小数位数不一致能报出"]
+    files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_value_range.py, docs/report-format-checks/README.md]
+
+  - id: RA_RAWVER
+    title: 原始记录版本有效性检查
+    status: todo
+    size: S
+    covers: [RA-4.7]
+    acceptance: ["引用过期版本号能报出", "最新版本不报"]
+    files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_raw_record_version.py, docs/report-format-checks/README.md]
+
+  - id: RA_FIXEDTEXT
+    title: 固定内容校验（中文 8 条 / 英文 7 条注意事项）
+    status: todo
+    size: M
+    covers: [RA-4.11]
+    acceptance: ["缺注意事项能逐条报出", "顺序或措辞错误能报出", "中英文各按 8/7 条核对"]
+    files: [p0/app/template_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_fixed_content.py, docs/report-format-checks/README.md]
+
+  - id: RA_CUSTOMRULE
+    title: 支持自建逻辑条件（如检测日期距生产日期不超过 N 天）
+    status: todo
+    size: M
+    covers: [RA-5.1]
+    acceptance: ["管理员可配置条件表达式", "命中条件能报出并给出证据", "配置为空时不报"]
+    files: [p0/app/admin_config.py, p0/app/rules.py, p0/tests/test_custom_rule.py, docs/report-format-checks/README.md]
+
+  - id: RA_PRODNAME
+    title: 产品名称异常识别（与产品不符或无法判定种类）
+    status: todo
+    size: S
+    covers: [RA-5.2]
+    acceptance: ["产品名称与检测项目明显不符能报出", "纯编号类名称（如 001）能报出", "正常名称不报"]
+    files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_product_name.py, docs/report-format-checks/README.md]
+
+  - id: SP_MULTIFMT
+    title: 支持 PDF/Word/图片格式标准文档上传解析
+    status: todo
+    size: M
+    covers: [SP-1.1]
+    acceptance: ["PDF 可上传并解析", "扫描图片可上传（文字提取可依赖 OCR 能力边界并明确提示）", "格式不支持时给明确错误"]
+    files: [p0/app/standard_parse.py, p0/app/main.py, p0/tests/test_multiformat.py]
+
+  - id: SP_REVIEWSAVE
+    title: 检测项目人工复核确认后入库
+    status: todo
+    size: M
+    covers: [SP-2.2]
+    acceptance: ["解析结果可人工修改", "确认后写入标准库", "未确认不入库"]
+    files: [p0/app/standard_store.py, p0/app/main.py, p0/tests/test_review_save.py]
+
+  - id: SP_FORMULAVAR
+    title: 提取公式变量定义与计算逻辑
+    status: todo
+    size: M
+    covers: [SP-6.2]
+    acceptance: ["能提取变量名与定义", "能生成可执行规则", "变量缺失时明确报出"]
+    files: [p0/app/standard_extract/formula.py, p0/tests/test_formula_vars.py, docs/report-format-checks/README.md]
+
+  - id: SP_SAMPLEGUIDE
+    title: 样品制备指引生成与委托单联动校验
+    status: todo
+    size: M
+    covers: [SP-8.2]
+    acceptance: ["能生成样品制备指引", "与委托单样品信息不一致时能报出"]
+    files: [p0/app/standard_extract/samples.py, p0/app/main.py, p0/tests/test_sample_guide.py]
+
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
     status: todo
