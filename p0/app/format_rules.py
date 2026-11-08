@@ -544,7 +544,11 @@ def r18_toc_pages(data: ReportData):
 # F13 冒号只在紧跟数字时并进标准号（2021:2015 保留；2021：说明文字 或 结尾冒号 断掉），
 #     否则合法标准号后接冒号会被误判格式不合法。
 _BASIS_LABELS = ("检验依据", "检测依据")
-_STD_DASHES = str.maketrans({"–": "-", "—": "-", "−": "-", "－": "-", "―": "-"})
+_STD_DASHES = str.maketrans({
+    "–": "-", "—": "-", "−": "-", "－": "-", "―": "-",
+    "‐": "-", "‑": "-", "‒": "-", "⁃": "-", "﹘": "-",
+    "⸺": "-", "⸻": "-",
+})
 _STD_TOKEN_TAIL = r"(?:[A-Za-z0-9.\-]|:(?=\d))*"
 _STD_QT_RE = re.compile(
     r"(?<![A-Za-z0-9/])(?P<kind>Q|T)/[A-Za-z][A-Za-z0-9]*(?:[.\-][A-Za-z0-9]+)*"
@@ -983,6 +987,9 @@ def r25_judge_consistency(data: ReportData):
 # F8 多个标准混合（过期/最新/未收录）-> 只报过期项，未收录项只计数。
 # F9 全角/长横写法先按 R22 的归一化切分，同一版本不因横线写法重复或漏判。
 # F10 企业标准编号里的 4 位数字（A1901）不当年份，只认末尾 -YYYY/:YYYY。
+# F11 连字符变体（U+2010/U+2011/U+2012 等）先折成 ASCII "-"，版本号才能切出年份。
+# F12 「Q/ 代号」后的空格与连字符视为同一写法（Q/BYDQ A1901.404 == Q/BYDQ-A1901.404），
+#     版本键归一后再查表；同一标准的两种写法重复引用只报一次。
 #
 # 最新有效版本表来源：客户当前 12 份 BYD 草稿与 records.xlsx 的检验依据（2026-11-08 基线）。
 # 只收录能从客户现行资料确认的版本；未收录标准不判，客户升版后在此更新一行即可。
@@ -990,7 +997,19 @@ _RAW_RECORD_LATEST_VERSIONS = {
     "Q/BYDQ-A1901.404": 2025,
     "Q/BYDQ-A1901.1373": 2018,
 }
-_RAW_RECORD_LATEST = {re.sub(r"\s+", "", key): year for key, year in _RAW_RECORD_LATEST_VERSIONS.items()}
+
+
+def _version_key(text: str) -> str:
+    """Canonical key where dash and space separators are equivalent.
+
+    Word writes the same enterprise standard as ``Q/BYDQ-A1901.404`` or
+    ``Q/BYDQ A1901.404`` and may use U+2010/U+2011 hyphens; fold them all to
+    one ASCII form before comparing with the registry.
+    """
+    return re.sub(r"[\s-]+", "-", _norm_standard_text(text))
+
+
+_RAW_RECORD_LATEST = {_version_key(key): year for key, year in _RAW_RECORD_LATEST_VERSIONS.items()}
 
 
 def _standard_year(prefix: str, body: str) -> int | None:
@@ -1013,17 +1032,24 @@ def _standard_version_key(prefix: str, body: str) -> str:
     body = re.sub(r"[-:]\d{4}$", "", body)
     if prefix == "ASTM":
         body = re.sub(r"-\d{2}$", "", body)
-    return re.sub(r"\s+", "", f"{prefix}{body}")
+    return _version_key(f"{prefix}{body}")
 
 
 def _unique_tokens(tokens: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
+    """Deduplicate citations; dash/space spellings of one citation count once."""
     seen: set[str] = set()
     unique: list[tuple[str, str, str]] = []
     for token, prefix, body in tokens:
-        if token not in seen:
-            seen.add(token)
+        key = _version_key(token)
+        if key not in seen:
+            seen.add(key)
             unique.append((token, prefix, body))
     return unique
+
+
+def _display_token(token: str) -> str:
+    """Show enterprise standards in the canonical ``Q/CODE-NUMBER`` form."""
+    return re.sub(r"^([QT]/[A-Za-z0-9]+)[ \t]+", r"\1-", token)
 
 
 def r27_raw_record_version(data: ReportData):
@@ -1052,7 +1078,7 @@ def r27_raw_record_version(data: ReportData):
             continue
         judged += 1
         if year < latest:
-            expired.append(f"{token}（最新 {latest}）")
+            expired.append(f"{_display_token(token)}（最新 {latest}）")
     evidence = (
         f"检验依据={basis[:80]}; 引用标准={len(tokens)}; 可判定={judged}; "
         f"过期={len(expired)}; 未收录={len(unknown)}; 无年代号={len(no_year)}"
@@ -1074,12 +1100,13 @@ def r27_raw_record_version(data: ReportData):
         return _finding(
             "R27", title, "skip", "info",
             f"引用的 {len(unknown)} 个标准均不在最新有效版本表，无法判断是否过期："
-            + "、".join(unknown[:4]),
+            + "、".join(_display_token(token) for token in unknown[:4]),
             evidence, section="检验依据", cell="版本号",
         )
     return _finding(
         "R27", title, "skip", "info",
-        f"引用的 {len(no_year)} 个标准均无年代号，无法判断版本（缺年代号由 R22 报出）",
+        f"引用的 {len(no_year)} 个标准均无年代号，无法判断版本（缺年代号由 R22 报出）："
+        + "、".join(_display_token(token) for token in no_year[:4]),
         evidence, section="检验依据", cell="版本号",
     )
 
