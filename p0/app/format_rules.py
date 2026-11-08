@@ -865,9 +865,114 @@ def r24_sample_numbers(data: ReportData):
     return _finding("R24", title, "pass", "info", f"样品编号 {len(all_tokens)} 个（{len(groups)} 组前缀），未发现断号或重复", evidence, section="样品信息", cell="样品编号")
 
 
+# --- R25: 结论页无判定时结果表不得判定 -------------------------------------
+# RA-1.6. Failure branches (each covered in p0/tests/test_judge_consistency.py):
+# F1 没有检验结果表 -> skip，不能把“看不到”当成“没有判定”。
+# F2 结果表没有「符合性判定」列 -> skip，无法确认结果表判定表述。
+# F3 判定单元格为空或是杠掉写法（/、—、不适用）-> 视为无判定。
+# F4 判定单元格出现判定词（符合/不符合、合格/不合格、通过/不通过、满足）-> 有判定。
+# F5 结论页识别不到「检验结论」字段/标题 -> skip，避免把解析失败当成“无判定”。
+# F6 结论页为空或杠掉 -> 无判定。
+# F7 结论页出现判定词 -> 有判定；「符合性判定」「合格证」「通过率」是名词，不算判定。
+# F8 结论页与结果表都有判定 -> pass（验收：两边都有判定不报）。
+# F9 结论页无判定、结果表有判定 -> fail（验收：结论页无判定时结果表有判定即报出）。
+# F10 两边都无判定 -> pass（约束成立）。
+# F11 多样本结果表收集所有出现的判定值，去重后写入证据；不要求各行判定相同（R06 管数值一致性）。
+_CONCLUSION_HEADING_RE = re.compile(
+    r"^(?:\d{1,2}(?:\.\d{1,2})*[.、]?\s*)?(检验结论|检测结论)\s*(?:[:：]\s*(.*))?$"
+)
+_JUDGMENT_NA = {"", "/", "／", "—", "——", "-", "－", "–", "无", "不适用", "n/a", "na", "不涉及", "未判定"}
+_JUDGMENT_RE = re.compile(r"不符合|符合(?!性)|不通过|通过(?!率)|不合格|合格(?!证)|不满足|满足")
+
+
+def _is_judgment_na(text: str) -> bool:
+    norm = _norm_cell(text)
+    return not norm or norm.lower() in _JUDGMENT_NA
+
+
+def _has_judgment(text: str) -> bool:
+    return bool(text) and not _is_judgment_na(text) and bool(_JUDGMENT_RE.search(text))
+
+
+def _conclusion_text(data: ReportData) -> tuple[str, bool]:
+    """Return (conclusion text, whether the conclusion page was identified)."""
+    text = (data.conclusion or "").strip()
+    if text:
+        return text, True
+    paragraphs = [line.strip() for line in data.paragraphs if line and line.strip()]
+    for index, line in enumerate(paragraphs):
+        match = _CONCLUSION_HEADING_RE.match(line)
+        if not match:
+            continue
+        if match.group(2) and match.group(2).strip():
+            return match.group(2).strip(), True
+        following = paragraphs[index + 1] if index + 1 < len(paragraphs) else ""
+        # F6: 「检验结论」下一行若是另一个字段标签（如“签发日期：”），说明结论内容为空。
+        if following and not re.match(r"^[^：:]{1,12}\s*[:：]", following):
+            return following, True
+        return "", True
+    return "", False
+
+
+def _result_judgments(data: ReportData) -> tuple[list[str], bool]:
+    """Return (judgment cell values, whether the 「符合性判定」 column exists)."""
+    if not data.result_cells:
+        return ([data.judgment.strip()], True) if (data.judgment or "").strip() else ([], False)
+    header = [cell.strip() for cell in data.result_cells[0]]
+    if "符合性判定" not in header:
+        return [], False
+    column = header.index("符合性判定")
+    values = [
+        row[column].strip()
+        for row in data.result_cells[1:]
+        if column < len(row) and row[column].strip()
+    ]
+    return values, True
+
+
+def r25_judge_consistency(data: ReportData):
+    title = "结论页无判定时结果表不得判定"
+    if not data.result_cells and not (data.judgment or "").strip():
+        return _finding("R25", title, "skip", "info", "未识别到检验结果表，无法检查结果表判定表述", section="检验结果表", cell="符合性判定")
+    values, column_found = _result_judgments(data)
+    if not column_found:
+        return _finding("R25", title, "skip", "info", "检验结果表无「符合性判定」列，无法检查结果表判定表述", section="检验结果表", cell="符合性判定")
+    conclusion, conclusion_found = _conclusion_text(data)
+    if not conclusion_found:
+        return _finding("R25", title, "skip", "info", "未识别到结论页「检验结论」字段，无法判断结论页是否有判定表述", section="检验结论", cell="检验结论")
+    conclusion_judged = _has_judgment(conclusion)
+    table_judgments = list(dict.fromkeys(value for value in values if _has_judgment(value)))
+    evidence = f"结论={conclusion[:80] or '空'}; 符合性判定={'、'.join(values[:3]) or '空'}"
+    if table_judgments and not conclusion_judged:
+        return _finding(
+            "R25", title, "fail", "medium",
+            f"结论页无判定表述，但结果表符合性判定为「{'、'.join(table_judgments[:3])}」",
+            evidence,
+            "在结论页补充明确判定（符合/不符合），或删除结果表的符合性判定，使结论页与结果表一致",
+            section="检验结论/检验结果表", cell="、".join(table_judgments[:3])[:80],
+        )
+    if table_judgments:
+        return _finding(
+            "R25", title, "pass", "info",
+            f"结论页与结果表均有判定表述（结论「{conclusion[:30]}」；符合性判定「{'、'.join(table_judgments[:3])}」）",
+            evidence, section="检验结论/检验结果表", cell="检验结论/符合性判定",
+        )
+    if conclusion_judged:
+        return _finding(
+            "R25", title, "pass", "info",
+            "结论页有判定表述、结果表无判定表述，未出现结论页无判定而结果表判定的情况",
+            evidence, section="检验结论/检验结果表", cell="检验结论",
+        )
+    return _finding(
+        "R25", title, "pass", "info",
+        "结论页与结果表均无判定表述，未出现结论页无判定而结果表判定的情况",
+        evidence, section="检验结论/检验结果表", cell="检验结论/符合性判定",
+    )
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency}
