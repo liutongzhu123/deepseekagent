@@ -642,7 +642,7 @@ def _readable_requirement(values: list[str]) -> str:
     return "；".join(dict.fromkeys(kept))
 
 
-def _table_item_name(raw: str, method_no: str) -> str:
+def _table_item_name(raw: str, method_no: str, group_pairs: bool = True) -> str:
     text = (raw or "").replace("\n", "/")
     text = re.sub(r"(?<![A-Za-z])[A-Za-z](?![A-Za-z])", "", text)
     text = text.replace("/", "")
@@ -668,9 +668,9 @@ def _table_item_name(raw: str, method_no: str) -> str:
         if "-30" in raw or "－30" in raw:
             return "悬臂梁缺口冲击强度（-30℃）"
         return "悬臂梁缺口冲击强度（23℃）"
-    if text in ("拉伸强度", "屈服伸长率"):
+    if group_pairs and text in ("拉伸强度", "屈服伸长率"):
         return "拉伸强度/屈服伸长率"
-    if text in ("弯曲强度", "弯曲模量"):
+    if group_pairs and text in ("弯曲强度", "弯曲模量"):
         return "弯曲强度/弯曲模量"
     if text == "燃烧性能":
         return "燃烧特性"
@@ -685,25 +685,75 @@ def _method_clause_from_row(row: list[str]) -> str:
     return ""
 
 
+def _method_clause_from_cell(text: str, method_sec: str) -> str:
+    for match in re.findall(r"(?<![\d.])(\d+\.\d+(?:\.\d+)*)(?![\d.])", text or ""):
+        if match.split(".")[0] == method_sec:
+            return match
+    return ""
+
+
+def _grid_header_columns(grid: list[list[str]]) -> tuple[int | None, dict[str, int]]:
+    for index, row in enumerate(grid[:3]):
+        columns: dict[str, int] = {}
+        for column, cell in enumerate(row):
+            text = re.sub(r"\s+", "", cell or "")
+            if not text:
+                continue
+            if "项目" in text and "序号" not in text and "name" not in columns:
+                columns["name"] = column
+            if "method" not in columns and any(
+                keyword in text for keyword in ("试验方法", "检验方法", "测试方法")
+            ):
+                columns["method"] = column
+            if "requirement" not in columns and any(
+                keyword in text
+                for keyword in ("技术要求", "判定要求", "性能要求", "限值", "指标")
+            ):
+                columns["requirement"] = column
+        if "name" in columns and ("requirement" in columns or "method" in columns):
+            return index, columns
+    return None, {}
+
+
+def _table_rows_from_grids(
+    grids: list[tuple[int, list[list[str]]]], method_sec: str
+) -> list[tuple[str, str, str, int]]:
+    rows: list[tuple[str, str, str, int]] = []
+    for page_no, grid in grids:
+        header_index, columns = _grid_header_columns(grid)
+        if header_index is None:
+            continue
+        for row in grid[header_index + 1:]:
+            def cell(key: str) -> str:
+                index = columns.get(key)
+                return row[index] if index is not None and index < len(row) else ""
+            method_no = _method_clause_from_cell(cell("method"), method_sec)
+            name = _table_item_name(cell("name"), method_no, group_pairs=False)
+            if not name or not _has_cjk(name) or len(name) > 40 or name == "备注":
+                continue
+            values = [_clean_table_text(cell("requirement"))] if "requirement" in columns else []
+            if not any(values):
+                values = [
+                    _clean_table_text(value)
+                    for index, value in enumerate(row)
+                    if index not in {columns.get("name"), columns.get("method")} and value
+                ]
+            rows.append((name, _readable_requirement(values), method_no, page_no))
+    return rows
+
+
 def _parse_table_items(
-    pdf_bytes: bytes,
+    pdf_bytes: bytes | None,
     lines: list[_Line],
     headings: list[_Heading],
     method_sec: str,
+    source_tables: list[tuple[int, list[list[str]]]] | None = None,
 ) -> list[dict]:
     """Extract items from a standard's performance-requirement tables.
 
-    Some PP/PE material standards keep the item list inside
-    multi-page merged-cell tables instead of a clause/heading mapping.  This
-    fallback uses pdfplumber's table geometry, cleans PDF watermark fragments,
-    and maps each row to a method clause (or to the closest method heading
-    when the merged cell leaves the method blank).
+    PDF tables come from pdfplumber geometry; Word tables are parsed into
+    grids by ``standard_parse`` and share the same header/row mapping.
     """
-    try:  # optional dependency: keep the text-only parser usable without it
-        import pdfplumber
-    except ImportError:  # pragma: no cover - exercised only without the extra
-        return []
-
     method_section = [h for h in headings if h.num.split(".")[0] == method_sec]
     method_leaves = [h for h in method_section if _is_leaf(h, method_section)]
     by_num = {h.num: h for h in method_leaves}
@@ -724,46 +774,53 @@ def _parse_table_items(
         return best[1] if best else None
 
     rows: list[tuple[str, str, str, int]] = []
-    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-        for page_no, page in enumerate(pdf.pages, start=1):
-            try:
-                tables = page.extract_tables()
-            except Exception:  # noqa: BLE001 - a broken table must not kill the batch
-                continue
-            for table in tables:
-                if not table:
+    if source_tables is not None:
+        rows = _table_rows_from_grids(source_tables, method_sec)
+    else:
+        try:  # optional dependency: keep the text-only parser usable without it
+            import pdfplumber
+        except ImportError:  # pragma: no cover - exercised only without the extra
+            return []
+        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+            for page_no, page in enumerate(pdf.pages, start=1):
+                try:
+                    tables = page.extract_tables()
+                except Exception:  # noqa: BLE001 - a broken table must not kill the batch
                     continue
-                header = " ".join(
-                    (cell or "").replace("\n", "")
-                    for row in table[:2]
-                    for cell in row
-                )
-                if "试验项目" not in header or "试验方法" not in header:
-                    continue
-                if "出厂检验" in header or "型式检验" in header:
-                    # An inspection schedule (试验项目/技术要求/试验方法/
-                    # 出厂检验/型式检验) has a different column layout from the
-                    # merged-cell performance tables this fallback targets.
-                    continue
-                for row in table[2:] if len(table) > 2 else table[1:]:
-                    if not row:
+                for table in tables:
+                    if not table:
                         continue
-                    raw_name = row[0] or ""
-                    if not _has_cjk(raw_name):
+                    header = " ".join(
+                        (cell or "").replace("\n", "")
+                        for row in table[:2]
+                        for cell in row
+                    )
+                    if "试验项目" not in header or "试验方法" not in header:
                         continue
-                    method_no = _method_clause_from_row(row)
-                    name = _table_item_name(raw_name, method_no)
-                    if not name or len(name) > 40 or name in {"备注"}:
+                    if "出厂检验" in header or "型式检验" in header:
+                        # An inspection schedule (试验项目/技术要求/试验方法/
+                        # 出厂检验/型式检验) has a different column layout from the
+                        # merged-cell performance tables this fallback targets.
                         continue
-                    values: list[str] = []
-                    for cell in row[1:]:
-                        cleaned = _clean_table_text(cell or "")
-                        if not cleaned or re.fullmatch(r"6\.\d+(?:\.\d+)?", cleaned):
+                    for row in table[2:] if len(table) > 2 else table[1:]:
+                        if not row:
                             continue
-                        if cleaned not in values:
-                            values.append(cleaned)
-                    requirement = _readable_requirement(values)
-                    rows.append((name, requirement, method_no, page_no))
+                        raw_name = row[0] or ""
+                        if not _has_cjk(raw_name):
+                            continue
+                        method_no = _method_clause_from_row(row)
+                        name = _table_item_name(raw_name, method_no)
+                        if not name or len(name) > 40 or name in {"备注"}:
+                            continue
+                        values: list[str] = []
+                        for cell in row[1:]:
+                            cleaned = _clean_table_text(cell or "")
+                            if not cleaned or re.fullmatch(r"6\.\d+(?:\.\d+)?", cleaned):
+                                continue
+                            if cleaned not in values:
+                                values.append(cleaned)
+                        requirement = _readable_requirement(values)
+                        rows.append((name, requirement, method_no, page_no))
 
     merged: dict[str, dict] = {}
     for order, (name, requirement, method_no, page_no) in enumerate(rows):
@@ -1254,14 +1311,15 @@ def parse_standard(
     pages: list[str], file_name: str = "", pdf_bytes: bytes | None = None,
     page_confidence: list[float] | None = None, ocr: dict | None = None,
     rule_config: dict | None = None,
+    source_tables: list[tuple[int, list[list[str]]]] | None = None,
 ) -> dict:
-    """Parse one standard PDF (already split into page texts).
+    """Parse one standard (already split into page texts).
 
-    ``pdf_bytes`` is optional and only used for the table-structure fallback;
-    ``page_confidence``/``ocr`` are supplied by the OCR pipeline for scanned
-    PDFs and drive the per-field review flags.  ``rule_config`` is the
-    administrator-managed ``standard`` section (section aliases and field
-    requirements); omitted means the documented defaults.
+    ``pdf_bytes`` is optional and used for the PDF table-structure fallback;
+    ``source_tables`` supplies already-parsed Word table grids for the same
+    item extraction.  ``page_confidence``/``ocr`` are supplied by the OCR
+    pipeline for scanned PDFs and drive the per-field review flags.
+    ``rule_config`` is the administrator-managed ``standard`` section.
     """
     started = time.perf_counter()
     rule_config = rule_config or {}
@@ -1270,7 +1328,7 @@ def parse_standard(
     warnings: list[str] = []
 
     total_chars = sum(len(page) for page in pages)
-    if total_chars < 500 and not ocr:
+    if total_chars < 500 and not ocr and not source_tables:
         warnings.append(
             f"文本层仅 {total_chars} 字符，内容较少；若为扫描件请启用 OCR 后再解析"
         )
@@ -1425,13 +1483,18 @@ def parse_standard(
     # PP/PE material standards keep the item list in merged-cell
     # performance tables rather than in headings.  Prefer the table result
     # whenever it recovers more items than the heading heuristic.
-    if pdf_bytes and method_sec is not None and source not in {
+    if (pdf_bytes or source_tables) and method_sec is not None and source not in {
         "item-table",
         "combined-sections",
         "chapter-items",
     }:
-        table_items = _parse_table_items(pdf_bytes, lines, headings, method_sec)
-        if len(table_items) > len(items):
+        table_items = _parse_table_items(
+            pdf_bytes, lines, headings, method_sec, source_tables
+        )
+        prefer_table = source_tables is not None and any(
+            item.get("requirement") for item in table_items
+        )
+        if len(table_items) > len(items) or prefer_table:
             items = table_items
             source = "table-parse"
             warnings = [
@@ -1443,9 +1506,13 @@ def parse_standard(
                 and "未识别到「试验方法」章节" not in warning
                 and "按「试验方法」章节标题生成" not in warning
                 and "按「技术要求」章节标题生成" not in warning
+                and "未形成条款条目" not in warning
+                and "判定要求需人工补充" not in warning
             ]
             warnings.append(
-                "材料性能以多页合并表格给出，已按表格结构抽取项目和试验方法，需人工复核"
+                "已按 Word 表格结构抽取项目和试验方法，需人工复核"
+                if source_tables is not None
+                else "材料性能以多页合并表格给出，已按表格结构抽取项目和试验方法，需人工复核"
             )
 
     if not items and method_sec is not None:

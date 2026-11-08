@@ -37,6 +37,32 @@ def _docx(lines: list[str], breaks: set[int] | None = None) -> bytes:
     return buffer.getvalue()
 
 
+def _docx_raw(parts: list[str]) -> bytes:
+    document = f'<w:document xmlns:w="{W}"><w:body>{"".join(parts)}<w:sectPr/></w:body></w:document>'
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("word/document.xml", document)
+    return buffer.getvalue()
+
+
+def _p(text: str) -> str:
+    return f'<w:p><w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r></w:p>'
+
+
+def _table(rows: list[list[str]]) -> str:
+    cells = "".join("<w:tr>" + "".join(f"<w:tc>{_p(cell)}</w:tc>" for cell in row) + "</w:tr>" for row in rows)
+    return f"<w:tbl>{cells}</w:tbl>"
+
+
+def _p_breaks(lines: list[str]) -> str:
+    runs = []
+    for index, line in enumerate(lines):
+        runs.append(f'<w:r><w:t xml:space="preserve">{escape(line)}</w:t></w:r>')
+        if index < len(lines) - 1:
+            runs.append("<w:r><w:br/></w:r>")
+    return f'<w:p>{"".join(runs)}</w:p>'
+
+
 def _ocr_page(lines: list[str], confidence: float = 0.84) -> OcrPage:
     return OcrPage(page=1, lines=[OcrLine(text=t, confidence=confidence, top=i * 10, left=0) for i, t in enumerate(lines)], confidence=confidence)
 
@@ -99,6 +125,41 @@ def test_image_with_ocr_disabled_reports_explicitly(monkeypatch):
     monkeypatch.setenv("P0_OCR_ENABLED", "0")
     with pytest.raises(ValueError, match="已关闭 OCR"):
         standard_parse.parse_standard_document(b"fake-image", "扫描标准.png")
+
+
+def test_word_table_keeps_requirement_and_method_clause():
+    headers = ["序号", "检验项目", "技术要求", "试验方法"]
+    table = [headers, ["1", "拉伸强度", "≥10MPa", "6.1"], ["2", "断裂伸长率", "≥200%", "6.2"]]
+    body = ["Q/TEST 123-2024", "测试标准", "5  技术要求 Technical requirements", "6  试验方法 Test methods",
+            "6.1  拉伸强度试验", "按 GB/T 1040 进行。", "6.2  断裂伸长率试验", "按 GB/T 1040 进行。"]
+    data = _docx_raw([_p(line) for line in body] + [_table(table)])
+    result = standard_parse.parse_standard_document(data, "表格标准.docx")
+    assert result["mapping_source"] == "table-parse"
+    assert [(item["name"], item["requirement"], item["method_clause"]) for item in result["items"]] == [
+        ("拉伸强度", "≥10MPa", "6.1"), ("断裂伸长率", "≥200%", "6.2")
+    ]
+    assert not any("未形成条款条目" in warning for warning in result["warnings"])
+
+
+def test_word_table_upload_keeps_requirement_through_api():
+    table = [["序号", "检验项目", "技术要求", "试验方法"], ["1", "拉伸强度", "≥10MPa", "6.1"]]
+    body = ["Q/TEST 123-2024", "测试标准", "5  技术要求 Technical requirements", "6  试验方法 Test methods",
+            "6.1  拉伸强度试验", "按 GB/T 1040 进行。"]
+    response = client.post(
+        "/api/v1/standards/parse",
+        files={"file": ("表格标准.docx", _docx_raw([_p(line) for line in body] + [_table(table)]),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["items"][0]["requirement"] == "≥10MPa"
+
+
+def test_word_soft_line_breaks_inside_one_paragraph_are_split():
+    lines = ["Q/TEST 123-2024", "测试标准"] + BODY + METHOD
+    data = _docx_raw([_p(lines[0]), _p(lines[1]), _p_breaks(lines[2:])])
+    result = standard_parse.parse_standard_document(data, "换行标准.docx")
+    assert result["summary"]["items"] == 2
+    assert [item["requirement"] for item in result["items"]] == ["外观应无缺陷", "密封性应良好"]
 
 
 def test_unreadable_word_reports_explicitly():

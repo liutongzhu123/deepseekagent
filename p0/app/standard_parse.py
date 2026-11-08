@@ -119,8 +119,8 @@ def parse_pdf_standard(
     return parsed
 
 
-def _docx_text_pages(data: bytes) -> list[str]:
-    """Split a Word OOXML body into page-ish text blobs (tables flattened by row)."""
+def _docx_pages_and_tables(data: bytes) -> tuple[list[str], list[tuple[int, list[list[str]]]]]:
+    """Split a Word OOXML body into page-ish text blobs and structured table grids."""
     try:
         with zipfile.ZipFile(BytesIO(data)) as archive:
             root = ET.fromstring(archive.read("word/document.xml"))
@@ -132,14 +132,31 @@ def _docx_text_pages(data: bytes) -> list[str]:
     if body is None:
         raise ValueError("Word 文档缺少正文（word/document.xml）")
     pages = [""]
+    tables: list[tuple[int, list[list[str]]]] = []
 
     def add(text: str) -> None:
         if (text or "").strip():
             pages[-1] += text.strip() + "\n"
 
+    def paragraph_text(element: ET.Element) -> str:
+        parts: list[str] = []
+        for node in element.iter():
+            if node.tag == _W + "t":
+                parts.append(node.text or "")
+            elif node.tag == _W + "br":
+                if (node.get(_W + "type") or "").lower() != "page":
+                    parts.append("\n")
+            elif node.tag in {_W + "cr", _W + "tab"}:
+                parts.append("\n" if node.tag == _W + "cr" else "\t")
+        return "".join(parts)
+
+    def cell_text(cell: ET.Element) -> str:
+        texts = [" ".join(paragraph_text(p).split()) for p in cell.iter(_W + "p")]
+        return " ".join(text for text in texts if text)
+
     def walk(element: ET.Element) -> None:
         if element.tag == _W + "p":
-            add("".join(n.text or "" for n in element.iter(_W + "t")))
+            add(paragraph_text(element))
             broken = any(
                 (br.get(_W + "type") or "").lower() == "page"
                 for br in element.iter(_W + "br")
@@ -147,15 +164,12 @@ def _docx_text_pages(data: bytes) -> list[str]:
             if broken:
                 pages.append("")
         elif element.tag == _W + "tbl":
-            for row in element.findall(_W + "tr"):
-                cells = [
-                    " ".join(
-                        "".join(n.text or "" for n in p.iter(_W + "t")).strip()
-                        for p in cell.iter(_W + "p")
-                    ).strip()
-                    for cell in row.findall(_W + "tc")
-                ]
-                add("  ".join(cell for cell in cells if cell))
+            grid = [
+                [cell_text(cell) for cell in row.findall(_W + "tc")]
+                for row in element.findall(_W + "tr")
+            ]
+            if grid:
+                tables.append((len(pages), grid))
         elif element.tag == _W + "sdt":
             content = element.find(_W + "sdtContent")
             for child in list(content) if content is not None else []:
@@ -165,9 +179,9 @@ def _docx_text_pages(data: bytes) -> list[str]:
         walk(child)
     while len(pages) > 1 and not pages[-1].strip():
         pages.pop()
-    if not any(page.strip() for page in pages):
+    if not any(page.strip() for page in pages) and not tables:
         raise ValueError("Word 文档没有可解析的文字内容")
-    return pages
+    return pages, tables
 
 
 def _report(progress: Progress | None) -> Progress:
@@ -177,7 +191,8 @@ def _report(progress: Progress | None) -> Progress:
 def parse_word_standard(data: bytes, filename: str, *, rule_config: dict | None = None, progress: Progress | None = None) -> dict:
     report = _report(progress)
     report("extract", 8)
-    parsed = parse_standard(_docx_text_pages(data), filename, rule_config=rule_config or admin_config.standard_config())
+    pages, tables = _docx_pages_and_tables(data)
+    parsed = parse_standard(pages, filename, source_tables=tables, rule_config=rule_config or admin_config.standard_config())
     parsed.setdefault("meta", {})["source_format"] = "docx"
     parsed.setdefault("warnings", []).append("Word 文档按段落与分页符解析，页码为近似值，请复核")
     report("parsed", 90)
