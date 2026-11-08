@@ -518,6 +518,34 @@ def test_f41_reconcile_keeps_waiting(monkeypatch):
     assert ng["tasks"][0]["status"] == "waiting"
 
 
+def test_f45_sync_task_pr_from_title(monkeypatch):
+    """F45：返工 PR 标题带 [任务ID] → task.pr 更新为新 PR，旧拒绝不再拦着。"""
+    monkeypatch.setattr(sup, "git", lambda args, timeout=120: type(
+        "R", (), {"returncode": 0,
+                  "stdout": "abc|fix(report): [RA_PHOTO_SEQ] 第二轮返工 (#167)\\n", "stderr": ""})())
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo", "pr": 151}])
+    updated = sup.sync_task_pr(ng)
+    assert updated == ["RA_PHOTO_SEQ"]
+    assert ng["tasks"][0]["pr"] == 167, "必须指向新 PR"
+
+
+def test_f45_ignores_unmarked_or_unknown(monkeypatch):
+    monkeypatch.setattr(sup, "git", lambda args, timeout=120: type(
+        "R", (), {"returncode": 0,
+                  "stdout": "abc|fix: 没有标记 (#200)\\ndef|fix: [NOT_A_TASK] 未知 (#201)\\n",
+                  "stderr": ""})())
+    ng = backlog([{"id": "RA_TEMPLATE", "status": "todo", "pr": 153}])
+    assert sup.sync_task_pr(ng) == []
+    assert ng["tasks"][0]["pr"] == 153
+
+
+def test_f45_same_pr_not_duplicated(monkeypatch):
+    monkeypatch.setattr(sup, "git", lambda args, timeout=120: type(
+        "R", (), {"returncode": 0, "stdout": "abc|fix: [RA_TEMPLATE] (#168)\\n", "stderr": ""})())
+    ng = backlog([{"id": "RA_TEMPLATE", "status": "todo", "pr": 168}])
+    assert sup.sync_task_pr(ng) == []
+
+
 def test_f44_revert_rejected_task(monkeypatch):
     """F44：验证拒绝后，done 的任务要退回 todo（reconcile 只会往前推）。"""
     monkeypatch.setattr(sup, "rejected_prs", lambda: {149})

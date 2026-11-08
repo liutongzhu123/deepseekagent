@@ -26,6 +26,10 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F45 返工后 task.pr 仍指向旧 PR → 旧 PR 的 reject 一直拦着新修复
+      （2026-11-08 实测：#167 修好了 RA_PHOTO_SEQ，但 F42 盯着旧 PR #151 不放）
+      → PR 标题里带 [任务ID] 时自动把 task.pr 更新为这个新 PR；
+        并约定派单消息必须带该标记
   F44 验证判「拒绝」后任务仍停在 done（reconcile 只往前推、不往后退）
       → 每轮把「PR 被拒绝且状态为 done」的任务退回 todo，并记返工原因
   F42 reconcile 不看验证结论：PR 合并就标 done，即使双人验证已判「拒绝」
@@ -346,6 +350,41 @@ def rejected_prs() -> set[int]:
     return rejected
 
 
+TASK_MARK_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_]{1,20})\]")
+
+
+def sync_task_pr(backlog: dict) -> list[str]:
+    """F45：从已合并 PR 的标题里认领任务，更新 task.pr。
+
+    约定：开发/返工消息的标题里带 `[任务ID]`，PR 标题会继承它。
+    这样"返工 PR"能自动接替"旧 PR"，旧 PR 的拒绝状态就不会一直拦着新修复。
+    """
+    ids = task_ids(backlog)
+    updated = []
+    try:
+        proc = git(["log", "-n", "40", "--pretty=%s"])
+        subjects = proc.stdout.splitlines() if proc.returncode == 0 else []
+    except Exception:
+        subjects = []
+    for subject in subjects:
+        match = re.search(r"#(\d+)", subject)
+        if not match:
+            continue
+        pr = int(match.group(1))
+        for marker in TASK_MARK_RE.findall(subject):
+            tid = next((i for i in ids if i.upper() == marker.upper()), None)
+            if not tid:
+                continue
+            task = next((t for t in backlog.get("tasks") or [] if str(t.get("id")) == tid), None)
+            if task is None:
+                continue
+            if task.get("pr") == pr:
+                continue
+            task["pr"] = pr
+            updated.append(tid)
+    return updated
+
+
 def revert_rejected(backlog: dict) -> list[str]:
     """F44：验证拒绝 → 任务从 done 退回 todo。
 
@@ -630,7 +669,8 @@ def next_task(backlog: dict, busy: set[str], dispatched: dict,
 def dispatch_message(task: dict, attempt: int) -> str:
     covers = "、".join(task.get("covers") or []) or "（无）"
     files = "、".join(task.get("files") or []) or "（自定）"
-    lines = [f"{AGENT_AT} 【代发】{task['id']} {task.get('title', '')}", "",
+    lines = [f"{AGENT_AT} 【代发】[{task['id']}] {task.get('title', '')}", "",
+             f"（PR 标题请带上 `[{task['id']}]`，便于台账自动关联返工）",
              "依据台账 docs/BACKLOG.yaml：",
              f"- 覆盖需求：{covers}",
              f"- 预计文件：{files}"]
@@ -852,6 +892,9 @@ def run(dry_run: bool) -> int:
 
     sync_self(dry_run)                     # F30：自己的代码也跟 main 对齐
 
+    synced = sync_task_pr(backlog)                     # F45：返工 PR 接替旧 PR
+    if synced:
+        log(f"任务 PR 号已更新：{', '.join(synced)}")
     reverted = revert_rejected(backlog)                # F44：先回退被拒绝的
     changed = reconcile(backlog)                       # 改的是内存
     if reverted:
