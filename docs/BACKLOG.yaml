@@ -245,12 +245,13 @@ tasks:
 
   - id: B9
     title: 检测项目清单提取
-    status: todo
+    status: done
     size: M
+    pr: 138
     deps: [B0]
     covers: [SP-2.1]
     acceptance: ["提取项目名/方法号/适用零部件", "可人工复核后入库"]
-    files: [p0/app/standard_extract/items_list.py]
+    files: [p0/app/standard_extract/items_list.py, p0/app/standard_parser.py, p0/app/standard_store.py, p0/app/main.py, p0/tests/test_standard_items_list.py]
 
   - id: B10
     title: 拆解结果人工复核闭环
