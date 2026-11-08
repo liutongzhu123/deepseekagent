@@ -452,6 +452,173 @@ def version_record(standard_id: str, version: int) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# Parser bookkeeping and page locators are not standard content: a re-parse or
+# a new edition that only moves these fields did not change the clause.
+_DIFF_EXCLUDED = frozenset(
+    {"seq", "name_auto", "confidence", "review_required", "review_fields",
+     "reviewed", "page", "method_page"}
+)
+_DIFF_FIELDS = ("name", "group", "requirement", "method_clause", "method")
+_DIFF_LABELS = {
+    "name": "项目名称", "group": "分组",
+    "requirement": "技术要求/判定要求", "method_clause": "试验方法条款",
+    "method": "试验方法",
+}
+
+
+def _buckets(items: list[dict] | None) -> dict[str, list[dict]]:
+    buckets: dict[str, list[dict]] = {}
+    for index, item in enumerate(items or []):
+        clause = str(item.get("clause", "")).strip()
+        buckets.setdefault(clause or f"#{index + 1:03d}", []).append(item)
+    return buckets
+
+
+def _changed_fields(old: dict, new: dict) -> list[dict]:
+    extra = sorted(
+        (set(old) | set(new)) - set(_DIFF_FIELDS) - _DIFF_EXCLUDED - {"clause"}
+    )
+    changes: list[dict] = []
+    for field in list(_DIFF_FIELDS) + extra:
+        before, after = old.get(field), new.get(field)
+        before = " ".join(before.split()) if isinstance(before, str) else before
+        after = " ".join(after.split()) if isinstance(after, str) else after
+        if before == after:
+            continue
+        changes.append({"field": field, "label": _DIFF_LABELS.get(field, field),
+                        "before": before, "after": after})
+    return changes
+
+
+def diff_items(old_items: list[dict] | None, new_items: list[dict] | None) -> dict:
+    """Clause-level 增/删/改 diff with before/after values for changed fields."""
+    old_buckets, new_buckets = _buckets(old_items), _buckets(new_items)
+    added: list[dict] = []
+    removed: list[dict] = []
+    modified: list[dict] = []
+    unchanged = 0
+    for clause in sorted(set(old_buckets) | set(new_buckets)):
+        olds, news = old_buckets.get(clause, []), new_buckets.get(clause, [])
+        for old, new in zip(olds, news):
+            changes = _changed_fields(old, new)
+            if not changes:
+                unchanged += 1
+                continue
+            modified.append({"change": "modified", "clause": clause,
+                             "name": new.get("name") or old.get("name", ""),
+                             "fields": changes})
+        for kind, items in (("added", news[len(olds):]), ("removed", olds[len(news):])):
+            target = added if kind == "added" else removed
+            target.extend(
+                {"change": kind, "clause": str(item.get("clause", "")),
+                 "name": item.get("name", ""),
+                 "requirement": item.get("requirement", ""),
+                 "method": item.get("method", "")} for item in items
+            )
+    counts = {"added": len(added), "removed": len(removed),
+              "modified": len(modified), "unchanged": unchanged}
+    return {"added": added, "removed": removed, "modified": modified,
+            "unchanged": unchanged, "counts": counts}
+
+
+def _report_value(value: object, limit: int = 160) -> str:
+    text = " ".join(str(value).split()) if value is not None else ""
+    return text if len(text) <= limit else text[: limit - 3] + "…"
+
+
+def render_change_report(diff: dict) -> str:
+    """Markdown 变更对比报告 for a diff produced by this module."""
+    old, new = diff.get("from") or {}, diff.get("to") or {}
+    counts = diff.get("counts") or {}
+    lines = [
+        "# 标准变更对比报告", "",
+        f"- 旧版本：{old.get('standard_no') or old.get('name') or '旧版本'}"
+        f"（修订 r{old.get('revision', 0)}）",
+        f"- 新版本：{new.get('standard_no') or new.get('name') or '新版本'}"
+        f"（修订 r{new.get('revision', 0)}）", "",
+        f"新增 {counts.get('added', 0)} · 删除 {counts.get('removed', 0)}"
+        f" · 修改 {counts.get('modified', 0)} · 未变 {counts.get('unchanged', 0)}",
+    ]
+    for title, key in (("新增", "added"), ("删除", "removed")):
+        entries = diff.get(key) or []
+        if entries:
+            lines += ["", f"## {title}（{len(entries)}）"]
+            lines += [
+                f"- {entry.get('clause', '')} {entry.get('name', '')}".rstrip()
+                for entry in entries
+            ]
+    modified = diff.get("modified") or []
+    if modified:
+        lines += ["", f"## 修改（{len(modified)}）"]
+        for entry in modified:
+            lines.append(
+                f"- {entry.get('clause', '')} {entry.get('name', '')}".rstrip()
+            )
+            lines += [
+                f"  - {field.get('label') or field.get('field')}："
+                f"{_report_value(field.get('before')) or '（空）'} → "
+                f"{_report_value(field.get('after')) or '（空）'}"
+                for field in entry.get("fields") or []
+            ]
+    if not any(diff.get(key) for key in ("added", "removed", "modified")):
+        lines += ["", "两个版本没有条款差异。"]
+    return "\n".join(lines) + "\n"
+
+
+def _diff_records(old: dict, new: dict) -> dict:
+    diff = diff_items(old.get("items") or [], new.get("items") or [])
+    for side, record in (("from", old), ("to", new)):
+        meta = record.get("meta") or {}
+        diff[side] = {
+            "id": record.get("id", ""),
+            "standard_no": meta.get("standard_no", ""),
+            "name": meta.get("name", ""),
+            "revision": int(record.get("revision", 0) or 0),
+            "created_at": record.get("created_at", ""),
+            "updated_at": record.get("updated_at", ""),
+        }
+    diff["generated_at"] = _now()
+    diff["report"] = render_change_report(diff)
+    return diff
+
+
+def diff_standards(old_standard_id: str, new_standard_id: str) -> dict:
+    """Diff two stored records, e.g. the previous and current edition."""
+    diff = _diff_records(load(old_standard_id), load(new_standard_id))
+    diff["kind"] = "standards"
+    return diff
+
+
+def diff_versions(
+    standard_id: str, from_version: int | None = None, to_version: int | None = None
+) -> dict:
+    """Diff two revision snapshots; defaults to previous vs current revision."""
+    current = load(standard_id)
+    current_version = int(current.get("revision", 0) or 0)
+    to_version = current_version if to_version is None else int(to_version)
+    if from_version is None:
+        earlier = [
+            version["version"]
+            for version in list_versions(standard_id)
+            if version["version"] < to_version
+        ]
+        if not earlier:
+            raise ValueError("没有更早的修订可对比")
+        from_version = max(earlier)
+    from_version = int(from_version)
+    if from_version == to_version:
+        raise ValueError("新旧修订不能相同")
+    old = current if from_version == current_version else version_record(
+        standard_id, from_version
+    )
+    new = current if to_version == current_version else version_record(
+        standard_id, to_version
+    )
+    diff = _diff_records(old, new)
+    diff.update(kind="revisions", from_version=from_version, to_version=to_version)
+    return diff
+
+
 def unpublish(standard_id: str, actor: str = "") -> dict:
     """Remove the standard from the knowledge base but keep the review trail.
 
