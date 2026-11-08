@@ -2,9 +2,11 @@
 
 pdfplumber geometry keeps merged rows/columns aligned.  Each entry is
 ``{clause, clause_source, header, rows, page, raw_bbox, header_detected,
-has_merges, parse_warning}``; table text is not copied into ``requirement``.
-Ownership comes from the first-column clause or the nearest heading above;
-unresolved tables are exported with ``parse_warning``, never guessed.
+has_merges, parse_warning, footnotes}``; table text is not copied into
+``requirement``.  Notes inside the grid or just below the table are kept in
+``footnotes`` for unit recovery by the table mapper.  Ownership comes from the
+first-column clause or the nearest heading above; unresolved tables are
+exported with ``parse_warning``, never guessed.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import re
 from io import BytesIO
 
 from .. import watermark
+from .table_units import NOTE_GAP, is_footnote_row, is_note_text
 
 #: Column labels that identify a header row; T2 does the semantic mapping.
 _HEADER_KEYWORDS = (
@@ -46,7 +49,9 @@ def _clean_cell(value: str | None) -> str:
     text = re.sub(r"\s+", " ", text.replace("\n", "")).strip()
     text, _ = watermark.clean_text(text)
     if not re.search(r"\d", text):
-        text = re.sub(r"(?<![A-Za-z])[a-z](?![A-Za-z])", "", text)
+        # Keep unit fragments such as dB(μV/m) and N·m; watermark letters are
+        # isolated around Chinese, not part of a slash/centre-dot unit.
+        text = re.sub(r"(?<![A-Za-z/·])[a-z](?![A-Za-z])", "", text)
     for _ in range(3):
         cleaned = _LETTER_BEFORE.sub("", _LETTER_AFTER.sub("", text))
         if cleaned == text:
@@ -159,8 +164,31 @@ def _page_clauses(page, tables: list, current: str) -> tuple[dict[int, str], str
     return found, current
 def _first_column_clause(grid: list[list[str]]) -> str:
     return next((clause for row in grid[:200] if row and (clause := _clause_in(row[0]))), "")
+def _notes_below(page, bbox: tuple, next_top: float | None) -> list[str]:
+    """Short note lines under a table bbox, on the same page only."""
+    try:
+        lines = page.extract_text_lines()
+    except Exception:  # noqa: BLE001 - notes are optional
+        return []
+    limit = bbox[3] + NOTE_GAP
+    notes: list[str] = []
+    for line in sorted(lines, key=lambda item: item.get("top", 0)):
+        top = line.get("top", 0)
+        if top < bbox[3] - 2:
+            continue
+        if top > limit or (next_top is not None and top >= next_top - 2):
+            break
+        text = _clean_cell(line.get("text"))
+        if text and is_note_text(text):
+            notes.append(text)
+    return notes[:3]
+
+def _grid_notes(grid: list[list[str]]) -> list[str]:
+    return [next((cell for cell in row if cell), "") for row in grid
+            if is_footnote_row(row)]
+
 def _entry(table, grid: list[list[str]], page: int, clause: str,
-           clause_source: str) -> dict:
+           clause_source: str, footnotes: list[str] | None = None) -> dict:
     start, count = _header_range(grid)
     header_rows = grid[start:start + count] if count else []
     keyword_header = any(
@@ -196,6 +224,7 @@ def _entry(table, grid: list[list[str]], page: int, clause: str,
         "merged_cells": merged,
         "has_merges": bool(merged),
         "parse_warning": "；".join(warnings) or None,
+        "footnotes": list(dict.fromkeys(footnotes or [])),
     }
 def _chars(entry: dict) -> int:
     cells = list(entry["header"]) + [c for row in entry["rows"] for c in row]
@@ -249,7 +278,10 @@ def extract_tables(pdf_bytes: bytes | None, pages: list[str]) -> list[dict]:
                 column = _first_column_clause(grid)
                 clause = column or page_clauses.get(index, "")
                 source = "first-column" if column else ("heading" if clause else "")
-                entries.append(_entry(table, grid, page_no, clause, source))
+                next_top = (tables[index + 1][0].bbox[1]
+                            if index + 1 < len(tables) else page.height)
+                notes = _grid_notes(grid) + _notes_below(page, table.bbox, next_top)
+                entries.append(_entry(table, grid, page_no, clause, source, notes))
     return _drop_repeated_furniture(entries)
 def apply_tables(
     pdf_bytes: bytes | None, pages: list[str], items: list[dict]

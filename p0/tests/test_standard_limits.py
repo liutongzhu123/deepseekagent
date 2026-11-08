@@ -30,6 +30,13 @@ def test_extracts_comparisons_ranges_and_tolerances():
     assert ("upper", None, 70, "dB(A)") in entries
 
 
+def test_extracts_dB_microvolt_units_without_losing_the_denominator():
+    found = extract_limits("限值≤30dB(μV)，场强≤40dB（μV/m），电流≤5dB(uA)。")
+    units = {entry["unit"] for entry in found}
+    assert units == {"dB(μV)", "dB(μV/m)", "dB(μA)"}
+    assert {entry["upper"] for entry in found} == {30, 40, 5}
+
+
 def test_reference_only_clause_has_no_limit():
     text = "满足 Q/JLY J7110440E-2021中真空密封性规定的技术要求"
     assert extract_limits(text) == []
