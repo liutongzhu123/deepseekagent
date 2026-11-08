@@ -17,6 +17,8 @@
   F38 只派验证任务、却不回收结论 → 状态永远是 dispatched，等于没验证
       方案：从飞书消息里回收「结论：通过/拒绝」，写进状态
   F39 agent 判「通过」的结论不能直接信 → 标记为待人工/他模型复核（B 方案）
+  F46 风险路径写成白名单，agent 新加的模块永远漏检（#167 改 visual_checks.py 被判"非风险"）
+      → 按目录判定：p0/app/ 下任何 .py 都算风险
   F43 结论解析过严：只认「结论：拒绝」，而 agent 实际写「验证 #149：拒绝。」
       → 放宽为「冒号后紧跟通过/拒绝」，但仍要求有明确标签，避免把正文里的词当结论
 
@@ -47,9 +49,11 @@ TZ = timezone(timedelta(hours=8))
 # F34：这些路径的改动默认要过第二道（宁可多验）
 MAX_PER_RUN = int(os.getenv("VERIFY_MAX_PER_RUN", "2"))
 
-RISKY_PATHS = ("p0/app/standard_extract/", "p0/app/format_rules.py", "p0/app/rules.py",
-               "p0/app/semantic_audit.py", "p0/app/standard_parse.py", "p0/app/standard_parser.py",
-               "p0/app/crosscheck.py", "p0/app/rule_dsl.py")
+# F46：按**目录**判定风险，不列白名单。
+# 白名单的问题是：agent 每加一个新模块（visual_checks/typo_rules/template_rules…），
+# 名单就漏一次，漏掉的恰恰是新规则代码——最该被验证的东西。
+RISKY_PREFIXES = ("p0/app/",)
+RISKY_SUFFIXES = (".py",)
 
 
 def now() -> datetime:
@@ -132,10 +136,11 @@ def pr_files(pr: int) -> list[str]:
 
 
 def is_risky(files: list[str]) -> bool:
-    """F34：拿不到文件列表时按风险处理（宁可多验）。"""
+    """F34/F46：p0/app/ 下的 .py 都算风险；拿不到文件列表时也按风险处理。"""
     if not files:
         return True
-    return any(path.startswith(prefix) for path in files for prefix in RISKY_PATHS)
+    return any(path.startswith(RISKY_PREFIXES) and path.endswith(RISKY_SUFFIXES)
+               for path in files)
 
 
 def verdict_of(text: str) -> str:
