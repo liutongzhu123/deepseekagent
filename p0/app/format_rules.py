@@ -16,6 +16,7 @@ FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
     ("R15", "章节/项目编号", "章节号（1、2；5.1、5.2）与项目编号序列检测断档与重复"),
     ("R16", "计量单位规范", "数值后的单位按白名单与大小写规则校验（MPa/kPa/℃/N·m 等）"),
     ("R17", "字体字号一致", "段落级字体/字号统计，找出偏离正文主体的段落并报出字体、字号与段落位置"),
+    ("R18", "目录页码一致", "目录条目页码与正文标题所在页码比对，报出不一致的标题与两处页码"),
 )
 
 _PAGE_TEXT_MIN = 2
@@ -412,9 +413,123 @@ def r17_fonts(data: ReportData):
     )
 
 
+_TOC_PAGE_MARK = re.compile(r"第\s*(\d+)\s*页")
+_TOC_TITLE_MAX = 60
+_TOC_TRANSLATE = str.maketrans("：．（）", ".:()")
+
+
+def _toc_norm(text: str) -> str:
+    return re.sub(r"\s+", "", text or "").translate(_TOC_TRANSLATE).strip(" .:：")
+
+
+def _toc_page_mark(line: str) -> int | None:
+    """Printed page number on a footer/header line; plain "详见第 3 页" is ignored."""
+    match = _TOC_PAGE_MARK.search(line or "")
+    if not match:
+        return None
+    compact = re.sub(r"\s+", "", line)
+    return int(match.group(1)) if "共" in compact or re.fullmatch(r"第\d+页", compact) else None
+
+
+def _toc_line_pages(data: ReportData) -> list[list[int | None]]:
+    numbers = list(data.page_numbers or [])
+    fallback = numbers if len(numbers) == len(data.pages) and all(
+        later > earlier for earlier, later in zip(numbers, numbers[1:])
+    ) else []
+    pages: list[list[int | None]] = []
+    for index, page in enumerate(data.pages):
+        lines = page.get("lines") or []
+        marks = {position: number for position, line in enumerate(lines) if (number := _toc_page_mark(line))}
+        if not marks:
+            pages.append([fallback[index] if fallback else None] * len(lines))
+        elif len(set(marks.values())) == 1:
+            pages.append([next(iter(marks.values()))] * len(lines))
+        else:  # one rendered page holding several printed pages (real drafts)
+            current: int | None = None
+            row: list[int | None] = []
+            for position in range(len(lines)):
+                current = marks.get(position, current)
+                row.append(current)
+            pages.append(row)
+    return pages
+
+
+def _toc_candidates(data: ReportData) -> list[tuple[str, int | None]]:
+    line_pages = _toc_line_pages(data)
+    candidates: list[tuple[str, int | None]] = []
+    for page_index, page in enumerate(data.pages):
+        for position, line in enumerate(page.get("lines") or []):
+            text = _toc_norm(line)
+            if not text or len(text) > _TOC_TITLE_MAX or _toc_like(line) or _toc_page_mark(line):
+                continue
+            if "报告编号" in text or text in {"目录", "检验报告"} or text.startswith("----"):
+                continue
+            candidates.append((text, line_pages[page_index][position]))
+    return candidates
+
+
+def _toc_actual_page(title: str, candidates: list[tuple[str, int | None]]) -> int | None:
+    if len(title) < 2:
+        return None
+    for text, page in candidates:
+        if page is not None and text == title:
+            return page
+    if len(title) >= 4:
+        for text, page in candidates:
+            if page is not None and (text.startswith(title) or title in text):
+                return page
+    return None
+
+
+def r18_toc_pages(data: ReportData):
+    # F1 无目录 -> skip；F2 无分页/页码标记 -> skip；F3 标题未定位只降覆盖不误报；
+    # F4 同名标题取首个；F5 页码不一致 -> fail 并给标题+两处页码；
+    # F6 一页合并多个打印页按页内标记顺序归属；F7 单标记整页归属；
+    # F8 全半角空格/冒号差异归一化后比对；F9 目录标题被合并/带引导线时未定位跳过。
+    title = "目录页码一致"
+    if not data.toc_entries:
+        return _finding("R18", title, "skip", "info", "未识别到目录条目，无法比对目录页码")
+    candidates = _toc_candidates(data)
+    if not candidates or all(page is None for _, page in candidates):
+        return _finding("R18", title, "skip", "info", "未识别到可用的正文页码（缺分页或“第 N 页”标记），无法定位目录条目")
+    problems: list[str] = []
+    missing: list[str] = []
+    located = 0
+    first_page = 1
+    for entry in data.toc_entries:
+        entry_title = str(entry.get("title") or "").strip()
+        actual = _toc_actual_page(_toc_norm(entry_title), candidates)
+        if actual is None:
+            missing.append(entry_title)
+            continue
+        located += 1
+        declared = int(entry.get("page") or 0)
+        if actual != declared:
+            if not problems:
+                first_page = actual
+            problems.append(f"「{entry_title}」目录第 {declared} 页、正文第 {actual} 页")
+    evidence = f"目录={len(data.toc_entries)}; 可定位={located}; 不一致={len(problems)}; 未定位={len(missing)}"
+    if problems:
+        return _finding(
+            "R18", title, "fail", "medium",
+            f"目录页码与正文不一致 {len(problems)} 处：" + "；".join(problems[:6]),
+            evidence,
+            "在 Word 中更新目录域（只更新页码），或按正文实际页码修正目录",
+            page=first_page, section="目录/正文页码",
+            cell="、".join(item.split("」")[0].lstrip("「") for item in problems[:6])[:80],
+        )
+    if not located:
+        return _finding("R18", title, "skip", "info", f"目录 {len(data.toc_entries)} 条在正文中均未定位到对应标题，无法比对目录页码")
+    return _finding(
+        "R18", title, "pass", "info",
+        f"目录 {len(data.toc_entries)} 条中 {located} 条可定位，页码与正文一致",
+        evidence, section="目录/正文页码", cell="页码",
+    )
+
+
 def evaluate_format_rules(data: ReportData):
     """Run every stage-A format rule; callers apply admin overrides."""
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages}

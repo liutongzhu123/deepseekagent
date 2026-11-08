@@ -277,11 +277,12 @@ tasks:
 
   - id: RA_TOC
     title: 目录页码与项目序号一致
-    status: todo
+    status: done
     size: S
+    pr: 141
     covers: [RA-1.9]
     acceptance: ["目录页码与正文页码比对", "不一致能定位"]
-    files: [p0/app/format_rules.py]
+    files: [p0/app/format_rules.py, p0/app/admin_config.py, p0/tests/test_format_toc_pages.py, docs/report-format-checks/README.md]
 
   - id: RA_SEAL
     title: 用章合理性检查
