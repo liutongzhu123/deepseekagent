@@ -290,6 +290,105 @@ def test_empty_appendix_skips():
 
 
 # ---------------------------------------------------------------------------
+# Round 6: a long standard caption with a description is still a caption.
+# The previous narrative filter dropped every >20-char line ending in 。
+# ---------------------------------------------------------------------------
+
+LONG_TAIL = "，试验前完整外观检查，无破损。"
+LONG_TAIL_MIDDLE = "，试验中完整外观检查，无破损。"
+LONG_TAIL_AFTER = "，试验后完整外观检查，无破损。"
+
+
+def test_long_caption_is_not_dropped_as_narrative():
+    """外包装照片2，… must not disappear and create a false "缺 2"."""
+    finding = _r23([
+        APPENDIX,
+        "外包装照片1",
+        "外包装照片2" + LONG_TAIL,
+        "外包装照片3",
+    ])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
+def test_long_caption_and_short_caption_get_the_same_verdict():
+    short = _r23([APPENDIX, "外包装照片1 试验前", "外包装照片2 试验中", "外包装照片3 试验后"])
+    long = _r23([
+        APPENDIX,
+        "外包装照片1" + LONG_TAIL,
+        "外包装照片2" + LONG_TAIL_MIDDLE,
+        "外包装照片3" + LONG_TAIL_AFTER,
+    ])
+
+    assert short["status"] == long["status"] == "pass"
+    assert "标准题注=3" in short["evidence"]
+    assert "标准题注=3" in long["evidence"]
+
+
+def test_long_caption_without_prefix_inherits_heading():
+    finding = _r23([
+        APPENDIX,
+        "照片1，试验前对完整外观进行检查，确认无破损。",
+        "照片2，试验中对完整外观进行检查，确认无破损。",
+        "照片3，试验后对完整外观进行检查，确认无破损。",
+    ])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+
+
+def test_long_caption_with_stage_before_is_judged():
+    finding = _r23([
+        APPENDIX,
+        "试验前外包装照片1，完整外观检查，无破损。",
+        "试验中外包装照片2，完整外观检查，无破损。",
+        "试验后外包装照片3，完整外观检查，无破损。",
+    ])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+
+
+def test_long_photo_zero_is_not_dropped():
+    """A >20-char 照片0 line was skipped as narrative, missing the zero."""
+    finding = _r23([
+        APPENDIX,
+        "外包装照片0" + LONG_TAIL,
+        "外包装照片1",
+        "外包装照片2",
+    ])
+
+    assert finding["status"] == "fail"
+    assert "序号从 0 开始" in finding["evidence"]
+
+
+def test_long_caption_still_participates_in_gap_check():
+    finding = _r23([
+        APPENDIX,
+        "外包装照片1",
+        "外包装照片3" + LONG_TAIL,
+    ])
+
+    assert finding["status"] == "fail"
+    assert "外包装 序号从 1 开始，缺 2" in finding["evidence"]
+
+
+@pytest.mark.parametrize("line", [
+    "试验过程中拍摄了照片1，用于记录样品外观变化并留档。",
+    "本次共采集照片4张。",
+    "该照片8拍摄于试验前。",
+    "照片5附在报告末尾。",
+])
+def test_long_narrative_is_still_skipped(line):
+    finding = _r23([APPENDIX, line])
+
+    assert finding["status"] == "skip"
+    assert "未识别到附录照片题注" in finding["message"]
+
+
+# ---------------------------------------------------------------------------
 # Round-4 regressions that must now be skips, not failures.
 # ---------------------------------------------------------------------------
 
