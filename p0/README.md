@@ -246,9 +246,9 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 - `PATCH /api/v1/standards/{id}/project`（管理员，`{"project":"P-A"}`，给历史标准补项目标签）
 - `GET /api/v1/standards` → 已解析标准列表
 - `GET /api/v1/standards/{id}` → 完整结果（含 `review_history`）
-- `PATCH /api/v1/standards/{id}` → 复核修改（按 `clause` 更新 `name/requirement/method`）
+- `PATCH /api/v1/standards/{id}` → 复核修改（按 `clause` 更新 `name/requirement/method`，或 `reviewed:true/false` 确认/取消确认）
 - `GET /api/v1/standards/{id}/export.xlsx` → 「实检项目」+「试验方法明细」；明细列由管理端字段配置决定（默认 7 列）
-- `POST /api/v1/standards/{id}/publish` → 发布知识库（按条款切块）
+- `POST /api/v1/standards/{id}/publish` → 发布知识库（按条款切块；仅当全部检测项目已人工复核确认时才允许，否则 409「未确认不入库」）
 
 解析策略：
 
@@ -350,6 +350,7 @@ page / method_page / confidence / reviewed / references`
 - 项目与「技术要求/试验方法」条款、页码一一对应，可回溯原文；
 - 引用 GB/T 未标年代号时，在 `references` 中标注已核实的现行版本，不改写原文；
 - 所有自动结果默认 `reviewed=false`，复核修改写入 `review_history` 并递增 `revision`；
+- 只有全部检测项目 `reviewed=true` 才能发布知识库：发布接口与「重建索引」都会拒绝/跳过未确认标准，未确认不入库；
 - 合并表格回退的项目 `confidence=0.7`，需人工复核。
 
 ## 演示脚本

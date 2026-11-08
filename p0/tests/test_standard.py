@@ -167,9 +167,11 @@ def store(tmp_path, monkeypatch):
 
 
 def test_review_publish_and_ask(store):
+    # 未确认不入库：两个条款都确认后才能发布（SP-2.2）。
     updated = standard_store.update_review(
         store["id"],
-        [{"clause": "5.1", "name": "外观（复核）", "requirement": "外观不得有裂纹。"}],
+        [{"clause": "5.1", "name": "外观（复核）", "requirement": "外观不得有裂纹。"},
+         {"clause": "5.2", "reviewed": True}],
         reviewer="测试复核人",
     )
     assert updated["revision"] == 1
@@ -195,6 +197,11 @@ def test_review_publish_and_ask(store):
 
 
 def test_ask_returns_not_found_instead_of_fabricating(store):
+    standard_store.update_review(
+        store["id"],
+        [{"clause": "5.1", "reviewed": True}, {"clause": "5.2", "reviewed": True}],
+        reviewer="测试复核人",
+    )
     standard_store.publish(store["id"])
     kbs = standard_store.published_kbs(store["id"])
     answer = standard_qa.answer("航空航天材料的疲劳寿命要求是什么？", kbs, mode="keyword")

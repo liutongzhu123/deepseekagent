@@ -342,12 +342,38 @@ def build_chunks(record: dict) -> list[dict]:
     return chunks
 
 
+def unreviewed_clauses(record: dict) -> list[str]:
+    """Clauses still waiting for a human confirmation (``reviewed=false``)."""
+    return [
+        str(item.get("clause") or item.get("name") or "")
+        for item in record.get("items") or []
+        if not item.get("reviewed")
+    ]
+
+
+def publish_blocker(record: dict) -> str:
+    """Why the record may not enter the knowledge base yet ('' when ready).
+
+    Review gate for SP-2.2「未确认不入库」: publication is all-or-nothing,
+    because a partially published standard would silently miss clauses in
+    Q&A.  Every item must first be confirmed through ``update_review``.
+    """
+    pending = unreviewed_clauses(record)
+    if pending:
+        sample = "、".join(pending[:5]) + (" 等" if len(pending) > 5 else "")
+        return f"还有 {len(pending)} 个检测项目未人工复核确认（{sample}），未确认不入库"
+    if not build_chunks(record):
+        return "没有可发布的解析条目"
+    return ""
+
+
 def publish(standard_id: str) -> dict:
     with _LOCK:
         record = load(standard_id)
+        blocker = publish_blocker(record)
+        if blocker:
+            raise ValueError(blocker)
         chunks = build_chunks(record)
-        if not chunks:
-            raise ValueError("没有可发布的解析条目")
         kb = {
             "standard_id": standard_id,
             "standard_no": record["meta"].get("standard_no", ""),
@@ -387,6 +413,7 @@ def publish(standard_id: str) -> dict:
         return {
             "published": True,
             "chunks": len(chunks),
+            "items": len(record["items"]),
             "published_at": kb["published_at"],
             "weknora": weknora_result,
         }
@@ -753,6 +780,8 @@ def rebuild_index() -> dict:
 
     This is the P0 "重建索引" operation: it is deterministic and file-backed,
     so the demo can be repeated without WeKnora or an external vector store.
+    Standards with unconfirmed items are skipped so a rebuild cannot bypass
+    the review gate (未确认不入库).
     """
     with _LOCK:
         records: list[dict] = []
@@ -776,6 +805,8 @@ def rebuild_index() -> dict:
         standards: list[dict] = []
         chunks: list[dict] = []
         for record in records:
+            if unreviewed_clauses(record):
+                continue
             standard_chunks = build_chunks(record)
             if not standard_chunks:
                 continue
@@ -795,8 +826,9 @@ def rebuild_index() -> dict:
             if store.config.postgres_enabled():
                 store.standards.save(record, kb)
             else:
-                _write_json(directory / "kb.json", kb)
-                _write_json(directory / "result.json", record)
+                target = _dir(record["id"])
+                _write_json(target / "kb.json", kb)
+                _write_json(target / "result.json", record)
             standards.append(
                 {
                     "id": record["id"],

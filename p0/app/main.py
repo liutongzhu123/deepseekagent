@@ -1654,6 +1654,11 @@ def publish_standard(standard_id: str, request: Request) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
     _assert_project_access(user, record.get("meta", {}))
+    # 未确认不入库：reject before queuing so an unconfirmed standard cannot
+    # fail later inside the async worker.
+    blocker = standard_store.publish_blocker(record)
+    if blocker:
+        raise HTTPException(status_code=409, detail=blocker)
     if _task_switch("P0_TASKS_PUBLISH_ASYNC"):
         task = tasks.create(
             "standard_publish",
@@ -1677,7 +1682,7 @@ def publish_standard(standard_id: str, request: Request) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _audit_event(
         request, user, "standard_published", standard_id=standard_id,
-        chunks=result.get("chunks", 0),
+        chunks=result.get("chunks", 0), items=result.get("items", 0),
     )
     return result
 
