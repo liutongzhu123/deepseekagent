@@ -59,6 +59,7 @@ RULES: list[tuple[str, str, str]] = [
     ("R11", "模板识别", "按检验依据/项目识别报告模板"),
 ] + list(FORMAT_RULES) + [
     ("R19", "单项检验时间", "单项测试时间落在汇总检验时间起止范围内，最早/最晚与汇总起止一致"),
+    ("R20", "计算结果正确性", "重算平均值/最大值/变化率并与报告值比对，偏差超过容差报出"),
 ]
 
 
@@ -78,6 +79,7 @@ _RULE_FUNCTIONS = {
     "R10": "r10_signature",
     "R11": "r11_template",
     "R19": "r19_item_times",
+    "R20": "r20_calculations",
 }
 
 
@@ -397,6 +399,152 @@ def r19_item_times(data: ReportData) -> Finding:
                      "; ".join(problems[:6]), "medium", "按单项检验时间修正汇总检验时间，或补齐各单项检验时间")
     return _pass("R19", title, f"{len(rows)} 项检验时间均在 {start}~{end} 内且端点一致",
                  f"最早={earliest}; 最晚={latest}")
+
+
+# Calculation checks: recompute table aggregates from raw numeric cells and
+# compare them with the reported values using a tolerance.
+DEFAULT_RATE_TOLERANCE = 0.1
+
+_MEAN_HEADERS = ("平均", "均值", "检验均值", "试验均值", "测量均值")
+_MAX_HEADERS = ("最大", "极大")
+_RATE_HEADERS = ("变化率", "变化幅度", "增长率", "下降率", "相对偏差", "偏差率")
+_BEFORE_HEADERS = ("试验前", "测试前", "检测前", "处理前", "老化前", "初始", "前值")
+_AFTER_HEADERS = ("试验后", "测试后", "检测后", "处理后", "老化后", "最终", "后值")
+_NON_VALUE_HEADERS = (
+    "序号", "样品", "项目", "评价员", "日期", "时间", "单位", "限值", "判定", "结论",
+    "备注", "型号", "编号", "标准", "名称",
+)
+_NUMBER_RE = re.compile(r"^([-+]?\d+(?:\.\d+)?)\s*(%?)$")
+
+
+def _calc_number(text: str) -> tuple[float, bool] | None:
+    match = _NUMBER_RE.match(re.sub(r"\s+", "", text or "").replace("−", "-").replace("－", "-"))
+    if not match:
+        return None
+    return float(match.group(1)), match.group(2) == "%"
+
+
+def _calc_roles(table: list[list]) -> tuple[int, list[str], dict[str, list[int]]] | None:
+    for index, row in enumerate(table[:3]):
+        headers = [cell.text for cell in row]
+        roles = {
+            "mean": [i for i, h in enumerate(headers) if _is_header(h, _MEAN_HEADERS)],
+            "max": [i for i, h in enumerate(headers) if _is_header(h, _MAX_HEADERS)],
+            "rate": [i for i, h in enumerate(headers) if _is_header(h, _RATE_HEADERS)],
+            "before": [i for i, h in enumerate(headers) if _is_header(h, _BEFORE_HEADERS)],
+            "after": [i for i, h in enumerate(headers) if _is_header(h, _AFTER_HEADERS)],
+        }
+        if roles["mean"] or roles["max"] or roles["rate"]:
+            return index, headers, roles
+    return None
+
+
+def _row_numbers(row: list, skip: set[int]) -> list[float]:
+    values = []
+    for index, cell in enumerate(row):
+        parsed = _calc_number(cell.text) if index not in skip else None
+        if parsed is not None:
+            values.append(parsed[0])
+    return values
+
+
+def _fmt(value: float) -> str:
+    return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+def _compare(problems: list[str], label: str, kind: str, computed: float, reported: float, tolerance: float) -> None:
+    diff = abs(computed - reported)
+    if diff > tolerance:
+        problems.append(f"{label} {kind}: 报告 {_fmt(reported)}，重算 {_fmt(computed)}，偏差 {_fmt(diff)} > {_fmt(tolerance)}")
+
+
+def _result_max_check(table: list[list], tolerance: float, problems: list[str]) -> int:
+    roles = _calc_roles(table)
+    if roles is None:
+        return 0
+    header_index, headers, _ = roles
+    if not any("评价员" in _header_text(h) for h in headers):
+        return 0
+    result = next((i for i, h in enumerate(headers) if "检验结果" in _header_text(h)), None)
+    max_column = next((i for i, h in enumerate(headers) if _is_header(h, _MAX_HEADERS)), None)
+    if result is None or max_column is None:
+        return 0
+    values = [
+        parsed[0]
+        for row in table[header_index + 1:]
+        if result < len(row) and (parsed := _calc_number(row[result].text)) is not None
+    ]
+    reported = [
+        parsed[0]
+        for row in table[header_index + 1:]
+        if max_column < len(row) and (parsed := _calc_number(row[max_column].text)) is not None
+    ]
+    if len(values) < 2 or len(reported) != 1:
+        return 0
+    _compare(problems, "结果表", "最大值", max(values), reported[0], tolerance)
+    return 1
+
+
+def r20_calculations(data: ReportData, tolerance: float = DEFAULT_MEAN_TOLERANCE) -> Finding:
+    """重算表格中的平均值/最大值/变化率并与报告值比对。
+
+    失败场景（对应 p0/tests/test_calc_results.py）：
+    F1 平均值偏差超容差
+    F2 最大值偏差超容差
+    F3 变化率偏差超容差
+    F4 偏差在容差内不报
+    F5 未识别到聚合列（skip）
+    F6 同行有效测量值不足 2 个（skip，不猜测）
+    F7 变化率缺前值/后值或前值为 0（跳过该项）
+    F8 报告值非数字或为占位符（跳过该项）
+    F9 序号/限值/判定/日期等非测量列不参与重算
+    F10 结果表按评价员纵向排列时按整列重算最大值
+    F11 部分可比部分不可比时只报可比项
+    """
+    title = "计算结果正确性"
+    problems: list[str] = []
+    compared = 0
+    for table in data.tables:
+        roles = _calc_roles(table)
+        if roles is None:
+            continue
+        header_index, headers, role_columns = roles
+        aggregate = set(role_columns["mean"] + role_columns["max"] + role_columns["rate"])
+        skip = aggregate | {
+            index for index, header in enumerate(headers)
+            if any(word in _header_text(header) for word in _NON_VALUE_HEADERS)
+        }
+        for row_index, row in enumerate(table[header_index + 1:], start=header_index + 2):
+            label = next(
+                (cell.text.strip() for cell in row[:2] if cell.text.strip() and _calc_number(cell.text) is None),
+                f"第{row_index}行",
+            )
+            values = _row_numbers(row, skip)
+            for column in role_columns["mean"] + role_columns["max"]:
+                if column >= len(row) or (parsed := _calc_number(row[column].text)) is None or len(values) < 2:
+                    continue
+                kind = "平均值" if column in role_columns["mean"] else "最大值"
+                computed = sum(values) / len(values) if kind == "平均值" else max(values)
+                _compare(problems, label, kind, computed, parsed[0], tolerance)
+                compared += 1
+            for before, after in zip(role_columns["before"], role_columns["after"]):
+                for column in role_columns["rate"]:
+                    before_value = _calc_number(row[before].text) if before < len(row) else None
+                    after_value = _calc_number(row[after].text) if after < len(row) else None
+                    reported = _calc_number(row[column].text) if column < len(row) else None
+                    if before_value is None or after_value is None or reported is None or before_value[0] == 0:
+                        continue
+                    computed = (after_value[0] - before_value[0]) / before_value[0] * 100
+                    _compare(problems, label, "变化率", computed, reported[0], DEFAULT_RATE_TOLERANCE)
+                    compared += 1
+        compared += _result_max_check(table, tolerance, problems)
+    if problems:
+        return _fail("R20", title, f"计算结果存在 {len(problems)} 处偏差超过容差",
+                     "; ".join(problems[:6]), "high", "按原始数据重新计算平均值/最大值/变化率并修正报告值")
+    if compared:
+        return _pass("R20", title, f"{compared} 处计算结果与报告值一致",
+                     f"平均值/最大值容差={_fmt(tolerance)}; 变化率容差={_fmt(DEFAULT_RATE_TOLERANCE)}")
+    return _skip("R20", title, "未识别到可比对的平均值/最大值/变化率")
 
 
 def r06_judgment(data: ReportData) -> Finding:
@@ -783,13 +931,14 @@ _LOCATIONS = {
     "R10": {"page": 0, "section": "签名栏", "cell": "批准/审核/主检/印章"},
     "R11": {"page": 1, "section": "检验依据", "cell": "模板"},
     "R19": {"page": 1, "section": "检验项目表", "cell": "单项检验时间"},
+    "R20": {"page": 1, "section": "检验结果表", "cell": "平均值/最大值/变化率"},
 }
 
 
 def _location_for(rule_id: str, data: ReportData) -> dict:
     location = dict(_LOCATIONS.get(rule_id, {"page": 1, "section": "全文", "cell": ""}))
     total = max(data.page_totals) if data.page_totals else 0
-    if rule_id in {"R02", "R06"}:
+    if rule_id in {"R02", "R06", "R20"}:
         location["page"] = next(
             (entry["page"] for entry in data.toc_entries if "检验结果" in entry.get("title", "")),
             3,
@@ -971,6 +1120,8 @@ def audit_report(
             finding = r02_mean(data, tolerance)
         elif rule_id == "R08":
             finding = r08_notes(data, expected_notices)
+        elif rule_id == "R20":
+            finding = r20_calculations(data, tolerance)
         else:
             finding = globals()[function_name](data)
         finding = _apply_rule_meta(finding, meta.get(rule_id))

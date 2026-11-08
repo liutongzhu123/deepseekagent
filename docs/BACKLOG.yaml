@@ -306,12 +306,14 @@ tasks:
 
   - id: RA_CALC
     title: 计算结果正确性（平均/最大/变化率）
-    status: todo
+    status: done
+    pr: 145
     size: M
     deps: [B5]
     covers: [RA-2.7]
     acceptance: ["重算结果与报告值比对", "偏差超阈值报出"]
-    files: [p0/app/rules.py]
+    files: [p0/app/rules.py, p0/tests/test_calc_results.py]
+    note: R20 实测 BYD 12 份草稿 12/12 skip（结果表均值列为空、无最大值/变化率列）；平均/最大/变化率由合成用例覆盖
 
   - id: RA_PROOF
     title: 错别字与病句检查
