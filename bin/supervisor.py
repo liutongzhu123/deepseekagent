@@ -26,6 +26,9 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F53 F52 写成"只要 pr 被拒就清空计数"，导致每轮清、每轮派（22:43/22:45/22:47 连派三次）
+      → 同一个被拒 PR 只重置一次，并保留冷却窗口
+  F54 任务已有未合并 PR 时仍会再派（计数器可被重置，挡不住）→ 开着的 [任务ID] PR 视为在途
   F52 F51 只覆盖了 done→todo 的回退路径，漏掉「任务本来就在 todo、但次数已满」
       （2026-11-08 实测：RA_PHOTO_SEQ 早就是 todo，attempts=3，但 revert_rejected 不返回它，
        所以计数永远不清，仍然派不出去）
@@ -70,6 +73,7 @@ from pathlib import Path
 
 ROOT = Path(os.getenv("SUPERVISOR_ROOT", "/opt/dsh-agent"))
 REPO = Path(os.getenv("SUPERVISOR_REPO", str(ROOT / "clones" / "deepseekagent")))
+REPO_SLUG = os.getenv("SUPERVISOR_REPO_SLUG", "liutongzhu123/deepseekagent")
 STATE = Path(os.getenv("SUPERVISOR_STATE", str(ROOT / "state")))
 BIN = ROOT / "bin"
 ORCH = "http://127.0.0.1:3082/orchestrator/api"
@@ -649,10 +653,41 @@ def stale_doing(backlog: dict, days: float = 1.0) -> list[str]:
     return stuck
 
 
+def open_task_prs() -> dict[str, int]:
+    """F54：列出带着 [任务ID] 的未合并 PR，视为"在途"，避免重复派单。
+
+    只靠 dispatched.json 的计数挡不住——计数会被 F52 的返工重置清掉，
+    结果同一任务在 PR 还没合并时被连派多次（2026-11-08 实测连派三次）。
+    """
+    env = {**os.environ, "HOME": "/home/dshadmin"}
+    try:
+        proc = subprocess.run(
+            ["gh-agent", "pr", "list", "--repo", REPO_SLUG, "--state", "open",
+             "--json", "number,title"],
+            capture_output=True, text=True, timeout=90, env=env)
+    except Exception:
+        return {}
+    try:
+        items = json.loads(proc.stdout or "[]")
+    except Exception:
+        return {}
+    result: dict[str, int] = {}
+    for item in items if isinstance(items, list) else []:
+        title = str(item.get("title") or "")
+        number = item.get("number")
+        if not isinstance(number, int):
+            continue
+        for marker in TASK_MARK_RE.findall(title):
+            result.setdefault(marker.upper(), number)
+    return result
+
+
 def next_task(backlog: dict, busy: set[str], dispatched: dict,
-              awaiting: set[str] | None = None) -> tuple[dict | None, str]:
+              awaiting: set[str] | None = None,
+              open_task_prs: dict[str, int] | None = None) -> tuple[dict | None, str]:
     """挑下一个可派任务，同时给出"为什么没得派"的原因。"""
     done_ids = {str(t["id"]) for t in backlog.get("tasks") or [] if str(t.get("status")) == "done"}
+    open_task_prs = open_task_prs or {}
     blocked_reasons = []
     for task in backlog.get("tasks") or []:
         tid = str(task.get("id"))
@@ -662,6 +697,10 @@ def next_task(backlog: dict, busy: set[str], dispatched: dict,
             continue
         if awaiting and tid in awaiting:
             blocked_reasons.append(f"{tid} 等 PR 合并")
+            continue
+        open_pr = open_task_prs.get(tid)        # F54：有未合并 PR 就别重复派
+        if open_pr:
+            blocked_reasons.append(f"{tid} 有未合并 PR #{open_pr}")
             continue
         deps = task.get("deps") or []
         missing = [d for d in deps if d not in done_ids]
@@ -953,7 +992,8 @@ def run(dry_run: bool) -> int:
     busy = in_flight(api_tickets(), ids)
     awaiting = awaiting_merge(ids)
     dispatched = read_json(DISPATCHED, {})
-    # F52：只要任务的 PR 被验证拒绝，就重置派单次数——不依赖它是否刚被回退
+    # F52/F53：PR 被验证拒绝 → 重置次数以便返工，但同一个被拒 PR **只重置一次**，
+    # 并保留冷却时间：否则每 2 分钟清一次、派一次（2026-11-08 实测连派三次）。
     rejected_now = rejected_prs()
     if rejected_now:
         for item in backlog.get("tasks") or []:
@@ -964,11 +1004,20 @@ def run(dry_run: bool) -> int:
                 pr_now = int(item.get("pr"))
             except (TypeError, ValueError):
                 continue
-            if pr_now in rejected_now and (dispatched.get(tid_now) or {}).get("attempts"):
-                dispatched.pop(tid_now, None)
-                log(f"任务 {tid_now} 的 PR #{pr_now} 被验证拒绝，重置派单次数以便返工")
+            if pr_now not in rejected_now:
+                continue
+            record = dispatched.get(tid_now) or {}
+            if record.get("reset_for") == pr_now:
+                continue
+            dispatched[tid_now] = {
+                "attempts": 0,
+                "last_at": now().isoformat(timespec="seconds"),
+                "reset_for": pr_now,
+            }
+            log(f"任务 {tid_now} 的 PR #{pr_now} 被验证拒绝，重置派单次数以便返工")
 
-    task, reason = next_task(backlog, busy, dispatched, set(awaiting))
+    in_flight_prs = open_task_prs()
+    task, reason = next_task(backlog, busy, dispatched, set(awaiting), in_flight_prs)
     if not task:
         if reason:
             log(reason)  # F10
