@@ -75,10 +75,11 @@ def _report(**overrides) -> ReportData:
     return ReportData(**values)
 
 
-def test_defaults_and_admin_only_access(env):
+def test_defaults_and_section_access(env):
     viewer = _client("viewer1", "viewer-pass-1", "viewer")
     assert viewer.get("/api/v1/admin/config").status_code == 403
     assert viewer.put("/api/v1/admin/config/report", json={}).status_code == 403
+    assert viewer.put("/api/v1/admin/config/business", json={}).status_code == 403
 
     admin = _admin(env)
     response = admin.get("/api/v1/admin/config")
@@ -90,7 +91,69 @@ def test_defaults_and_admin_only_access(env):
     assert len(config["standard"]["fields"]) == 8
     assert config["quote"]["default_discount"] == 60
     assert len(config["quote"]["crm_columns"]) == 11
+    assert config["business"]["discount_tiers"] == [{"min_amount": 0.0, "discount": 60.0}]
+    assert config["business"]["rush"]["enabled"] is False
+    assert data["sections"] == ["report", "standard", "quote", "business"]
     assert data["warning"] == ""
+
+
+def test_section_permissions_let_departments_self_serve(env):
+    reviewer = _client("reviewer1", "reviewer-pass-1", "reviewer")
+    data = reviewer.get("/api/v1/admin/config")
+    assert data.status_code == 200
+    assert "path" not in data.json()
+    report = copy.deepcopy(data.json()["config"]["report"])
+    report["expected_notices"] = 9
+    assert reviewer.put("/api/v1/admin/config/report", json=report).status_code == 200
+    assert reviewer.put("/api/v1/admin/config/quote", json={}).status_code == 403
+    assert reviewer.put("/api/v1/admin/config/business", json={}).status_code == 403
+
+    sales = _client("sales1", "sales-pass-1", "sales")
+    data = sales.get("/api/v1/admin/config")
+    assert data.status_code == 200
+    business = copy.deepcopy(data.json()["config"]["business"])
+    business["rush"] = {"enabled": True, "fee_rate": 25, "lead_days": 2}
+    business["intermediary"] = {"enabled": True, "block": False, "keywords": ["中介", "代理"]}
+    business["blacklist"]["companies"] = ["某某贸易有限公司"]
+    response = sales.put("/api/v1/admin/config/business", json=business)
+    assert response.status_code == 200
+    assert response.json()["config"]["business"]["rush"]["fee_rate"] == 25
+    assert sales.put("/api/v1/admin/config/report", json=report).status_code == 403
+
+
+def test_business_rules_validation_and_reset(env):
+    admin = _admin(env)
+    business = copy.deepcopy(admin.get("/api/v1/admin/config").json()["config"]["business"])
+    business["discount_tiers"] = [
+        {"min_amount": 0, "discount": 60}, {"min_amount": 10000, "discount": 50}
+    ]
+    business["rush"] = {"enabled": True, "fee_rate": 20, "lead_days": 3}
+    business["intermediary"] = {"enabled": True, "block": True, "keywords": ["中介", "代理", "中介"]}
+    business["blacklist"] = {"companies": ["甲公司"]}
+    business["whitelist"] = {"companies": ["乙公司"]}
+    response = admin.put("/api/v1/admin/config/business", json=business)
+    assert response.status_code == 200
+    saved = admin_config.business_config()
+    assert [tier["min_amount"] for tier in saved["discount_tiers"]] == [0, 10000]
+    assert saved["intermediary"]["keywords"] == ["中介", "代理"]
+    assert saved["blacklist"]["companies"] == ["甲公司"]
+
+    bad = copy.deepcopy(business)
+    bad["discount_tiers"] = [{"min_amount": 10000, "discount": 50}]
+    assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
+    bad["discount_tiers"] = [
+        {"min_amount": 0, "discount": 60}, {"min_amount": 0, "discount": 50}
+    ]
+    assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
+    bad["discount_tiers"] = [{"min_amount": 0, "discount": 120}]
+    assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
+    bad = copy.deepcopy(business)
+    bad["intermediary"] = {"enabled": True, "block": False, "keywords": []}
+    assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
+
+    reset = admin.post("/api/v1/admin/config/business/reset")
+    assert reset.status_code == 200
+    assert reset.json()["config"]["business"] == admin_config.default_config()["business"]
 
 
 def test_effective_config_is_readable_by_module_pages(env):
@@ -105,6 +168,7 @@ def test_effective_config_is_readable_by_module_pages(env):
     assert len(config["report"]["rules"]) == len(RULES)
     assert len(config["standard"]["fields"]) == 8
     assert config["quote"]["default_discount"] == 60
+    assert config["business"]["discount_tiers"][0]["min_amount"] == 0
     assert data["warning"] == ""
 
 

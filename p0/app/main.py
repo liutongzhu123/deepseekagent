@@ -610,10 +610,30 @@ def system_status(request: Request) -> dict:
     }
 
 
+CONFIG_SECTION_ACTIONS = {
+    section: f"config:manage:{section}" for section in admin_config.SECTIONS
+}
+
+
+def _require_config(request: Request, section: str = "") -> dict:
+    """Admins keep all sections; each department edits only its own section."""
+    if section and section not in admin_config.SECTIONS:
+        raise HTTPException(status_code=400, detail=f"未知配置分区：{section}")
+    user = _require_user(request)
+    for name in ([section] if section else admin_config.SECTIONS):
+        if auth.has_permission(user, CONFIG_SECTION_ACTIONS[name]):
+            request.state.action = CONFIG_SECTION_ACTIONS[name]
+            return user
+    raise HTTPException(status_code=403, detail="需要规则配置权限")
+
+
 @app.get("/api/v1/admin/config")
 def get_admin_config(request: Request) -> dict:
-    _require_permission(request, "config:read")
-    return admin_config.describe()
+    user = _require_config(request)
+    result = admin_config.describe()
+    if user.get("role") != "admin":
+        result.pop("path", None)
+    return result
 
 
 @app.get("/api/v1/config/effective")
@@ -630,7 +650,7 @@ def get_effective_config(request: Request) -> dict:
 
 @app.put("/api/v1/admin/config/{section}")
 def update_admin_config(section: str, payload: dict, request: Request) -> dict:
-    user = _require_permission(request, "config:manage")
+    user = _require_config(request, section)
     try:
         admin_config.update_section(section, payload, updated_by=user.get("username", ""))
     except admin_config.ConfigError as exc:
@@ -645,7 +665,7 @@ def update_admin_config(section: str, payload: dict, request: Request) -> dict:
 
 @app.post("/api/v1/admin/config/{section}/reset")
 def reset_admin_config(section: str, request: Request) -> dict:
-    user = _require_permission(request, "config:manage")
+    user = _require_config(request, section)
     try:
         admin_config.reset_section(section, updated_by=user.get("username", ""))
     except admin_config.ConfigError as exc:

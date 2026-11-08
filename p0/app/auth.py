@@ -83,6 +83,12 @@ PERMISSIONS: dict[str, tuple[str, ...]] = {
     "audit:export": ("admin",),
     "config:read": ("admin",),
     "config:manage": ("admin",),
+    # Section-scoped rule maintenance: the owning department edits its own
+    # rules, administrators keep the all-section ``config:manage`` permission.
+    "config:manage:report": ("admin", "reviewer"),
+    "config:manage:standard": ("admin", "reviewer"),
+    "config:manage:quote": ("admin", "sales"),
+    "config:manage:business": ("admin", "sales"),
     "system:status": ("admin", "reviewer", "sales", "viewer"),
 }
 

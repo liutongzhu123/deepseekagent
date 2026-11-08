@@ -1,18 +1,20 @@
-"""Admin-managed rule configuration for the three P0/P1 capabilities.
+"""Admin-managed rule configuration for the P0/P1 capabilities.
 
 The rules used to be constants inside ``rules.py``, ``standard_parser.py`` and
-``quote.py``.  Administrators now edit them from the admin web page: report
-rule switches/severity/thresholds, standard parse section aliases and output
-fields, and quote header aliases/units/tax rates/CRM columns.
+``quote.py``.  They now live in sections of one JSON document: report rule
+switches/severity/thresholds, standard parse section aliases and output fields,
+quote header aliases/units/tax rates/CRM columns, and the CS-7 business rules
+(discount tiers, rush fees, intermediary detection, black/white lists).
 
 The document lives in one JSON file (``P0_CONFIG_PATH``, default
 ``data/config/rules.json``) and is validated before it is written.  Modules do
 not read the file directly: ``main`` injects the relevant section, so scripts
 and unit tests keep the documented defaults.
 
-Only administrators can read or change it (``config:read`` /
-``config:manage``).  Every change bumps ``revision`` and is written to the
-audit log by the API layer.
+Each section has its own ``config:manage:<section>`` permission, so the owning
+department can maintain it without full administrator rights.
+``config:read`` / ``config:manage`` remain the administrator-wide equivalents.
+Every change bumps ``revision`` and is written to the audit log by the API.
 """
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ DATA_DIR = Path(os.getenv("P0_DATA_DIR", ROOT / "data"))
 CONFIG_PATH = Path(os.getenv("P0_CONFIG_PATH", DATA_DIR / "config" / "rules.json"))
 
 SCHEMA_VERSION = 1
-SECTIONS = ("report", "standard", "quote")
+SECTIONS = ("report", "standard", "quote", "business")
 
 # ---------------------------------------------------------------------------
 # Defaults.  They mirror the behaviour before this increment, so an untouched
@@ -147,6 +149,14 @@ DEFAULT_QUOTE = {
     ],
 }
 
+DEFAULT_BUSINESS = {
+    "discount_tiers": [{"min_amount": 0.0, "discount": 60.0}],
+    "rush": {"enabled": False, "fee_rate": 0.0, "lead_days": 0},
+    "intermediary": {"enabled": False, "block": False, "keywords": []},
+    "blacklist": {"companies": []},
+    "whitelist": {"companies": []},
+}
+
 QUOTE_HEADER_KEYS = ("item", "price", "quantity", "unit", "sample")
 QUOTE_CRM_SOURCES = (
     "sample_name",
@@ -175,6 +185,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "standard": DEFAULT_STANDARD,
     "quote": DEFAULT_QUOTE,
+    "business": DEFAULT_BUSINESS,
 }
 
 _LOCK = threading.RLock()
@@ -238,14 +249,17 @@ def _int(value: Any, label: str, *, low: int, high: int) -> int:
     return value
 
 
-def _string_list(value: Any, label: str, *, limit: int = 20) -> list[str]:
-    if not isinstance(value, list) or not value:
+def _string_list(
+    value: Any, label: str, *, limit: int = 20, item_limit: int = 40,
+    allow_empty: bool = False,
+) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
         raise ConfigError(f"{label}至少需要 1 个值")
     if len(value) > limit:
         raise ConfigError(f"{label}最多 {limit} 个值")
     output: list[str] = []
     for item in value:
-        text = _text(item, label, limit=40)
+        text = _text(item, label, limit=item_limit)
         if text not in output:
             output.append(text)
     return output
@@ -401,10 +415,59 @@ def _validate_quote(section: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _obj(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{label}必须是对象")
+    return value
+
+
+def _validate_business(section: dict[str, Any]) -> dict[str, Any]:
+    """CS-7 rule settings; consumers stay paused until client contracts arrive."""
+    section = _obj(section, "business 配置")
+    tiers = section.get("discount_tiers")
+    if not isinstance(tiers, list) or not 1 <= len(tiers) <= 20:
+        raise ConfigError("梯度折扣需要 1 到 20 档")
+    clean_tiers = []
+    last = -1.0
+    for item in tiers:
+        item = _obj(item, "每档梯度折扣")
+        minimum = _number(item.get("min_amount"), "梯度最低金额", low=0, high=1_000_000_000)
+        if minimum <= last:
+            raise ConfigError("梯度折扣的最低金额必须严格递增")
+        last = minimum
+        clean_tiers.append({"min_amount": minimum, "discount": _number(
+            item.get("discount"), "梯度折扣", low=0, high=100)})
+    if clean_tiers[0]["min_amount"] != 0:
+        raise ConfigError("梯度折扣第一档的最低金额必须是 0")
+    rush = _obj(section.get("rush"), "business.rush")
+    intermediary = _obj(section.get("intermediary"), "business.intermediary")
+    keywords = _string_list(
+        intermediary.get("keywords", []), "中介识别关键词", limit=100, allow_empty=True)
+    clean_intermediary = {
+        "enabled": _bool(intermediary.get("enabled", False), "中介识别启用状态"),
+        "block": _bool(intermediary.get("block", False), "中介识别拦截状态"),
+        "keywords": keywords,
+    }
+    if clean_intermediary["enabled"] and not keywords:
+        raise ConfigError("启用中介识别时至少需要 1 个关键词")
+    lists = {}
+    for key, label in (("blacklist", "黑名单"), ("whitelist", "白名单")):
+        value = _obj(section.get(key), f"business.{key}")
+        lists[key] = {"companies": _string_list(
+            value.get("companies", []), f"{label}企业",
+            limit=500, item_limit=100, allow_empty=True)}
+    return {"discount_tiers": clean_tiers,
+            "rush": {"enabled": _bool(rush.get("enabled", False), "加急规则启用状态"),
+                     "fee_rate": _number(rush.get("fee_rate", 0), "加急费率", low=0, high=200),
+                     "lead_days": _int(rush.get("lead_days", 0), "加急提前天数", low=0, high=365)},
+            "intermediary": clean_intermediary, **lists}
+
+
 _VALIDATORS = {
     "report": _validate_report,
     "standard": _validate_standard,
     "quote": _validate_quote,
+    "business": _validate_business,
 }
 
 
@@ -482,6 +545,10 @@ def standard_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def quote_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     return (config or load())["quote"]
+
+
+def business_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    return (config or load())["business"]
 
 
 def _write(document: dict[str, Any]) -> None:

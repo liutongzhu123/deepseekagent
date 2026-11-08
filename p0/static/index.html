@@ -496,8 +496,8 @@
         <div class="page-head">
           <div>
             <div class="eyebrow">Governance</div>
-            <h1>权限、审计与规则</h1>
-            <p>管理账号、角色与项目授权，配置三条业务链路的规则与字段；每一次登录、复核、发布、报价、导出和规则变更都会留下可查询的审计记录。</p>
+            <h1 id="adminPageTitle">权限、审计与规则</h1>
+            <p id="adminPageDesc">管理账号、角色与项目授权，配置各业务链路的规则与字段；每一次登录、复核、发布、报价、导出和规则变更都会留下可查询的审计记录。</p>
           </div>
           <div class="page-actions"><span class="pill success"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>P1 · 治理与规则</span></div>
         </div>
@@ -585,7 +585,7 @@
           <div class="config-bar">
             <div>
               <b>规则配置</b>
-              <p>管理员在这里定义三条业务链路的规则与字段；保存后立即对新的审核、解析和报价生效，并写入审计日志。</p>
+              <p>报告复核、标准解析、报价助手和业务部门在这里维护各自的规则；保存后对新的请求生效，并写入审计日志。</p>
             </div>
             <span class="config-meta" id="configMeta">—</span>
           </div>
@@ -718,6 +718,29 @@
                 <thead><tr><th>数据来源</th><th>CRM 列名</th><th>启用</th></tr></thead>
                 <tbody id="cfgQuoteColumnBody"><tr><td colspan="3" class="muted">加载中…</td></tr></tbody>
               </table>
+            </div>
+          </section>
+
+          <section class="card card-pad config-section mt-16" id="config-section-business">
+            <div class="card-head">
+              <div>
+                <h2>业务规则（销售 / 业务部门）</h2>
+                <p>梯度折扣按订单金额分档；加急费率与提前天数决定加急报价；中介关键词与黑白名单用于客户询价识别。</p>
+              </div>
+              <div class="row">
+                <button type="button" class="btn btn-secondary btn-sm" id="businessConfigReset"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>恢复默认</button>
+                <button type="button" class="btn btn-primary btn-sm" id="businessConfigSave"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>保存业务规则</button>
+              </div>
+            </div>
+            <div class="form-grid config-numbers">
+              <div class="field"><label for="cfgBizDiscountTiers">梯度折扣</label><textarea id="cfgBizDiscountTiers" rows="4" placeholder="每行一档：最低金额=折扣%，最低档从 0 开始"></textarea><span class="hint">按订单金额从低到高，例如「0=60」「10000=50」；每档上限由下一档决定。</span></div>
+              <div class="field"><label for="cfgBizIntermediaryKeywords">中介识别关键词</label><input type="text" id="cfgBizIntermediaryKeywords" placeholder="中介, 代理, 贸易商"><span class="hint"><input type="checkbox" id="cfgBizIntermediaryEnabled" aria-label="启用中介识别"> 启用识别；<input type="checkbox" id="cfgBizIntermediaryBlock" aria-label="命中中介直接拦截"> 命中直接拦截；关键词逗号分隔。</span></div>
+              <div class="field"><label for="cfgBizRushFee">加急费率（%）</label><input type="number" id="cfgBizRushFee" step="0.5" min="0" max="200"><span class="hint"><input type="checkbox" id="cfgBizRushEnabled" aria-label="启用加急规则"> 启用加急规则；加急订单在基础报价上浮的比例。</span></div>
+              <div class="field"><label for="cfgBizRushLead">加急提前天数</label><input type="number" id="cfgBizRushLead" step="1" min="0" max="365"><span class="hint">要求交期短于该天数时按加急处理。</span></div>
+            </div>
+            <div class="form-grid config-numbers">
+              <div class="field"><label for="cfgBizBlacklist">黑名单企业</label><textarea id="cfgBizBlacklist" rows="4" placeholder="每行一个企业全称"></textarea><span class="hint">黑名单企业询价需人工复核；每行一个名称。</span></div>
+              <div class="field"><label for="cfgBizWhitelist">白名单企业</label><textarea id="cfgBizWhitelist" rows="4" placeholder="每行一个企业全称"></textarea><span class="hint">重点客户命中白名单时通知业务经理。</span></div>
             </div>
           </section>
         </div>
