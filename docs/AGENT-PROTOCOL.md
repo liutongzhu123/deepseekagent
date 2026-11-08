@@ -225,6 +225,27 @@ T102 打回重做（卡片操作）
 - 目标达成：`state=ready` + `bin/send-summary` 发汇总
 - 受阻或需要人合并：才发消息
 
+### 10.3a-2 自合命令与证据（2026-11-08 新增，必须遵守）
+
+**任何"我不能合并"的结论都必须先跑验证命令**，不许凭印象：
+
+```bash
+gh-agent auth status                    # 必须显示 liutongzhu-agent
+gh-agent api repos/<owner>/<repo> --jq .permissions   # push 为 true 就能合并
+```
+
+**自合标准动作**（≤300 行且不碰敏感路径）：
+
+```bash
+gh-agent pr merge <PR号> --repo <owner>/<repo> --merge --delete-branch
+gh-agent pr view <PR号> --repo <owner>/<repo> --json state --jq .state   # 必须是 MERGED
+```
+
+**合并后汇报必须包含两条证据**：`merge` 命令的返回原文、`pr view` 查到的 `state`。
+只写"已合并"没有命令输出，视为未合并。
+
+历史上因误判"没有合并 CLI"，2026-11-07 至 11-08 期间所有 PR 都停在等人合并。
+
 ### 10.3c 需要人合并时：**发卡片，然后继续干活，不要等**（2026-11-08 修订）
 
 **框架不会给你推「PR 已合并」事件**，你等也等不来。而 2026-11-07 夜间实测：
