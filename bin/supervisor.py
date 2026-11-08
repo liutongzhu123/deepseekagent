@@ -170,15 +170,6 @@ def load_yaml(path: Path):
         return None
 
 
-def merged_subjects() -> list[str]:
-    """最近合并提交的标题，用于 F4 反查任务是否已完成。"""
-    try:
-        proc = git(["log", "-n", "80", "--pretty=%s"])
-        return proc.stdout.splitlines() if proc.returncode == 0 else []
-    except Exception:
-        return []
-
-
 def _ticket_rows() -> list[dict]:
     """读 orchestrator 的工单表（只读副本，避免锁库）。
 
