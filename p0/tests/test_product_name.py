@@ -29,7 +29,8 @@ def test_rule_is_in_catalog():
             "样品名称须能识别产品种类：纯编号/代号、填成检测项目或仅通用词时报出；正常名称不报") in RULES
 
 
-@pytest.mark.parametrize("name", ["001", "0001", "0", "Ａ０１", "A-001", "SN2024", "2024-01", "001号样品", "A001-1"])
+@pytest.mark.parametrize("name", ["001", "0001", "0", "Ａ０１", "A-001", "SN2024", "2024-01", "001号样品", "A001-1",
+                                  "第001号样品", "第 001 号样品", "第001号", "001样", "一号样品"])
 def test_pure_identifier_names_are_reported(name):
     # 验收：纯编号类名称（如 001）能报出。
     finding = _r29(name, "气味")
@@ -78,7 +79,7 @@ def test_generic_names_are_reported(name):
     ("PP材料", "气味"), ("安全带", "气味"),  # 真实产品名与检验项目能否适配不在本规则判定
     ("Seat", "气味"),  # 英文产品名
     ("气味瓶", "气味"),  # 含检测项目词，但产品词“瓶”仍可识别种类
-    ("座椅气味", "气味"), ("1号支架", "气味"),
+    ("座椅气味", "气味"), ("1号支架", "气味"), ("第一汽车", "气味"), ("一汽", "气味"),
 ])
 def test_recognizable_product_names_pass(name, item):
     finding = _r29(name, item)
@@ -86,7 +87,8 @@ def test_recognizable_product_names_pass(name, item):
     assert "可识别" in finding["message"] and f"样品名称={name}" in finding["evidence"]
 
 
-@pytest.mark.parametrize("name", ["", "XXXXX", "XX", "x", "___", "—", "/", "待填", "待定", "未填", "未知", "无", "N/A"])
+@pytest.mark.parametrize("name", ["", "XXXXX", "XX", "x", "___", "—", "–", "－", "‒", "―", "−", "⸺", "‐", "‑",
+                                  "——", "–—", "/", "待填", "待定", "未填", "未知", "无", "N/A"])
 def test_empty_placeholder_or_na_name_is_skipped(name):
     # 空缺/占位符由 R14 报出，R29 不重复报；skip 不能冒充 pass。
     finding = _r29(name, "气味")
