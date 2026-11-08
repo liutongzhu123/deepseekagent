@@ -752,6 +752,13 @@ pre {
 .editor-head h3 { margin: 0; font-size: 14px; }
 .review-panel textarea { min-height: 84px; font-size: 12px; }
 .review-panel input { font-size: 12px; }
+.add-form { margin-top: 12px; padding: 12px; border: 1px dashed var(--line); border-radius: 10px; background: var(--surface); }
+.add-form-title { margin-bottom: 8px; font-size: 11px; font-weight: 700; color: var(--ink-2); }
+.add-form textarea { min-height: 56px; }
+.feedback-sample-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.feedback-sample { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px; }
+.feedback-sample-main { font-weight: 600; color: var(--ink-2); }
+.feedback-sample-reason { width: 100%; color: var(--muted); }
 .refs { margin-top: 10px; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
 .review-history { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .review-history h4 { margin: 0 0 7px; color: var(--muted); font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }

@@ -12,6 +12,7 @@ const ROLE_DESCRIPTIONS = {
   viewer: '只读查询 · 知识问答',
 };
 const FIELD_NAMES = { name: '实检项目', requirement: '技术要求', method: '试验方法' };
+const FEEDBACK_ACTIONS = { correct: '修正', confirm: '确认', supplement: '补充' };
 const TEMPLATE_NAMES = { 'BYD-odor': '比亚迪气味报告模板', generic: '通用报告模板' };
 const SEVERITY_NAMES = { high: '高', medium: '中', low: '低', info: '提示' };
 const SEVERITY_TONES = { high: 'danger', medium: 'warn', low: 'neutral', info: 'neutral' };
@@ -151,6 +152,9 @@ function formatTime(value, withSeconds = false) {
   const base = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   return withSeconds ? `${base}:${pad(date.getSeconds())}` : base;
 }
+function reviewerName() {
+  return (state.me && (state.me.display_name || state.me.username)) || '复核人';
+}
 function kpi(value, label, tone = 'neutral', icon = 'activity', sub = '') {
   return `<div class="kpi tone-${tone}"><div class="kpi-icon">${ic(icon)}</div><div><b>${escapeHtml(value)}</b><span>${escapeHtml(label)}</span>${sub ? `<div class="kpi-sub">${escapeHtml(sub)}</div>` : ''}</div></div>`;
 }
@@ -230,7 +234,7 @@ function applyRoleUi() {
   }
   $('publishBtn').classList.toggle('hidden', !canPublish);
   $('unpublishBtn').classList.toggle('hidden', !canPublish);
-  $('saveBtn').classList.toggle('hidden', !canReview);
+  ['saveBtn', 'confirmBtn', 'addItemBtn'].forEach((id) => $(id).classList.toggle('hidden', !canReview));
   ['editName', 'editReq', 'editMethod'].forEach((id) => { $(id).disabled = !canReview; });
   $('quoteUploadCard').classList.toggle('hidden', !canQuote);
   $('quoteResultCard').classList.toggle('hidden', !canQuote);
@@ -1068,6 +1072,17 @@ function renderReviewHistory(clause) {
   $('reviewHistory').innerHTML = `<h4>最近复核</h4>${entries.map((entry) => `
     <div class="history-item"><b>${escapeHtml(FIELD_NAMES[entry.field] || entry.field || '字段')}</b> · ${escapeHtml(entry.reviewer || '')} · ${escapeHtml(formatTime(entry.at))}<br>${escapeHtml(String(entry.after || '').slice(0, 90))}</div>`).join('')}`;
 }
+function renderReviewFeedback() {
+  const samples = (state.current && state.current.review_feedback) || [];
+  $('feedbackCount').textContent = samples.length;
+  $('reviewFeedbackList').innerHTML = samples.length ? samples.slice(-8).reverse().map((sample) => {
+    const detail = sample.action === 'supplement'
+      ? `补充 ${sample.clause} ${sample.after}`
+      : sample.action === 'confirm' ? `${sample.clause} ${sample.name} · 确认无误`
+      : `${sample.clause} ${FIELD_NAMES[sample.field] || ''}：${String(sample.before || '（空）').slice(0, 40)} → ${String(sample.after || '（空）').slice(0, 40)}`;
+    return `<div class="feedback-sample"><span class="pill info">${escapeHtml(FEEDBACK_ACTIONS[sample.action] || '复核')}</span><span class="feedback-sample-main">${escapeHtml(detail)}</span><span class="muted">${escapeHtml(sample.reviewer || '')} · ${escapeHtml(formatTime(sample.at))}</span>${sample.reason ? `<span class="feedback-sample-reason">原解析原因：${escapeHtml(sample.reason)}</span>` : ''}</div>`;
+  }).join('') : '<div class="muted">还没有反馈样本；保存修正、确认或补充后会自动留存。</div>';
+}
 function selectItem(index) {
   if (!state.current || !state.current.items || !state.current.items[index]) return;
   state.selectedIndex = index;
@@ -1081,6 +1096,11 @@ function selectItem(index) {
   $('editReq').value = item.requirement || '';
   $('editMethod').value = item.method || '';
   $('saveStatus').textContent = '';
+  const status = $('editorStatus');
+  status.textContent = item.reviewed ? '已复核' : '待复核';
+  status.className = `pill ${item.reviewed ? 'success' : 'warn'}`;
+  $('confirmBtn').textContent = item.reviewed ? '取消确认' : '确认无误';
+  $('addForm').classList.add('hidden');
   const references = (item.references || []).map((reference) => `${reference.ref || ''} → 现行 ${reference.current || ''}`).join('；');
   $('refs').textContent = references ? `原文引用国标：${references}` : '';
   renderReviewHistory(item.clause);
@@ -1213,6 +1233,7 @@ function renderStdDetail() {
     !current.published || !can('standard:publish')
   );
   renderStdVersions();
+  renderReviewFeedback();
   if (state.selectedIndex >= 0 && items[state.selectedIndex]) {
     selectItem(state.selectedIndex);
   } else {
@@ -2113,7 +2134,7 @@ function bindEvents() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          reviewer: (state.me && (state.me.display_name || state.me.username)) || '复核人',
+          reviewer: reviewerName(),
           items: [{ clause: item.clause, name: $('editName').value, requirement: $('editReq').value, method: $('editMethod').value }],
         }),
       });
@@ -2124,6 +2145,45 @@ function bindEvents() {
     } finally {
       busy($('saveBtn'), false);
     }
+  });
+  $('confirmBtn').addEventListener('click', async () => {
+    if (!state.current || state.selectedIndex < 0) return;
+    const item = state.current.items[state.selectedIndex];
+    const standardId = state.current.id;
+    busy($('confirmBtn'), true, '保存中…');
+    try {
+      await jsonFetch(`api/v1/standards/${encodeURIComponent(standardId)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewer: reviewerName(), items: [{ clause: item.clause, reviewed: !item.reviewed }] }),
+      });
+      toast(item.reviewed ? '已取消确认' : '已确认该条款');
+      await loadStandard(standardId, item.clause);
+    } catch (error) { showError(error); } finally { busy($('confirmBtn'), false); }
+  });
+  $('addItemBtn').addEventListener('click', () => {
+    ['addClause', 'addName', 'addRequirement', 'addMethod'].forEach((id) => { $(id).value = ''; });
+    $('addForm').classList.remove('hidden');
+    $('addClause').focus();
+  });
+  $('addCancelBtn').addEventListener('click', () => $('addForm').classList.add('hidden'));
+  $('addSaveBtn').addEventListener('click', async () => {
+    if (!state.current) return;
+    const clause = $('addClause').value.trim();
+    const name = $('addName').value.trim();
+    if (!clause || !name) { toast('补充条款需要条款号和项目名称', 'info'); return; }
+    const standardId = state.current.id;
+    busy($('addSaveBtn'), true, '保存中…');
+    try {
+      await jsonFetch(`api/v1/standards/${encodeURIComponent(standardId)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewer: reviewerName(), additions: [{
+          clause, name, requirement: $('addRequirement').value, method: $('addMethod').value,
+        }] }),
+      });
+      toast('补充条款已保存并留存为反馈样本');
+      $('addForm').classList.add('hidden');
+      await loadStandard(standardId, clause);
+    } catch (error) { showError(error); } finally { busy($('addSaveBtn'), false); }
   });
   $('exportBtn').addEventListener('click', () => {
     if (!state.current) return;
