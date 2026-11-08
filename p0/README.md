@@ -242,7 +242,7 @@ R11 模板识别。所有结论带 `rule_id/status/severity/evidence/suggestion`
 
 ### 标准解析
 
-- `POST /api/v1/standards/parse`（multipart `file`，PDF；表单 `project` 项目标签，`enable_ocr` 控制 OCR）→ 解析结果 JSON
+- `POST /api/v1/standards/parse`（multipart `file`，PDF / Word（`.docx`/`.docm`）/ 图片（`.png`/`.jpg`/`.jpeg`/`.webp`/`.bmp`）；表单 `project` 项目标签，`enable_ocr` 控制 OCR）→ 解析结果 JSON
 - `PATCH /api/v1/standards/{id}/project`（管理员，`{"project":"P-A"}`，给历史标准补项目标签）
 - `GET /api/v1/standards` → 已解析标准列表
 - `GET /api/v1/standards/{id}` → 完整结果（含 `review_history`）

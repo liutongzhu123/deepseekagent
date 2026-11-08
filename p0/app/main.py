@@ -1416,14 +1416,14 @@ def _async_parse_min_bytes() -> int:
     return max(0, int(megabytes * 1024 * 1024))
 
 
-def _async_parse_wanted(data: bytes) -> bool:
+def _async_parse_wanted(data: bytes, suffix: str = ".pdf") -> bool:
     if not _task_switch("P0_TASKS_PARSE_ASYNC"):
         return False
     threshold = _async_parse_min_bytes()
     if threshold == 0 or len(data) >= threshold:
         return True
     # Scanned PDFs are often small; sample the text layer before deciding.
-    return standard_parse.looks_scanned(data)
+    return suffix == ".pdf" and standard_parse.looks_scanned(data)
 
 
 def _task_response(task: dict) -> JSONResponse:
@@ -1492,23 +1492,30 @@ async def parse_standard_file(
             status_code=400,
             detail="受限账号必须填写有权限的项目标识",
         )
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="only .pdf standards are supported in this slice")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail=standard_parse.SUPPORTED_STANDARD_HINT)
+    filename = file.filename
+    suffix = Path(filename).suffix.lower()
+    if suffix not in standard_parse.SUPPORTED_STANDARD_SUFFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件格式：{suffix or '无扩展名'}；{standard_parse.SUPPORTED_STANDARD_HINT}",
+        )
     data = await file.read()
     if len(data) > MAX_STANDARD_BYTES:
         raise HTTPException(
             status_code=413,
             detail=f"file exceeds {MAX_STANDARD_BYTES // 1024 // 1024} MB",
         )
-    if _async_parse_wanted(data):
+    if _async_parse_wanted(data, suffix):
         return _enqueue_parse(
-            request, user, data=data, filename=file.filename,
+            request, user, data=data, filename=filename,
             project=project, enable_ocr=enable_ocr,
         )
     try:
-        parsed = standard_parse.parse_pdf_standard(
+        parsed = standard_parse.parse_standard_document(
             data,
-            file.filename,
+            filename,
             enable_ocr=enable_ocr,
             rule_config=admin_config.standard_config(),
         )
@@ -1517,7 +1524,7 @@ async def parse_standard_file(
     except Exception as exc:  # noqa: BLE001 - API boundary
         raise HTTPException(status_code=422, detail=f"failed to parse standard: {exc}") from exc
     record = standard_store.create(
-        parsed, data, file.filename, project=project, created_by=user["username"]
+        parsed, data, filename, project=project, created_by=user["username"]
     )
     _audit_event(
         request, user, "standard_parsed", standard_id=record["id"],
