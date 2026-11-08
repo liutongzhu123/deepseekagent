@@ -518,6 +518,26 @@ def test_f41_reconcile_keeps_waiting(monkeypatch):
     assert ng["tasks"][0]["status"] == "waiting"
 
 
+def test_f50_reject_log_dedupe(monkeypatch):
+    """F50：同一任务的同一个拒绝 PR，只记一次日志。"""
+    logs = []
+    seen = {}
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "RA_PHOTO_SEQ 照片", "pr": 151}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    monkeypatch.setattr(sup, "rejected_prs", lambda: {151})
+    monkeypatch.setattr(sup, "read_json",
+                        lambda path, default: dict(seen) if "reject_logged" in str(path) else default)
+    monkeypatch.setattr(sup, "write_json",
+                        lambda path, data: seen.update(data) if "reject_logged" in str(path) else None)
+    monkeypatch.setattr(sup, "log", lambda msg, *a, **k: logs.append(msg))
+
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo", "pr": 151}])
+    sup.reconcile(ng)
+    sup.reconcile(ng)
+    sup.reconcile(ng)
+    assert len(logs) == 1, "重复轮次不该重复记日志"
+
+
 def test_f48_reconcile_prefers_task_pr(monkeypatch):
     """F48：台账里的 task.pr 比工单报告里的旧 PR 更权威。"""
     monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "RA_PHOTO_SEQ 照片序号", "pr": 151}])
