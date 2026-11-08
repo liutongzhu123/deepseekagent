@@ -8,6 +8,10 @@ F4 取消确认后仍可发布
 F5 已确认但条目没有技术要求/试验方法时发布空知识库
 F6 异步发布先入队、后在 worker 里失败，用户看不到明确的 409
 F7 重建索引绕过复核门禁，把未确认条目写回知识库
+F8 已发布后取消确认，published/kb 未撤销，ask 仍引用未确认条款
+F9 自动下架未删除 WeKnora 远端条目
+F10 远端下架失败仍提交取消，本地/远端状态撕裂
+F11 回滚只改 published 标志，kb/WeKnora 仍可被 ask 引用
 """
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main, standard_store, weknora
+from app import main, standard_qa, standard_store, weknora
 
 
 def _parsed() -> dict:
@@ -110,17 +114,75 @@ def test_publish_after_all_confirmed_writes_every_clause(env, monkeypatch):
     assert standard_store.load(env.standard_id)["published"] is True
 
 
-def test_cancelled_confirmation_blocks_republish(env):
-    """F4: 取消确认后重新发布被拒，未确认内容不再入库。"""
+def test_cancelled_confirmation_auto_unpublishes(env):
+    """F4/F8: 已发布后取消确认立即下架，ask 不再引用未确认条款。"""
     _confirm(env.standard_id, "5.1", "5.2")
     standard_store.publish(env.standard_id)
-    standard_store.unpublish(env.standard_id, "复核人")
     standard_store.update_review(env.standard_id, [{"clause": "5.1", "reviewed": False}],
                                  reviewer="复核人")
+    record = standard_store.load(env.standard_id)
+    assert record["published"] is False and record["published_at"] == ""
+    assert record["unpublished_at"]
+    assert record["review_history"][-1]["action"] == "auto_unpublish"
+    assert standard_store.published_kbs(env.standard_id) == []
+    assert not (env.data_dir / env.standard_id / "kb.json").exists()
+    answer = standard_qa.answer("外观要求是什么？", standard_store.published_kbs(env.standard_id))
+    assert answer["found"] is False and answer["citations"] == []
     with pytest.raises(ValueError) as excinfo:
         standard_store.publish(env.standard_id)
     assert "5.1" in str(excinfo.value)
+
+
+def test_cancel_deletes_weknora_entry(env, monkeypatch):
+    """F9: 自动下架同时删除 WeKnora 远端条目，远端也不再引用。"""
+    deleted: list[str] = []
+    monkeypatch.setattr(weknora, "configured", lambda: True)
+    monkeypatch.setattr(weknora, "publish_standard",
+                        lambda record, chunks, cfg=None: {"knowledge_id": "kw_1"})
+    monkeypatch.setattr(weknora, "delete_knowledge",
+                        lambda knowledge_id, cfg=None: deleted.append(knowledge_id) or {})
+    _confirm(env.standard_id, "5.1", "5.2")
+    standard_store.publish(env.standard_id)
+    standard_store.update_review(env.standard_id, [{"clause": "5.2", "reviewed": False}],
+                                 reviewer="复核人")
+    assert deleted == ["kw_1"]
     assert standard_store.published_kbs(env.standard_id) == []
+
+
+def test_cancel_fails_closed_when_weknora_down(env, monkeypatch):
+    """F10: 远端下架失败时整次取消失效，本地仍保持已发布/已确认。"""
+    monkeypatch.setattr(weknora, "configured", lambda: True)
+    monkeypatch.setattr(weknora, "required", lambda: True)
+    monkeypatch.setattr(weknora, "publish_standard",
+                        lambda record, chunks, cfg=None: {"knowledge_id": "kw_1"})
+
+    def _boom(knowledge_id, cfg=None):
+        raise weknora.WeKnoraError("down")
+
+    monkeypatch.setattr(weknora, "delete_knowledge", _boom)
+    _confirm(env.standard_id, "5.1", "5.2")
+    standard_store.publish(env.standard_id)
+    response = env.client.patch(f"/api/v1/standards/{env.standard_id}", json={
+        "reviewer": "复核人", "items": [{"clause": "5.1", "reviewed": False}]})
+    assert response.status_code == 502 and "WeKnora 下架失败" in response.json()["detail"]
+    record = standard_store.load(env.standard_id)
+    assert record["published"] is True and record["published_at"]
+    assert next(i for i in record["items"] if i["clause"] == "5.1")["reviewed"] is True
+    assert standard_store.published_kbs(env.standard_id) != []
+
+
+def test_rollback_removes_published_kb(env):
+    """F11: 回滚真正下架，不留下 published=False 但仍可被 ask 引用的 kb。"""
+    _confirm(env.standard_id, "5.1", "5.2")
+    standard_store.publish(env.standard_id)
+    standard_store.update_review(env.standard_id, [{"clause": "5.1", "requirement": "新要求"}],
+                                 reviewer="复核人")
+    standard_store.publish(env.standard_id)
+    rolled = standard_store.rollback(env.standard_id, 0, "复核人")
+    assert rolled["published"] is False and rolled["published_at"] == ""
+    assert rolled["review_history"][-1]["action"] == "rollback"
+    assert standard_store.published_kbs(env.standard_id) == []
+    assert not (env.data_dir / env.standard_id / "kb.json").exists()
 
 
 def test_confirmed_item_without_content_cannot_publish(env):

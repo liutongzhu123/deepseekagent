@@ -351,6 +351,7 @@ page / method_page / confidence / reviewed / references`
 - 引用 GB/T 未标年代号时，在 `references` 中标注已核实的现行版本，不改写原文；
 - 所有自动结果默认 `reviewed=false`，复核修改写入 `review_history` 并递增 `revision`；
 - 只有全部检测项目 `reviewed=true` 才能发布知识库：发布接口与「重建索引」都会拒绝/跳过未确认标准，未确认不入库；
+- 已发布标准取消任一确认（或回滚）时自动下架：删除本地 `kb.json` 与 WeKnora 条目并记 `auto_unpublish`/`rollback` 复核历史，避免问答继续引用未确认内容；需重新确认后再发布；
 - 合并表格回退的项目 `confidence=0.7`，需人工复核。
 
 ## 演示脚本

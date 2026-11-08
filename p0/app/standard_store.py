@@ -274,12 +274,31 @@ def update_review(standard_id: str, updates: list[dict], reviewer: str = "",
             record["revision"] = record.get("revision", 0) + 1
             record["updated_at"] = _now()
             record["reviewer"] = reviewer
+            # 未确认不入库：已发布标准一旦出现未确认条目，立即从知识库下架，
+            # 否则 ask 仍会引用未确认条款（#196 验证拒绝项）。
+            auto_unpublished = bool(record.get("published")) and bool(
+                unreviewed_clauses(record)
+            )
+            if auto_unpublished:
+                removed, weknora_error = _detach_knowledge(standard_id)
+                _mark_unpublished(record, reviewer)
+                record.setdefault("review_history", []).append({
+                    "at": record["unpublished_at"], "reviewer": reviewer,
+                    "action": "auto_unpublish",
+                    "reason": "检测项目取消确认，未确认不入库",
+                    "removed_knowledge_ids": removed,
+                    "weknora_error": weknora_error,
+                })
             record["summary"] = _recompute_summary(record)
             if store.config.postgres_enabled():
+                if auto_unpublished:
+                    store.standards.clear_kb(standard_id)
                 store.standards.save(record)
             else:
                 _write_json(_dir(standard_id) / "result.json", record)
                 _write_snapshot(record)
+                if auto_unpublished:
+                    (_dir(standard_id) / "kb.json").unlink(missing_ok=True)
         return record
 
 
@@ -660,6 +679,50 @@ def diff_versions(
     return diff
 
 
+def _knowledge_ids(standard_id: str) -> list[str]:
+    ids: list[str] = []
+    for kb in published_kbs(standard_id):
+        knowledge_id = (kb.get("weknora") or {}).get("knowledge_id")
+        if knowledge_id:
+            ids.append(knowledge_id)
+    return ids
+
+
+def _detach_knowledge(standard_id: str) -> tuple[list[str], str]:
+    """Delete the standard's WeKnora entries, honouring required/optional mode."""
+    knowledge_ids = _knowledge_ids(standard_id)
+    removed: list[str] = []
+    weknora_error = ""
+    if not knowledge_ids:
+        return removed, weknora_error
+    if not weknora.configured():
+        if weknora.required():
+            raise weknora.WeKnoraError(
+                "WeKnora 是唯一知识底座，但服务端尚未配置 WeKnora 连接"
+            )
+        return removed, "WeKnora 未配置，远端知识条目未删除"
+    for knowledge_id in knowledge_ids:
+        try:
+            weknora.delete_knowledge(knowledge_id)
+        except weknora.WeKnoraError as exc:
+            if weknora.required():
+                raise
+            weknora_error = str(exc)
+        else:
+            removed.append(knowledge_id)
+    return removed, weknora_error
+
+
+def _mark_unpublished(record: dict, actor: str = "") -> None:
+    at = _now()
+    record["published"] = False
+    record["published_at"] = ""
+    record["unpublished_at"] = at
+    record["unpublished_by"] = actor
+    record["updated_at"] = at
+    record.pop("weknora", None)
+
+
 def unpublish(standard_id: str, actor: str = "") -> dict:
     """Remove the standard from the knowledge base but keep the review trail.
 
@@ -669,36 +732,8 @@ def unpublish(standard_id: str, actor: str = "") -> dict:
     """
     with _LOCK:
         record = load(standard_id)
-        knowledge_ids = [
-            (kb.get("weknora") or {}).get("knowledge_id")
-            for kb in published_kbs(standard_id)
-            if (kb.get("weknora") or {}).get("knowledge_id")
-        ]
-        removed: list[str] = []
-        weknora_error = ""
-        if knowledge_ids:
-            if not weknora.configured():
-                if weknora.required():
-                    raise weknora.WeKnoraError(
-                        "WeKnora 是唯一知识底座，但服务端尚未配置 WeKnora 连接"
-                    )
-                weknora_error = "WeKnora 未配置，远端知识条目未删除"
-            else:
-                for knowledge_id in knowledge_ids:
-                    try:
-                        weknora.delete_knowledge(knowledge_id)
-                    except weknora.WeKnoraError as exc:
-                        if weknora.required():
-                            raise
-                        weknora_error = str(exc)
-                    else:
-                        removed.append(knowledge_id)
-        record["published"] = False
-        record["published_at"] = ""
-        record["unpublished_at"] = _now()
-        record["unpublished_by"] = actor
-        record["updated_at"] = record["unpublished_at"]
-        record.pop("weknora", None)
+        removed, weknora_error = _detach_knowledge(standard_id)
+        _mark_unpublished(record, actor)
         if store.config.postgres_enabled():
             store.standards.clear_kb(standard_id)
             store.standards.save(record)
@@ -722,8 +757,11 @@ def rollback(standard_id: str, version: int, reviewer: str = "") -> dict:
         record = json.loads(json.dumps(current))
         record["items"] = json.loads(json.dumps(target.get("items") or []))
         record["revision"] = int(current.get("revision", 0) or 0) + 1
-        record["updated_at"] = _now()
         record["reviewer"] = reviewer or str(current.get("reviewer", ""))
+        # 回滚前先真正下架：旧实现只改 published 标志，kb.json/WeKnora
+        # 仍可被 ask 引用（本次验证同源缺陷）。
+        removed, weknora_error = _detach_knowledge(standard_id)
+        _mark_unpublished(record, record["reviewer"])
         record.setdefault("review_history", []).append(
             {
                 "at": record["updated_at"],
@@ -731,15 +769,16 @@ def rollback(standard_id: str, version: int, reviewer: str = "") -> dict:
                 "action": "rollback",
                 "from_version": int(version),
                 "to_revision": record["revision"],
+                "removed_knowledge_ids": removed,
+                "weknora_error": weknora_error,
             }
         )
         record["summary"] = _recompute_summary(record)
-        record["published"] = False
-        record["published_at"] = ""
-        record.pop("weknora", None)
         if store.config.postgres_enabled():
+            store.standards.clear_kb(standard_id)
             store.standards.save(record)
         else:
+            (_dir(standard_id) / "kb.json").unlink(missing_ok=True)
             _write_json(_dir(standard_id) / "result.json", record)
             _write_snapshot(record)
         return record
