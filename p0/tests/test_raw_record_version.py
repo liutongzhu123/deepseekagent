@@ -1,7 +1,9 @@
 """R27 原始记录版本有效性（RA-4.7）。
 
-失败场景 F1–F10 见 ``p0/app/format_rules.py``；验收两条：
+失败场景 F1–F12 见 ``p0/app/format_rules.py``；验收两条：
 引用过期版本号 -> fail；引用最新版本 -> pass（不报）。
+Word 常见的连字符变体（U+2010/U+2011 等）与「Q/ 代号」后空格也要归一，
+不能把同一份过期标准当成“无年代号/未收录”跳过。
 """
 from __future__ import annotations
 
@@ -64,13 +66,70 @@ def test_version_newer_than_registry_is_not_reported():
 
 @pytest.mark.parametrize(
     "dash",
-    ["—", "－", "–", "-", "―"],  # em dash / full-width / en dash / ascii / horizontal bar
+    ["—", "－", "–", "-", "―", "−", "‐", "‑", "‒", "⁃", "﹘", "⸺"],
+    # em dash / full-width / en dash / ascii / horizontal bar / minus /
+    # U+2010 / U+2011 / U+2012 / U+2043 / U+FE58 / U+2E3A
 )
 def test_same_version_with_different_dashes_is_reported_once(dash):
     finding = _r27(f"Q/BYDQ-A1901.404{dash}2018《汽车零部件气味性试验方法》")
 
     assert finding["status"] == "fail"
     assert "引用标准=1; 可判定=1; 过期=1" in finding["evidence"]
+
+
+def test_word_hyphen_after_enterprise_code_is_reported():
+    finding = _r27("Q/BYDQ\u2011A1901.404\u20112018《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "fail"
+    assert "引用标准=1; 可判定=1; 过期=1" in finding["evidence"]
+
+
+def test_space_after_enterprise_code_is_reported():
+    finding = _r27("Q/BYDQ A1901.404—2018《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "fail"
+    assert "Q/BYDQ-A1901.404-2018（最新 2025）" in finding["message"]
+    assert "过期=1" in finding["evidence"]
+
+
+def test_space_after_code_with_latest_version_is_not_reported():
+    finding = _r27("Q/BYDQ A1901.404—2025《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "pass"
+    assert "过期=0" in finding["evidence"]
+
+
+def test_space_and_word_hyphen_together_are_reported():
+    finding = _r27("Q/BYDQ A1901.404\u20112018《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "fail"
+    assert "过期=1" in finding["evidence"]
+
+
+def test_space_after_code_without_year_is_skipped():
+    finding = _r27("Q/BYDQ A1901.404《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "skip"
+    assert "无年代号=1" in finding["evidence"]
+
+
+def test_same_standard_with_space_and_hyphen_is_reported_once():
+    finding = _r27("Q/BYDQ-A1901.404—2018、Q/BYDQ A1901.404-2018")
+
+    assert finding["status"] == "fail"
+    assert "引用了 1 个过期版本号" in finding["message"]
+    assert "引用标准=1" in finding["evidence"]
+
+
+def test_word_hyphen_is_legal_for_r22_too():
+    data = ReportData(
+        file_name="record.docx",
+        basis="Q/BYDQ-A1901.404\u20112025《汽车零部件气味性试验方法》",
+        paragraphs=[],
+    )
+    finding = next(item for item in audit_report(data)["findings"] if item["rule_id"] == "R22")
+
+    assert finding["status"] == "pass"
 
 
 def test_expired_and_latest_citation_only_reports_expired():
