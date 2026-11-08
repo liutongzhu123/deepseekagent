@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from app.rule_dsl import DSLRule, RulePack, generate_judgment_rules, load_pack
+from app.rule_dsl import (
+    DSLRule, RulePack, bind_rules_to_template, generate_judgment_rules,
+    judge_record, load_pack)
 from app.standard_extract.table_mapping import is_high_confidence, needs_confirmation
 
 
@@ -145,3 +147,53 @@ def test_invalid_pack_reports_actionable_errors():
     assert any("op" in item for item in errors)
     assert any("severity" in item for item in errors)
     assert any("rollout" in item for item in errors)
+
+
+def _limit(kind, **values):
+    return {"kind": kind, "mapping_confidence": "high", **values}
+
+
+def _item(clause, name, *limits):
+    return {"clause": clause, "name": name, "limits": list(limits)}
+
+
+def test_generates_three_rule_classes_and_ignores_low_confidence():
+    result = generate_judgment_rules([
+        _item("5.1", "密封性", _limit("upper", upper=3, unit="mL/min", raw="≤3")),
+        _item("5.2", "硬度", _limit("lower", lower=160, unit="HBW", raw="≥160"),
+              _limit("upper", upper=210, unit="HBW", raw="≤210")),
+        _item("5.3", "等级", _limit("upper", upper=2.5, unit="级", raw="≤2.5", level="1级"),
+              _limit("upper", upper=3.0, unit="级", raw="≤3.0", level="2级")),
+        _item("5.4", "低置信", _limit("upper", upper=9, unit="mm", raw="≤9",
+                                      mapping_confidence="low")),
+    ])
+    assert [r["type"] for r in result["rules"]] == ["interval", "combination", "grade"]
+    assert result["counts"] == {"interval": 1, "combination": 1, "grade": 1}
+    assert result["rules"][1]["logic"] == "and"
+    assert [x["level"] for x in result["rules"][2]["levels"]] == ["1级", "2级"]
+    assert [x["raw"] for x in result["pending"]] == ["≤9"]
+
+
+def test_binds_rules_to_template_and_judges_record_values():
+    template = {"id": "rec-1", "fields": [
+        {"key": "seal_rate", "clause": "5.1", "unit": "mL/min"},
+        {"key": "odor", "clause": "5.3"}]}
+    result = generate_judgment_rules([
+        _item("5.1", "密封性", _limit("upper", upper=3, unit="mL/min", raw="≤3")),
+        _item("5.3", "等级", _limit("upper", upper=2.5, unit="级", raw="≤2.5", level="1级"),
+              _limit("upper", upper=3.0, unit="级", raw="≤3.0", level="2级")),
+    ], record_template=template)
+    assert [r["binding"]["field"] for r in result["rules"]] == ["seal_rate", "odor"]
+    assert judge_record({"seal_rate": 2, "odor": 2.4}, result["rules"])["verdict"] == "合格"
+    assert judge_record({"seal_rate": 4, "odor": 2.4}, result["rules"])["verdict"] == "不合格"
+    assert judge_record({}, result["rules"])["verdict"] == "待录入"
+    assert judge_record({"seal_rate": 2, "odor": 2.8}, result["rules"])["results"][1]["level"] == "2级"
+
+
+def test_explicit_or_and_unbound_template_field():
+    rules = generate_judgment_rules([_item(
+        "5.1", "膜厚", _limit("upper", upper=3, unit="μm", raw="≤3", cell_raw="≤3 或 ≥5"),
+        _limit("lower", lower=5, unit="μm", raw="≥5"))])["rules"]
+    assert rules[0]["logic"] == "or"
+    bound = bind_rules_to_template(rules, {"fields": [{"key": "x", "clause": "9.9"}]})
+    assert bound[0]["binding"] is None
