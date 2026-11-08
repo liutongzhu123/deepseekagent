@@ -518,6 +518,28 @@ def test_f41_reconcile_keeps_waiting(monkeypatch):
     assert ng["tasks"][0]["status"] == "waiting"
 
 
+def test_f42_reconcile_skips_rejected_pr(monkeypatch):
+    """F42：验证判「拒绝」的 PR，即使已合并也不能把任务标 done。
+
+    2026-11-08 实测：RA_STDVER 被验证拒绝、回退 todo，19:22 又被 reconcile 改回 done。
+    """
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "RA_STDVER 标准年代号", "pr": 149}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    monkeypatch.setattr(sup, "rejected_prs", lambda: {149})
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+    ng = backlog([{"id": "RA_STDVER", "status": "todo"}])
+    assert sup.reconcile(ng) == []
+    assert ng["tasks"][0]["status"] == "todo", "验证拒绝的任务必须留在 todo"
+
+
+def test_f42_reconcile_accepts_non_rejected(monkeypatch):
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "B7 分类", "pr": 136}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    monkeypatch.setattr(sup, "rejected_prs", lambda: set())
+    ng = backlog([{"id": "B7", "status": "doing"}])
+    assert sup.reconcile(ng) == ["B7"]
+
+
 def test_f30_sync_self_updates_from_main(monkeypatch, tmp_path):
     """F30：服务器 bin/ 与 main 不一致时要自动同步。"""
     bin_dir = tmp_path / "bin"
