@@ -330,7 +330,7 @@ tasks:
     title: 检测依据标准年代号检查
     status: todo
     note: 验证#149 拒绝：Q/JLY J7110109C 缺年代号未报出；GB/T 1037-2021：冒号被吞误报（修复见 #164）
-    pr: 149
+    pr: 164
     size: S
     covers: [RA-4.15]
     acceptance: ["无年代号能报出", "标准号格式合法"]
@@ -340,7 +340,7 @@ tasks:
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
     status: todo
-    pr: 151
+    pr: 167
     size: M
     deps: [VIS]
     covers: [RA-4.16, RA-4.17]
@@ -351,7 +351,7 @@ tasks:
   - id: RA_TEMPLATE
     title: 主机厂模板正确性（吉利/比亚迪等）
     status: todo
-    pr: 153
+    pr: 168
     size: M
     covers: [RA-4.18]
     acceptance: ["按主机厂识别模板", "错用模板能报出"]
@@ -361,7 +361,7 @@ tasks:
   - id: RA_SAMPLENO
     title: 样品编号连续性与重复性
     status: todo
-    pr: 154
+    pr: 169
     size: S
     covers: [RA-5.4, RA-1.8]
     acceptance: ["编号断号/重复能报出"]
