@@ -186,7 +186,8 @@ tasks:
   # ========== 进行中 ==========
   - id: C1
     title: 表格脚注单位关联（低置信→高置信）
-    status: doing
+    status: done
+    pr: 130
     size: M
     covers: [SP-4.1]
     acceptance: ["high/low 比例从 27/138 明显改善", "能修的修掉，修不掉说明原因"]
@@ -194,7 +195,7 @@ tasks:
 
   - id: A_LOWCONF
     title: 低置信限值隔离（不进判定规则）
-    status: blocked
+    status: todo
     size: S
     deps: [C1]
     covers: [SP-4.1, SP-5.1]
