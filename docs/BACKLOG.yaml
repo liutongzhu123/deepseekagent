@@ -349,12 +349,13 @@ tasks:
 
   - id: RA_TEMPLATE
     title: 主机厂模板正确性（吉利/比亚迪等）
-    status: todo
+    status: done
+    pr: 153
     size: M
     covers: [RA-4.18]
     acceptance: ["按主机厂识别模板", "错用模板能报出"]
-    files: [p0/app/template_rules.py]
-    note: 当前仅覆盖 BYD
+    files: [p0/app/template_rules.py, p0/app/docx_parser.py, p0/app/rules.py, p0/config/templates/oems.yaml, p0/config/templates/byd_odor.yaml, p0/tests/test_template_rules.py, docs/report-format-checks/README.md]
+    note: BYD 12 份草稿 R11 12/12 pass（OTS 6/摸底 6）；吉利内容已识别但模板待 D2，R11 skip 不冒充 pass；错用/冲突/多标记由合成用例覆盖
 
   - id: RA_SAMPLENO
     title: 样品编号连续性与重复性

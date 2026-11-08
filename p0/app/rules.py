@@ -56,7 +56,7 @@ RULES: list[tuple[str, str, str]] = [
     ("R08", "注意事项完整", "中文报告注意事项应为 8 条，且委托单位必填、试验类型必选"),
     ("R09", "标记符号", "报告不得含黄色高亮/红色字体"),
     ("R10", "签名/印章完整", "签名姓名与印章图片应完整嵌入"),
-    ("R11", "模板识别", "按检验依据/项目识别报告模板"),
+    ("R11", "模板识别", "按主机厂识别报告模板，错用模板时报出"),
 ] + list(FORMAT_RULES) + [
     ("R19", "单项检验时间", "单项测试时间落在汇总检验时间起止范围内，最早/最晚与汇总起止一致"),
     ("R20", "计算结果正确性", "重算平均值/最大值/变化率并与报告值比对，偏差超过容差报出"),
@@ -725,10 +725,19 @@ def r10_signature(data: ReportData) -> Finding:
 
 
 def r11_template(data: ReportData) -> Finding:
-    if data.template_family == "BYD-odor":
-        variant = data.template_variant or "变体未识别"
-        return _pass("R11", "模板识别", f"识别为比亚迪气味报告模板（{variant}）", f"basis={data.basis[:80]}")
-    return Finding("R11", "模板识别", "warn", "low", "未识别为已知模板", f"basis={data.basis[:80]}", "确认主机厂模板")
+    from .template_rules import match_template  # local import: avoids parser<->rules cycle
+
+    match = match_template(
+        basis=data.basis,
+        item=data.item,
+        page_totals=data.page_totals,
+        client=data.client,
+        supplier=data.supplier,
+        sample_name=data.sample_name,
+        paragraphs=data.paragraphs,
+        variant_hint=data.template_variant,
+    )
+    return Finding("R11", "模板识别", match.status, match.severity, match.message, match.evidence, match.suggestion)
 
 
 _PLACEHOLDERS = {"", "xx", "xxxx", "xxxxx", "----", "-", "/", "无", "n/a", "na"}
