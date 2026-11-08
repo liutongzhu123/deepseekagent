@@ -379,6 +379,69 @@ def test_f13_rejects_invalid_option(monkeypatch):
     assert store["decisions"][0]["answer"] is None
 
 
+def test_f14_registers_decision_from_agent_message(monkeypatch):
+    """F14：agent 按约定格式发 [DEC-001]，Supervisor 自动建决策。"""
+    store = {"decisions": []}
+    written = {}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, data: written.update(data))
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"},
+         "content": "[DEC-001] 低置信限值怎么处理？\nA 只展示不进规则\nB 标注后进规则\nC 先修脚注单位\ntask: B6"}])
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.auto_register_decisions(dry_run=False) == 1
+    decision = store["decisions"][0]
+    assert decision["id"] == "DEC-001"
+    assert decision["options"] == {"A": "只展示不进规则", "B": "标注后进规则", "C": "先修脚注单位"}
+    assert decision["ticket"] == "B6"
+
+
+def test_f14_idempotent(monkeypatch):
+    """同一个 DEC id 不能重复登记。"""
+    store = {"decisions": [{"id": "DEC-001", "options": {"A": "甲", "B": "乙"}, "answer": None}]}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"},
+         "content": "[DEC-001] 重复的问题？\nA 甲\nB 乙"}])
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.auto_register_decisions(dry_run=False) == 0
+    assert len(store["decisions"]) == 1
+
+
+def test_f14_ignores_user_and_short_blocks(monkeypatch):
+    """人发的消息不建决策；选项不足 2 个也不建。"""
+    store = {"decisions": []}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "user"}, "content": "[DEC-002] 人说的\nA 甲\nB 乙"},
+        {"sender": {"sender_type": "app"}, "content": "[DEC-003] 只有一个选项\nA 甲"}])
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.auto_register_decisions(dry_run=False) == 0
+
+
+def test_f14_then_reply_resumes(monkeypatch):
+    """完整链路：agent 发决策 → 自动登记 → 人回 C → 记为答案。"""
+    store = {"decisions": []}
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "app"},
+         "content": "[DEC-007] 选哪个？\nA 甲\nB 乙"}])
+    assert sup.auto_register_decisions(dry_run=False) == 1
+
+    monkeypatch.setattr(sup, "feishu_recent", lambda limit=15: [
+        {"sender": {"sender_type": "user"}, "content": "DEC-007 B"}])
+    assert sup.poll_decisions(dry_run=False) == 1
+    assert store["decisions"][0]["answer"] == "B"
+
+
 def test_dispatch_message_contains_acceptance_and_protocol():
     text = sup.dispatch_message({
         "id": "B7", "title": "标准类型分类", "covers": ["SP-10.1"],
