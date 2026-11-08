@@ -27,6 +27,7 @@ from typing import Iterable
 from .standard_extract.classify import apply_classification
 from .standard_extract.conditions import apply_conditions
 from .standard_extract.formula import apply_formulas
+from .standard_extract.items_list import apply as apply_items_list
 from .standard_extract.limits import apply_limits
 from .standard_extract.rounding import apply_rounding
 from .standard_extract.samples import apply_samples
@@ -1475,6 +1476,14 @@ def parse_standard(
     rounding_entries, roundings_summary = apply_rounding(items, line_meta)
     table_entries, tables_summary = apply_tables(pdf_bytes, pages, items)
     mapping_summary = apply_table_mapping(items, table_entries)
+    items_list, items_list_summary = apply_items_list(meta, items, line_meta)
+    missing_parts = (
+        len(items) - items_list_summary["items_with_applicable_parts"]
+    )
+    if missing_parts:
+        warnings.append(
+            f"{missing_parts} 个检测项目未提取到适用零部件，已加入人工复核清单"
+        )
 
     if len(items) < 2:
         warnings.append("抽取到的项目少于 2 项，请检查标准结构或改用人工解析")
@@ -1516,6 +1525,9 @@ def parse_standard(
         "pages": len(pages),
         "chars": total_chars,
         "reviewed_items": 0,
+        "items_with_applicable_parts": items_list_summary[
+            "items_with_applicable_parts"
+        ],
         "review_required_items": review_required,
         "review_fields": sum(len(item.get("review_fields", [])) for item in items),
         "parse_ms": elapsed_ms,
@@ -1534,6 +1546,7 @@ def parse_standard(
         "schema_version": SCHEMA_VERSION,
         "meta": meta,
         "items": items,
+        "items_list": items_list,
         "samples": sample_entries,
         "formulas": formula_entries,
         "roundings": rounding_entries,

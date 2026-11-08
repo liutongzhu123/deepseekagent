@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import store, weknora
+from .standard_extract.items_list import normalise_parts
 from .xlsx_writer import write_xlsx
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -237,18 +238,27 @@ def update_review(standard_id: str, updates: list[dict], reviewer: str = "",
                     record["review_feedback"].append(_feedback_sample(
                         record, item, "confirm", reviewer, "item", "", item.get("name", "")))
                 changed += 1
-            for field in ("name", "requirement", "method"):
+            for field in ("name", "requirement", "method", "method_clause",
+                          "applicable_parts"):
                 if field not in update or update[field] is None:
                     continue
-                value = str(update[field]).strip()
-                before = item.get(field, "")
-                if value == before:
+                value = (
+                    normalise_parts(update[field])
+                    if field == "applicable_parts"
+                    else str(update[field]).strip()
+                )
+                current = item.get(field) or ([] if field == "applicable_parts" else "")
+                if field == "applicable_parts":
+                    current = normalise_parts(current)
+                if value == current:
                     continue
                 reason = _review_reason(item, field)
                 record["review_history"].append({
                     "at": _now(), "reviewer": reviewer, "clause": clause,
-                    "field": field, "before": before, "after": value})
+                    "field": field, "before": current, "after": value})
                 item[field] = value
+                if field == "applicable_parts":
+                    item["applicable_parts_source"] = "manual"
                 item.update({"reviewed": True, "reviewed_by": reviewer,
                              "reviewed_at": record["review_history"][-1]["at"]})
                 if isinstance(item.get("review_fields"), list):
@@ -256,7 +266,7 @@ def update_review(standard_id: str, updates: list[dict], reviewer: str = "",
                                              if entry.get("field") != field]
                     item["review_required"] = bool(item["review_fields"])
                 record["review_feedback"].append(_feedback_sample(
-                    record, item, "correct", reviewer, field, before, value, reason))
+                    record, item, "correct", reviewer, field, current, value, reason))
                 changed += 1
         changed += _add_review_items(record, additions or [], reviewer,
                                      record["review_feedback"])
@@ -281,6 +291,9 @@ def _recompute_summary(record: dict) -> dict:
             "items": len(items),
             "items_with_requirement": sum(1 for item in items if item.get("requirement")),
             "items_with_method": sum(1 for item in items if item.get("method")),
+            "items_with_applicable_parts": sum(
+                1 for item in items if item.get("applicable_parts")
+            ),
             "clauses_traced": sum(
                 1
                 for item in items
