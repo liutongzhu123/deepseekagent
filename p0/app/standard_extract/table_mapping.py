@@ -54,6 +54,19 @@ def _unit(text: str | None) -> str:
         return normalise_unit(text)
     return {"°C": "℃", "mΩ": "MΩ"}.get(text, text)
 
+def is_high_confidence(entry: dict) -> bool:
+    """Whether a mapped limit/condition may feed judgment rules.
+
+    B2 text extraction is deterministic and carries no ``mapping_confidence``;
+    only an explicit table mapping marked ``low`` is held back.  Low entries
+    stay in ``limits[]``/``conditions[]`` and are surfaced for confirmation.
+    """
+    return str(entry.get("mapping_confidence") or "high") == "high"
+
+def needs_confirmation(entry: dict) -> bool:
+    """True when the entry must not enter judgment rules yet."""
+    return not is_high_confidence(entry)
+
 def _header_unit(label: str) -> str:
     """Unit stated once in a column header (``工作温度范围℃``, ``时间 min``)."""
     match = re.search(rf"(?P<unit>{_UNIT})\s*[)）]?\s*$", label or "")
@@ -315,7 +328,7 @@ def _map_table(table: dict) -> tuple[dict, list[dict], list[dict]]:
             meta["mapped_rows"] += 1
             limits.extend(row_limits)
             conditions.extend(row_conditions)
-            if any(e["mapping_confidence"] == "low" for e in row_limits + row_conditions):
+            if any(needs_confirmation(e) for e in row_limits + row_conditions):
                 meta["low_confidence_rows"].append({"row": row_index, "reason": "含低置信度映射"})
         else:
             meta["low_confidence_rows"].append({"row": row_index, "reason": "未识别出限值/条件"})
@@ -367,9 +380,9 @@ def apply_table_mapping(items: list[dict], tables: list[dict]) -> dict:
         if conditions:
             owner["conditions_status"] = "extracted"
         counts["limits"] += len(limits)
-        counts["low_limits"] += sum(1 for e in limits if e["mapping_confidence"] == "low")
+        counts["low_limits"] += sum(1 for e in limits if needs_confirmation(e))
         counts["conditions"] += len(conditions)
-        counts["low_conditions"] += sum(1 for e in conditions if e["mapping_confidence"] == "low")
+        counts["low_conditions"] += sum(1 for e in conditions if needs_confirmation(e))
         counts["footnote_limits"] += sum(1 for e in limits if e.get("unit_source") == "footnote")
         counts["footnote_conditions"] += sum(
             1 for e in conditions if e.get("unit_source") == "footnote")

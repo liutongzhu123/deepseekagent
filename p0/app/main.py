@@ -1500,7 +1500,11 @@ def get_standard(standard_id: str, request: Request) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
     _assert_project_access(user, record.get("meta", {}))
-    return record
+    # Read-time draft rules: low-confidence limits stay outside ``rules`` and
+    # surface in ``pending`` so the workbench can mark them 待确认.
+    payload = dict(record)
+    payload["judgment_rules"] = rule_dsl.generate_judgment_rules(record.get("items") or [])
+    return payload
 
 
 @app.patch("/api/v1/standards/{standard_id}")
