@@ -16,6 +16,7 @@
   F11 任务已交付 PR 但还没合并 → 不能重派（2026-11-08 真实发生：B8/B9 各被派了 2 次）
   F12 待合并 PR 越积越多没人管 → 超阈值或等待过久要催办，不能默默换下一个任务
   F13 人对决策的答复没人读 → 每轮扫飞书，把 `DEC-00x` + 选项记进决策表并恢复原任务
+  F14 agent 要人拍板时不登记 → 扫 agent 消息里的 `[DEC-00x]` 区块，自动建决策（幂等）
       （2026-11-08 真实发生：#137/#138 交付后被丢下，agent 直接去做了 B10）
 
 用法：
@@ -524,6 +525,63 @@ def poll_decisions(dry_run: bool) -> int:
     return recorded
 
 
+DEC_BLOCK_RE = re.compile(r"\[DEC-(\d{3})\]\s*(.+)")
+OPTION_LINE_RE = re.compile(r"^\s*([A-Z])\s*[.、:：]?\s*(\S.*)$")
+
+
+def auto_register_decisions(dry_run: bool) -> int:
+    """F14：从 agent 的飞书消息里自动建决策。
+
+    约定格式（写进协议）：
+        [DEC-001] 低置信限值怎么处理？
+        A 只展示不进规则
+        B 标注后进规则
+        task: B6
+
+    幂等：同 id 已存在就跳过；选项少于 2 个不建（避免误建）。
+    """
+    data = read_json(DECISIONS, {"decisions": []})
+    known = {d["id"] for d in data.get("decisions") or []}
+    created = 0
+    for message in feishu_recent(15):
+        sender = (message.get("sender") or {}).get("sender_type") or ""
+        if sender != "app":          # 只认 agent 发的
+            continue
+        text = message.get("content") or ""
+        match = DEC_BLOCK_RE.search(text)
+        if not match:
+            continue
+        dec_id = f"DEC-{match.group(1)}"
+        if dec_id in known:
+            continue
+        lines = text[match.start():].splitlines()
+        question = match.group(2).strip()
+        options: dict[str, str] = {}
+        task = ""
+        for line in lines[1:]:
+            if line.strip().lower().startswith("task:"):
+                task = line.split(":", 1)[1].strip()
+                continue
+            opt = OPTION_LINE_RE.match(line)
+            if opt and opt.group(2).strip():
+                # 选项文字允许很短（"是"/"否"这种），只要求非空
+                options[opt.group(1)] = opt.group(2).strip()
+        if len(options) < 2:
+            continue
+        data.setdefault("decisions", []).append({
+            "id": dec_id, "ticket": task, "question": question, "options": options,
+            "default_on_timeout": None, "timeout_hours": 12,
+            "opened_at": now().isoformat(timespec="seconds"),
+            "answer": None, "answered_at": None, "answered_by": None, "resumed": False,
+        })
+        known.add(dec_id)
+        created += 1
+        log(f"{'[dry-run] ' if dry_run else ''}自动登记决策 {dec_id}：{question[:40]}")
+    if created and not dry_run:
+        write_json(DECISIONS, data)
+    return created
+
+
 def handle_decisions(dry_run: bool) -> None:
     data = read_json(DECISIONS, {"decisions": []})
     changed = False
@@ -575,7 +633,8 @@ def run(dry_run: bool) -> int:
         log("预算超限，本轮不派新任务")
         return 0
 
-    poll_decisions(dry_run)    # F13：先读答复
+    auto_register_decisions(dry_run)  # F14：先把 agent 的决策登记进来
+    poll_decisions(dry_run)    # F13：再读人的答复
     handle_decisions(dry_run)  # F7：再把答复转成恢复指令
 
     # F12 必须在"忙就返回"之前：agent 忙着做新任务时，最容易把旧 PR 丢下不管
