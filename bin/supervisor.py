@@ -13,6 +13,11 @@
   F8  两个 tick 重叠 → 文件锁，抢不到锁直接退出
   F9  同一任务反复失败 → 次数上限，不无限重试
   F10 台账里没有可派任务 → 明确记一条"无可用任务"，不静默空转
+  F11 任务已交付 PR 但还没合并 → 不能重派（2026-11-08 真实发生：B8/B9 各被派了 2 次）
+  F12 待合并 PR 越积越多没人管 → 超阈值或等待过久要催办，不能默默换下一个任务
+  F13 人对决策的答复没人读 → 每轮扫飞书，把 `DEC-00x` + 选项记进决策表并恢复原任务
+  F14 agent 要人拍板时不登记 → 扫 agent 消息里的 `[DEC-00x]` 区块，自动建决策（幂等）
+      （2026-11-08 真实发生：#137/#138 交付后被丢下，agent 直接去做了 B10）
 
 用法：
     python3 bin/supervisor.py run [--dry-run]
@@ -46,10 +51,14 @@ DISPATCHED = STATE / "dispatched.json"
 EVENTS = STATE / "events.log"
 BUDGET = STATE / "budget.json"
 LOCK = STATE / "supervisor.lock"
+AWAITING_STATE = STATE / "awaiting.json"
 
 REDISPATCH_SECONDS = int(os.getenv("DISPATCH_RETRY_SECONDS", "600"))
 MAX_ATTEMPTS = int(os.getenv("DISPATCH_MAX_ATTEMPTS", "3"))
 COOLDOWN_SECONDS = int(os.getenv("DISPATCH_COOLDOWN_SECONDS", "180"))
+NAG_MIN_COUNT = int(os.getenv("NAG_MIN_COUNT", "2"))        # 待合并达到几个就催
+NAG_AFTER_SECONDS = int(os.getenv("NAG_AFTER_SECONDS", "1800"))  # 单个等超过多久就催
+NAG_COOLDOWN = int(os.getenv("NAG_COOLDOWN", "1800"))      # 两次催办的最小间隔
 
 
 def now() -> datetime:
@@ -291,7 +300,104 @@ def commit_backlog(message: str) -> bool:
         return False
 
 
-def next_task(backlog: dict, busy: set[str], dispatched: dict) -> tuple[dict | None, str]:
+def awaiting_merge(ids: set[str]) -> set[str]:
+    """F11：已经交出 PR、但还没合并的任务。
+
+    踩过的坑：任务交付 PR 后等待人合并，窗口期超过了重派间隔，Supervisor 以为
+    "没在跑"就又派了一次，结果同一个任务被做了两遍（B8/B9 各被派 2 次）。
+    所以重派前必须先看"有没有一个还没合并的 PR"。
+    """
+    waiting: dict[str, int] = {}
+    for row in _ticket_rows():
+        tid = contains_task(row.get("title") or "", ids)
+        if not tid or tid in waiting:
+            continue
+        for assignment in row.get("assignments") or []:
+            summary = (assignment.get("report") or {}).get("summary") or ""
+            match = re.search(r"#(\d+)", summary)
+            if not match:
+                continue
+            pr = int(match.group(1))
+            if not merge_commit_for(pr):
+                waiting[tid] = pr
+                break
+    return waiting
+
+
+def pr_created_at(pr: int) -> datetime | None:
+    """PR 的真实创建时间：催办里的"已等多久"必须按它算。
+
+    踩过的坑：早先用"第一次观察到待合并"的时间，结果一个开了 1 天的 PR
+    显示「已等 0 分钟」，把人误导了。
+    """
+    try:
+        proc = subprocess.run(["gh-agent", "pr", "view", str(pr), "--repo",
+                               "liutongzhu123/deepseekagent", "--json", "createdAt", "--jq", ".createdAt"],
+                              capture_output=True, text=True, timeout=30,
+                              env={**os.environ, "HOME": "/home/dshadmin"})
+        raw = proc.stdout.strip()
+        if not raw:
+            return None
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(TZ)
+    except Exception:
+        return None
+
+
+def nag_pending(waiting: dict[str, int], dry_run: bool) -> None:
+    """F12：待合并 PR 过多或等太久 → 催办（有冷却，避免刷屏）。"""
+    state = read_json(AWAITING_STATE, {})
+    now_iso = now().isoformat(timespec="seconds")
+    tracked: dict[str, dict] = {}
+    for tid, pr in waiting.items():
+        previous = state.get(tid) or {}
+        tracked[tid] = {"pr": pr, "since": previous.get("since") or now_iso}
+    if not dry_run:
+        write_json(AWAITING_STATE, tracked)
+    if not tracked:
+        return
+
+    ages = {}
+    for tid, info in tracked.items():
+        created = pr_created_at(info["pr"])
+        if created:
+            ages[tid] = max(0.0, (now() - created).total_seconds())
+            tracked[tid]["since"] = created.isoformat(timespec="seconds")
+        else:
+            try:
+                ages[tid] = (now() - datetime.fromisoformat(info["since"])).total_seconds()
+            except Exception:
+                ages[tid] = 0
+
+    overdue = {tid: age for tid, age in ages.items() if age >= NAG_AFTER_SECONDS}
+    if len(tracked) < NAG_MIN_COUNT and not overdue:
+        return
+
+    last = state.get("_last_nag_at")
+    if last:
+        try:
+            if (now() - datetime.fromisoformat(last)).total_seconds() < NAG_COOLDOWN:
+                return
+        except Exception:
+            pass
+
+    lines = [f"{AGENT_AT} 【催办】有 {len(tracked)} 个 PR 已交付但还没合并", ""]
+    for tid, info in tracked.items():
+        minutes = int(ages[tid] // 60)
+        lines.append(f"- {tid} → PR #{info['pr']}（已等 {minutes} 分钟）")
+    lines += ["", "请按自合命令处理，并把 merge 返回和 `pr view --json state` 贴进汇报：",
+              "  `gh-agent pr merge <号> --repo liutongzhu123/deepseekagent --merge --delete-branch`"]
+    if overdue:
+        lines += ["", "其中最久的已超过 " + str(NAG_AFTER_SECONDS // 60) + " 分钟，优先处理。"]
+
+    if send_as_user("\n".join(lines), dry_run):
+        if not dry_run:
+            tracked["_last_nag_at"] = now_iso
+            write_json(AWAITING_STATE, tracked)
+        log(f"{'[dry-run] ' if dry_run else ''}催办合并：{', '.join(f'{t}#{p}' for t, p in waiting.items())}")
+
+
+def next_task(backlog: dict, busy: set[str], dispatched: dict,
+              awaiting: set[str] | None = None) -> tuple[dict | None, str]:
     """挑下一个可派任务，同时给出"为什么没得派"的原因。"""
     done_ids = {str(t["id"]) for t in backlog.get("tasks") or [] if str(t.get("status")) == "done"}
     blocked_reasons = []
@@ -300,6 +406,9 @@ def next_task(backlog: dict, busy: set[str], dispatched: dict) -> tuple[dict | N
         if str(task.get("status")) != "todo":
             continue
         if tid in busy:
+            continue
+        if awaiting and tid in awaiting:
+            blocked_reasons.append(f"{tid} 等 PR 合并")
             continue
         deps = task.get("deps") or []
         missing = [d for d in deps if d not in done_ids]
@@ -335,9 +444,142 @@ def dispatch_message(task: dict, attempt: int) -> str:
         lines.append(f"- 备注：{task['note']}")
     if attempt > 1:
         lines.append(f"\n（这是第 {attempt} 次派发：上一次没有收到接单确认）")
-    lines += ["", "要求：≤300 行、CI 绿、自己合；超阈值发卡片后**继续做下一件**（§10.3c）。",
-              "做完发三段式汇报。"]
+    lines += [
+        "",
+        "要求：≤300 行、CI 绿、自己合；超阈值发卡片后**继续做下一件**（§10.3c）。",
+        "自合命令（先跑 `gh-agent auth status` 确认已登录，禁止凭印象说不能合并）：",
+        "  `gh-agent pr merge <PR号> --repo liutongzhu123/deepseekagent --merge --delete-branch`",
+        "合并后汇报必须贴出 merge 命令返回 + `gh-agent pr view <PR号> --json state` 的结果。",
+        "做完发三段式汇报。",
+    ]
     return "\n".join(lines)
+
+
+def feishu_recent(limit: int = 10) -> list[dict]:
+    """读群最近消息（bot 身份）。F13 用它抓人对决策的答复。"""
+    env = {**os.environ, "HOME": "/home/dshadmin",
+           "LARKSUITE_CLI_CONFIG_DIR": "/home/dshadmin/.lark-cli-yunan-bot"}
+    try:
+        proc = subprocess.run(["/opt/dsh-agent/tools/node_modules/.bin/lark-cli",
+                               "im", "+chat-messages-list", "--chat-id", CHAT_ID,
+                               "--page-size", str(limit), "--order", "desc"],
+                              capture_output=True, text=True, timeout=60, env=env)
+    except Exception:
+        return []
+    raw = proc.stdout
+    start = raw.find("{")
+    if start < 0:
+        return []
+    try:
+        payload = json.loads(raw[start:])
+    except json.JSONDecodeError:
+        return []
+    return ((payload.get("data") or {}).get("messages")) or []
+
+
+def poll_decisions(dry_run: bool) -> int:
+    """F13：扫飞书答复 → 记进决策表。返回新记录的条数。
+
+    只认人发的消息（bot 自己发的跳过）；有歧义不猜：
+    - 带 `DEC-00x` 时按 id 对应
+    - 只有单个开放决策且只回一个字母时才接受裸回复
+    """
+    data = read_json(DECISIONS, {"decisions": []})
+    pending = [d for d in data.get("decisions") or [] if not d.get("answer")]
+    if not pending:
+        return 0
+
+    by_id = {d["id"].upper(): d for d in pending}
+    recorded = 0
+    for message in feishu_recent():
+        sender = (message.get("sender") or {}).get("sender_type") or message.get("sender_type") or ""
+        if sender != "user":
+            continue
+        text = (message.get("content") or "").strip()
+        if not text:
+            continue
+        match = re.search(r"DEC-(\d{3})", text, re.I)
+        letters = re.findall(r"\b([A-Z])\b", text.replace(match.group(0), "") if match else text)
+        if match:
+            decision = by_id.get(f"DEC-{match.group(1)}")
+            if not decision or not letters:
+                continue
+        else:
+            if len(pending) != 1 or len(letters) != 1:
+                continue
+            decision = pending[0]
+        choice = letters[0].upper()
+        if choice not in (decision.get("options") or {}):
+            continue
+        if dry_run:
+            log(f"[dry-run] 将记录 {decision['id']} = {choice}")
+        else:
+            decision["answer"] = choice
+            decision["answered_at"] = now().isoformat(timespec="seconds")
+            decision["answered_by"] = "feishu"
+            log(f"记录决策答复 {decision['id']} = {choice}")
+        recorded += 1
+        break
+    if recorded and not dry_run:
+        write_json(DECISIONS, data)
+    return recorded
+
+
+DEC_BLOCK_RE = re.compile(r"\[DEC-(\d{3})\]\s*(.+)")
+OPTION_LINE_RE = re.compile(r"^\s*([A-Z])\s*[.、:：]?\s*(\S.*)$")
+
+
+def auto_register_decisions(dry_run: bool) -> int:
+    """F14：从 agent 的飞书消息里自动建决策。
+
+    约定格式（写进协议）：
+        [DEC-001] 低置信限值怎么处理？
+        A 只展示不进规则
+        B 标注后进规则
+        task: B6
+
+    幂等：同 id 已存在就跳过；选项少于 2 个不建（避免误建）。
+    """
+    data = read_json(DECISIONS, {"decisions": []})
+    known = {d["id"] for d in data.get("decisions") or []}
+    created = 0
+    for message in feishu_recent(15):
+        sender = (message.get("sender") or {}).get("sender_type") or ""
+        if sender != "app":          # 只认 agent 发的
+            continue
+        text = message.get("content") or ""
+        match = DEC_BLOCK_RE.search(text)
+        if not match:
+            continue
+        dec_id = f"DEC-{match.group(1)}"
+        if dec_id in known:
+            continue
+        lines = text[match.start():].splitlines()
+        question = match.group(2).strip()
+        options: dict[str, str] = {}
+        task = ""
+        for line in lines[1:]:
+            if line.strip().lower().startswith("task:"):
+                task = line.split(":", 1)[1].strip()
+                continue
+            opt = OPTION_LINE_RE.match(line)
+            if opt and opt.group(2).strip():
+                # 选项文字允许很短（"是"/"否"这种），只要求非空
+                options[opt.group(1)] = opt.group(2).strip()
+        if len(options) < 2:
+            continue
+        data.setdefault("decisions", []).append({
+            "id": dec_id, "ticket": task, "question": question, "options": options,
+            "default_on_timeout": None, "timeout_hours": 12,
+            "opened_at": now().isoformat(timespec="seconds"),
+            "answer": None, "answered_at": None, "answered_by": None, "resumed": False,
+        })
+        known.add(dec_id)
+        created += 1
+        log(f"{'[dry-run] ' if dry_run else ''}自动登记决策 {dec_id}：{question[:40]}")
+    if created and not dry_run:
+        write_json(DECISIONS, data)
+    return created
 
 
 def handle_decisions(dry_run: bool) -> None:
@@ -391,7 +633,14 @@ def run(dry_run: bool) -> int:
         log("预算超限，本轮不派新任务")
         return 0
 
-    handle_decisions(dry_run)  # F7
+    auto_register_decisions(dry_run)  # F14：先把 agent 的决策登记进来
+    poll_decisions(dry_run)    # F13：再读人的答复
+    handle_decisions(dry_run)  # F7：再把答复转成恢复指令
+
+    # F12 必须在"忙就返回"之前：agent 忙着做新任务时，最容易把旧 PR 丢下不管
+    known_ids = task_ids(load_yaml(REPO / "docs" / "BACKLOG.yaml") or {"tasks": []})
+    if known_ids:
+        nag_pending(awaiting_merge(known_ids), dry_run)
 
     load = (api_state().get("load") or {})
     if int(load.get("running") or 0) > 0 or int(load.get("queued") or 0) > 0:  # F1
@@ -415,8 +664,9 @@ def run(dry_run: bool) -> int:
 
     ids = task_ids(backlog)
     busy = in_flight(api_tickets(), ids)
+    awaiting = awaiting_merge(ids)
     dispatched = read_json(DISPATCHED, {})
-    task, reason = next_task(backlog, busy, dispatched)
+    task, reason = next_task(backlog, busy, dispatched, set(awaiting))
     if not task:
         if reason:
             log(reason)  # F10
