@@ -78,6 +78,7 @@ def create(
             "published_at": "",
             "reviewer": "",
             "review_history": [],
+            "review_feedback": [],
             "source": {"file_name": file_name, "bytes": len(source_bytes)},
             **parsed,
         }
@@ -156,9 +157,66 @@ def list_standards() -> list[dict]:
     return out
 
 
-def update_review(standard_id: str, updates: list[dict], reviewer: str = "") -> dict:
+def _review_reason(item: dict, field: str) -> str:
+    return next(
+        (str(entry.get("reason", "")) for entry in item.get("review_fields") or []
+         if isinstance(entry, dict) and entry.get("field") == field),
+        "",
+    )
+
+
+def _feedback_sample(record, item, action, reviewer, field="", before="", after="", reason=""):
+    """One human decision, kept as a labelled sample for parser tuning."""
+    meta = record.get("meta") or {}
+    return {
+        "id": "rf_" + secrets.token_hex(6), "at": _now(),
+        "standard_id": record["id"], "standard_no": meta.get("standard_no", ""),
+        "standard_name": meta.get("name", ""), "project": meta.get("project", ""),
+        "clause": str(item.get("clause", "")), "name": str(item.get("name", "")),
+        "action": action, "field": field, "before": before, "after": after,
+        "confidence": item.get("confidence"), "reason": reason, "reviewer": reviewer,
+    }
+
+
+def _add_review_items(record, additions, reviewer, feedback):
+    """Append clauses the parser missed; each is retained as a supplement sample."""
+    existing = {str(item.get("clause", "")).strip() for item in record["items"]}
+    for raw in additions:
+        clause = str(raw.get("clause", "")).strip()
+        name = str(raw.get("name", "")).strip()
+        if not clause or not name:
+            raise ValueError("补充条款需要条款号与项目名称")
+        if clause in existing:
+            raise ValueError(f"条款 {clause} 已存在，不能重复补充")
+        item = {
+            "seq": len(record["items"]) + 1, "name": name, "name_auto": "",
+            "group": str(raw.get("group", "")).strip(), "clause": clause,
+            "requirement": str(raw.get("requirement", "")).strip(),
+            "method_clause": str(raw.get("method_clause", "")).strip(),
+            "method": str(raw.get("method", "")).strip(),
+            "page": raw.get("page"), "method_page": raw.get("method_page") or raw.get("page"),
+            "confidence": 0.0, "review_required": False, "review_fields": [],
+            "reviewed": True, "reviewed_at": _now(), "reviewed_by": reviewer,
+            "references": [], "source": "manual",
+        }
+        record["items"].append(item)
+        existing.add(clause)
+        record["review_history"].append({
+            "at": item["reviewed_at"], "reviewer": reviewer, "clause": clause,
+            "field": "item", "action": "add", "before": "", "after": name,
+        })
+        sample = _feedback_sample(record, item, "supplement", reviewer, "item", "", name)
+        sample["addition"] = {key: item.get(key) for key in (
+            "clause", "name", "requirement", "method_clause", "method", "page")}
+        feedback.append(sample)
+    return len(additions)
+
+
+def update_review(standard_id: str, updates: list[dict], reviewer: str = "",
+                  additions: list[dict] | None = None) -> dict:
     with _LOCK:
         record = load(standard_id)
+        record.setdefault("review_feedback", [])
         by_clause = {item["clause"]: item for item in record["items"]}
         changed = 0
         for update in updates:
@@ -166,25 +224,42 @@ def update_review(standard_id: str, updates: list[dict], reviewer: str = "") -> 
             item = by_clause.get(clause)
             if item is None:
                 continue
+            confirmed = update.get("reviewed")
+            if isinstance(confirmed, bool) and confirmed != bool(item.get("reviewed")):
+                record["review_history"].append({
+                    "at": _now(), "reviewer": reviewer, "clause": clause,
+                    "field": "reviewed", "before": bool(item.get("reviewed")),
+                    "after": confirmed})
+                item["reviewed"] = confirmed
+                item["reviewed_at"] = record["review_history"][-1]["at"]
+                item["reviewed_by"] = reviewer if confirmed else ""
+                if confirmed:
+                    record["review_feedback"].append(_feedback_sample(
+                        record, item, "confirm", reviewer, "item", "", item.get("name", "")))
+                changed += 1
             for field in ("name", "requirement", "method"):
                 if field not in update or update[field] is None:
                     continue
                 value = str(update[field]).strip()
-                if value == item.get(field, ""):
+                before = item.get(field, "")
+                if value == before:
                     continue
-                record["review_history"].append(
-                    {
-                        "at": _now(),
-                        "reviewer": reviewer,
-                        "clause": clause,
-                        "field": field,
-                        "before": item.get(field, ""),
-                        "after": value,
-                    }
-                )
+                reason = _review_reason(item, field)
+                record["review_history"].append({
+                    "at": _now(), "reviewer": reviewer, "clause": clause,
+                    "field": field, "before": before, "after": value})
                 item[field] = value
-                item["reviewed"] = True
+                item.update({"reviewed": True, "reviewed_by": reviewer,
+                             "reviewed_at": record["review_history"][-1]["at"]})
+                if isinstance(item.get("review_fields"), list):
+                    item["review_fields"] = [entry for entry in item["review_fields"]
+                                             if entry.get("field") != field]
+                    item["review_required"] = bool(item["review_fields"])
+                record["review_feedback"].append(_feedback_sample(
+                    record, item, "correct", reviewer, field, before, value, reason))
                 changed += 1
+        changed += _add_review_items(record, additions or [], reviewer,
+                                     record["review_feedback"])
         if changed:
             record["revision"] = record.get("revision", 0) + 1
             record["updated_at"] = _now()
@@ -212,6 +287,7 @@ def _recompute_summary(record: dict) -> dict:
                 if item.get("clause") and item.get("method_clause") and item.get("page")
             ),
             "reviewed_items": sum(1 for item in items if item.get("reviewed")),
+            "feedback_samples": len(record.get("review_feedback") or []),
         }
     )
     return summary

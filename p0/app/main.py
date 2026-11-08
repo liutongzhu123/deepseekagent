@@ -684,10 +684,21 @@ class ItemPatch(BaseModel):
     name: str | None = None
     requirement: str | None = None
     method: str | None = None
+    reviewed: bool | None = None
+
+
+class AddItemPatch(BaseModel):
+    clause: str
+    name: str
+    requirement: str = ""
+    method_clause: str = ""
+    method: str = ""
+    page: int | None = None
 
 
 class ReviewRequest(BaseModel):
     items: list[ItemPatch] = Field(default_factory=list)
+    additions: list[AddItemPatch] = Field(default_factory=list)
     reviewer: str = ""
 
 
@@ -1520,12 +1531,17 @@ def review_standard(standard_id: str, payload: ReviewRequest, request: Request) 
             standard_id,
             [item.model_dump() for item in payload.items],
             reviewer=payload.reviewer,
+            additions=[item.model_dump() for item in payload.additions],
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     _audit_event(
         request, user, "standard_reviewed", standard_id=standard_id,
         revision=result.get("revision", 0), changes=len(payload.items),
+        additions=len(payload.additions),
+        samples=len(result.get("review_feedback") or []),
     )
     return result
 

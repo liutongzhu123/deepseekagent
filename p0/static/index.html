@@ -307,7 +307,7 @@
                   <div id="editorFields" class="hidden">
                     <div class="editor-head">
                       <div><div class="eyebrow" id="editorClause">条款</div><h3 id="editorTitle">—</h3></div>
-                      <span class="pill warn">待复核</span>
+                      <span class="pill warn" id="editorStatus">待复核</span>
                     </div>
                     <label class="field-label" for="editName">实检项目</label>
                     <input type="text" id="editName">
@@ -317,13 +317,37 @@
                     <textarea id="editMethod"></textarea>
                     <div class="row mt-10">
                       <button class="btn btn-primary btn-sm" id="saveBtn">保存复核</button>
+                      <button class="btn btn-secondary btn-sm" id="confirmBtn">确认无误</button>
+                      <button class="btn btn-secondary btn-sm" id="addItemBtn">补充条款</button>
                       <span class="muted" id="saveStatus"></span>
+                    </div>
+                    <div id="addForm" class="add-form hidden">
+                      <div class="add-form-title">补充解析遗漏的条款</div>
+                      <label class="field-label" for="addClause">条款号 <span class="req">必填</span></label>
+                      <input type="text" id="addClause" placeholder="例如 5.3">
+                      <label class="field-label" for="addName">实检项目 <span class="req">必填</span></label>
+                      <input type="text" id="addName" placeholder="例如 耐湿热性">
+                      <label class="field-label" for="addRequirement">技术要求 / 判定要求</label>
+                      <textarea id="addRequirement"></textarea>
+                      <label class="field-label" for="addMethod">试验方法</label>
+                      <textarea id="addMethod"></textarea>
+                      <div class="row mt-10">
+                        <button class="btn btn-primary btn-sm" id="addSaveBtn">保存补充</button>
+                        <button class="btn btn-secondary btn-sm" id="addCancelBtn">取消</button>
+                      </div>
                     </div>
                     <div id="refs" class="refs"></div>
                     <div id="reviewHistory" class="review-history"></div>
                   </div>
                 </aside>
               </div>
+              <section class="card card-pad mt-16" id="reviewFeedbackCard">
+                <div class="card-head">
+                  <div><h2>反馈样本</h2><p>人工修正、确认与补充会自动留存，供解析规则持续优化。</p></div>
+                  <div class="row"><span class="pill info" id="feedbackCount">0</span></div>
+                </div>
+                <div id="reviewFeedbackList" class="feedback-sample-list"></div>
+              </section>
             </div>
           </section>
         </div>
