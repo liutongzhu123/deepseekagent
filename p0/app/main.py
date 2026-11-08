@@ -1568,6 +1568,9 @@ def review_standard(standard_id: str, payload: ReviewRequest, request: Request) 
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="standard not found") from exc
+    except weknora.WeKnoraError as exc:
+        # 取消确认需要先把已发布内容下架；下架失败时整次复核不生效。
+        raise HTTPException(status_code=502, detail=f"WeKnora 下架失败：{exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     _audit_event(
@@ -1575,6 +1578,7 @@ def review_standard(standard_id: str, payload: ReviewRequest, request: Request) 
         revision=result.get("revision", 0), changes=len(payload.items),
         additions=len(payload.additions),
         samples=len(result.get("review_feedback") or []),
+        published=bool(result.get("published", True)),
     )
     return result
 
