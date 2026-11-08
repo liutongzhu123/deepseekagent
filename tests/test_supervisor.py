@@ -494,6 +494,51 @@ def test_f25_missing_task_returns_false(tmp_path):
     assert sup.set_task_status(path, "NOPE", "done") is False
 
 
+def test_f30_sync_self_updates_from_main(monkeypatch, tmp_path):
+    """F30：服务器 bin/ 与 main 不一致时要自动同步。"""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "budget.py").write_text("# old\n", encoding="utf-8")
+
+    monkeypatch.setattr(sup, "BIN", bin_dir)
+    monkeypatch.setattr(sup, "git", lambda args: type(
+        "R", (), {"returncode": 0, "stdout": "# new\n", "stderr": ""})())
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    updated = sup.sync_self(dry_run=False)
+    assert "budget.py" in updated
+    assert (bin_dir / "budget.py").read_text(encoding="utf-8") == "# new\n"
+
+
+def test_f30_sync_self_skips_identical(monkeypatch, tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "budget.py").write_text("# same\n", encoding="utf-8")
+
+    monkeypatch.setattr(sup, "BIN", bin_dir)
+    monkeypatch.setattr(sup, "git", lambda args: type(
+        "R", (), {"returncode": 0, "stdout": "# same\n", "stderr": ""})())
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    updated = sup.sync_self(dry_run=False)
+    assert "budget.py" not in updated, "内容相同不该重写"
+
+
+def test_f30_sync_self_refuses_broken_syntax(monkeypatch, tmp_path):
+    """main 上的文件语法不通过 → 不能同步，否则把自己跑挂。"""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "budget.py").write_text("# good\n", encoding="utf-8")
+
+    monkeypatch.setattr(sup, "BIN", bin_dir)
+    monkeypatch.setattr(sup, "git", lambda args: type(
+        "R", (), {"returncode": 0, "stdout": "def broken(:\n", "stderr": ""})())
+    monkeypatch.setattr(sup, "log", lambda *_a, **_k: None)
+
+    assert sup.sync_self(dry_run=False) == []
+    assert (bin_dir / "budget.py").read_text(encoding="utf-8") == "# good\n", "不应覆盖"
+
+
 def test_dispatch_message_contains_acceptance_and_protocol():
     text = sup.dispatch_message({
         "id": "B7", "title": "标准类型分类", "covers": ["SP-10.1"],
