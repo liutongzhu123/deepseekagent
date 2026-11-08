@@ -1,0 +1,471 @@
+# 任务台账（Supervisor 的唯一事实来源）
+#
+# 规则：
+#   - 一个任务 = 一个工单 = 一个分支 = 一个 PR；禁止堆叠（base 永远 main）
+#   - status: todo | doing | blocked | done
+#   - deps: 依赖的任务 id，未完成的依赖会阻止派单
+#   - covers: 覆盖的需求条目（docs/requirements.yaml），覆盖率由此自动计算
+#   - acceptance: 必须可测量；写不出可测量的验收标准，说明任务还没想清楚
+#   - files: 预计会改的文件/目录，用于并行冲突检查（不重叠才能并行）
+#   - detail: 详细说明（长任务用，可引用 docs/ 下的设计文档）
+
+meta:
+  updated_at: 2026-11-08
+  owner: supervisor
+  next_task_hint: B5
+
+tasks:
+  # ========== 已完成：早期基础规则（R01–R11，早于台账建立） ==========
+  - id: R_BASE
+    title: 基础规则 R01–R11（页眉编号/均值/字段一致/时间/溯源/判定/页码/注意事项/标记/签章/模板）
+    status: done
+    size: L
+    covers: [RA-1.2, RA-1.4, RA-2.1, RA-2.2, RA-2.7, RA-2.8, RA-4.1, RA-4.2, RA-4.9, RA-4.13, RA-4.18]
+    acceptance: ["真实草稿 12 份可跑", "结论与证据可定位"]
+    files: [p0/app/rules.py]
+    note: 早于台账机制建立，按现有实现回填覆盖关系
+
+  # ========== 已完成：报告审核格式类（阶段 A） ==========
+  - id: A1
+    title: 空白页 / 窜页 / 乱码检测（R12）
+    status: done
+    size: S
+    pr: 106
+    covers: [RA-4.1, RA-4.2]
+    acceptance: ["真实草稿 12 份跑通，0 误报", "空白页/页码断档能定位到页"]
+    files: [p0/app/format_rules.py]
+
+  - id: A2
+    title: 书签完整性（R13）
+    status: done
+    size: S
+    pr: 118
+    covers: [RA-4.8]
+    acceptance: ["bookmarkEnd 全文档遍历，31/31 配对", "真实草稿不再误报未闭合"]
+    files: [p0/app/docx_parser.py, p0/app/format_rules.py]
+
+  - id: A3
+    title: 空缺项未填写也未杠掉（R14）
+    status: done
+    size: S
+    pr: 110
+    covers: [RA-4.10]
+    acceptance: ["占位符 XXXXX 判为未填", "/ 与「不适用」判为合理留空"]
+    files: [p0/app/format_rules.py]
+
+  - id: A4
+    title: 章节 / 项目编号跳号（R15）
+    status: done
+    size: S
+    pr: 111
+    covers: [RA-4.14]
+    acceptance: ["1、3 断档能报出位置", "目录行不误判"]
+    files: [p0/app/format_rules.py]
+
+  - id: A5
+    title: 计量单位规范（R16）
+    status: done
+    size: S
+    pr: 112
+    covers: [RA-4.12]
+    acceptance: ["白名单内大小写错误能报出", "标准单位不误报"]
+    files: [p0/app/format_rules.py]
+
+  - id: A6
+    title: 字体字号一致（R17）
+    status: done
+    size: S
+    pr: 113
+    covers: [RA-4.3]
+    acceptance: ["封面/目录不误报", "正文偏离段落能定位"]
+    files: [p0/app/format_rules.py]
+
+  - id: A7
+    title: 注意事项必填项（R08 扩展）
+    status: done
+    size: S
+    pr: 114
+    covers: [RA-4.9]
+    acceptance: ["委托单位/试验类型缺失能报出"]
+    files: [p0/app/rules.py]
+
+  - id: A8
+    title: XG 编号规则配置化预留
+    status: done
+    size: S
+    pr: 115
+    covers: [RA-4.5]
+    acceptance: ["规则可配置，默认关闭", "不改变现有审核输出"]
+    files: [p0/app/xg_rules.py, p0/config/xg_report_number.yaml]
+    note: 仅配置预留；客户确认 XG 尾号+1 的规则后再启用
+
+  - id: VIS
+    title: 视觉类检查空壳（重复照片 / 设备标签状态）
+    status: done
+    size: S
+    pr: 105
+    covers: [RA-2.6, RA-5.3]
+    acceptance: ["默认关闭不改变输出", "重复照片能检出", "设备标签明确标 skipped"]
+    files: [p0/app/visual_checks.py]
+    note: 设备标签需客户样例才能实现；当前 12 份草稿无任何照片
+
+  # ========== 已完成：标准解析（阶段 B 前段） ==========
+  - id: B0
+    title: 多版式标准解析健壮性
+    status: done
+    size: M
+    pr: 124
+    covers: [SP-1.2]
+    acceptance: ["气囊 ECU 4→29 条", "电气通用 6→51 条", "EPB 无回归 44 条"]
+    files: [p0/app/standard_parse.py, p0/app/standard_parser.py]
+
+  - id: B1
+    title: 试验条件参数结构化（conditions[]）
+    status: done
+    size: M
+    pr: 119
+    covers: [SP-3.1]
+    acceptance: ["EPB 抽 50 条条件", "每条带 clauses 与 raw 可溯源"]
+    files: [p0/app/standard_extract/conditions.py]
+
+  - id: B2
+    title: 技术要求与限值结构化（limits[]）
+    status: done
+    size: M
+    pr: 120
+    covers: [SP-4.1]
+    acceptance: ["EPB 抽 14 条限值", "range/upper/公差结构正确"]
+    files: [p0/app/standard_extract/limits.py]
+
+  - id: B3
+    title: 样品量与制样要求（samples[]）
+    status: done
+    size: M
+    pr: 122
+    covers: [SP-8.1]
+    acceptance: ["EPB 抽 3 条预处理", "数量/尺寸无表述时如实为 0"]
+    files: [p0/app/standard_extract/samples.py]
+
+  - id: B4
+    title: 公式识别（formulas[]）
+    status: done
+    size: M
+    pr: 125
+    covers: [SP-6.1]
+    acceptance: ["四类公式可识别", "真实标准 0 命中时如实报 0，不编造"]
+    files: [p0/app/standard_extract/formula.py]
+    note: 现有标准均无公式，待客户提供带公式标准后重验
+
+  - id: T1
+    title: 表格结构化（tables[]）
+    status: done
+    size: L
+    pr: 127
+    covers: [SP-1.2]
+    acceptance: ["103 张大表 100% 结构化", "覆盖率 8.2%→23.5%"]
+    files: [p0/app/standard_extract/tables.py]
+
+  - id: T2
+    title: 表格列语义映射（限值/条件）
+    status: done
+    size: L
+    pr: 129
+    covers: [SP-4.1, SP-3.1]
+    acceptance: ["限值 23→188、条件 158→218", "低置信占比如实暴露"]
+    files: [p0/app/standard_extract/table_mapping.py]
+
+  - id: T302
+    title: 验收链路端到端演练
+    status: done
+    size: M
+    pr: 116
+    covers: []
+    acceptance: ["12 份草稿全跑通", "16 个变异全检出"]
+    files: [docs/stage3-acceptance/]
+
+  # ========== 进行中 ==========
+  - id: C1
+    title: 表格脚注单位关联（低置信→高置信）
+    status: doing
+    size: M
+    covers: [SP-4.1]
+    acceptance: ["high/low 比例从 27/138 明显改善", "能修的修掉，修不掉说明原因"]
+    files: [p0/app/standard_extract/table_mapping.py]
+
+  - id: A_LOWCONF
+    title: 低置信限值隔离（不进判定规则）
+    status: blocked
+    size: S
+    deps: [C1]
+    covers: [SP-4.1, SP-5.1]
+    acceptance: ["规则生成只取 high 置信", "低置信在 UI 标待确认"]
+    files: [p0/app/standard_extract/table_mapping.py, p0/app/rule_dsl.py]
+
+  # ========== 待做：标准解析剩余 ==========
+  - id: B5
+    title: 数值修约规则（有效数字/小数位/四舍六入五单双）
+    status: todo
+    size: M
+    deps: [B2, C1]
+    covers: [SP-7.1, SP-7.2]
+    acceptance: ["能识别 3 类修约表述", "绑定到对应检测项", "相对基准百分比限值能处理"]
+    files: [p0/app/standard_extract/rounding.py]
+
+  - id: B6
+    title: 合格判定规则自动生成
+    status: todo
+    size: L
+    deps: [B2, B5, A_LOWCONF]
+    covers: [SP-5.1, SP-5.2]
+    acceptance: ["生成区间/组合/分级三类规则", "只基于 high 置信限值", "可绑定到原始记录模板"]
+    files: [p0/app/rule_dsl.py]
+
+  - id: B7
+    title: 标准类型智能分类（国标/行标/企标）
+    status: todo
+    size: S
+    deps: [B0]
+    covers: [SP-10.1]
+    acceptance: ["按标准号前缀+名称能分类", "误判率 <10%"]
+    files: [p0/app/standard_extract/classify.py]
+
+  - id: B8
+    title: 标准版本管理与对比
+    status: todo
+    size: M
+    deps: [B0]
+    covers: [SP-9.1, SP-9.2]
+    acceptance: ["同标准多版本可存", "新旧 diff 标注增删改"]
+    files: [p0/app/standard_store.py]
+
+  - id: B9
+    title: 检测项目清单提取
+    status: todo
+    size: M
+    deps: [B0]
+    covers: [SP-2.1]
+    acceptance: ["提取项目名/方法号/适用零部件", "可人工复核后入库"]
+    files: [p0/app/standard_extract/items_list.py]
+
+  - id: B10
+    title: 拆解结果人工复核闭环
+    status: todo
+    size: M
+    deps: [B1, B2]
+    covers: [SP-11.1, SP-11.2]
+    acceptance: ["修正内容可保存", "修正作为反馈样本留存"]
+    files: [p0/app/standard_store.py, p0/static/]
+
+  # ========== 待做：报告审核剩余 ==========
+  - id: RA_CONSIST
+    title: 一致性校验（报告 vs 任务单 / 原始记录 / 前后一致性）
+    status: todo
+    size: L
+    deps: [T302]
+    covers: [RA-1.1, RA-1.2, RA-1.3, RA-1.4, RA-1.5, RA-1.7, RA-1.8, RA-1.11, RA-1.12]
+    acceptance: ["提供任务单/原始记录后能逐项比对", "缺数据时明确 skip 而不是假通过"]
+    files: [p0/app/crosscheck.py]
+    note: 依赖客户 D4 数据（任务单/原始记录）
+
+  - id: RA_TOC
+    title: 目录页码与项目序号一致
+    status: todo
+    size: S
+    covers: [RA-1.9]
+    acceptance: ["目录页码与正文页码比对", "不一致能定位"]
+    files: [p0/app/format_rules.py]
+
+  - id: RA_SEAL
+    title: 用章合理性检查
+    status: todo
+    size: M
+    covers: [RA-1.10, RA-4.6]
+    acceptance: ["YF/QA/ZY/ZW 规则可配置", "印章位置与遮挡判定"]
+    files: [p0/app/seal_rules.py]
+    note: 客户回复「用章无标准，预留规则」
+
+  - id: RA_TIME
+    title: 时间顺序与设备溯源（R04/R05 已有，补单项时间范围）
+    status: todo
+    size: S
+    covers: [RA-2.1, RA-2.2, RA-2.3]
+    acceptance: ["单项时间落在汇总区间内", "最早/最晚与区间端点一致"]
+    files: [p0/app/rules.py]
+
+  - id: RA_CALC
+    title: 计算结果正确性（平均/最大/变化率）
+    status: todo
+    size: M
+    deps: [B5]
+    covers: [RA-2.7]
+    acceptance: ["重算结果与报告值比对", "偏差超阈值报出"]
+    files: [p0/app/rules.py]
+
+  - id: RA_PROOF
+    title: 错别字与病句检查
+    status: todo
+    size: M
+    covers: [RA-4.4]
+    acceptance: ["专业术语白名单避免误报", "错别字定位到段落"]
+    files: [p0/app/typo_rules.py]
+
+  - id: RA_STDVER
+    title: 检测依据标准年代号检查
+    status: todo
+    size: S
+    covers: [RA-4.15]
+    acceptance: ["无年代号能报出", "标准号格式合法"]
+    files: [p0/app/format_rules.py]
+
+  - id: RA_PHOTO_SEQ
+    title: 附录照片序号与试验前中后完整性
+    status: todo
+    size: M
+    deps: [VIS]
+    covers: [RA-4.16, RA-4.17]
+    acceptance: ["照片序号连续", "缺前/中/后能报出"]
+    files: [p0/app/visual_checks.py]
+    note: 需带照片的报告样例（客户 D3）
+
+  - id: RA_TEMPLATE
+    title: 主机厂模板正确性（吉利/比亚迪等）
+    status: todo
+    size: M
+    covers: [RA-4.18]
+    acceptance: ["按主机厂识别模板", "错用模板能报出"]
+    files: [p0/app/template_rules.py]
+    note: 当前仅覆盖 BYD
+
+  - id: RA_SAMPLENO
+    title: 样品编号连续性与重复性
+    status: todo
+    size: S
+    covers: [RA-5.4, RA-1.8]
+    acceptance: ["编号断号/重复能报出"]
+    files: [p0/app/format_rules.py]
+
+  # ========== 待做：智能客服（尚未开始） ==========
+  - id: CS_BASE
+    title: 基础数据管理（价格库/排期/资质/名称映射）
+    status: todo
+    size: L
+    covers: [CS-1.1, CS-1.2, CS-1.3, CS-1.4]
+    acceptance: ["四类库可维护", "与 CRM 可对接"]
+    files: [p0/app/crm.py]
+    note: 需客户提供 CRM 接口与认可清单
+
+  - id: CS_REG
+    title: 客户注册与身份识别
+    status: todo
+    size: L
+    covers: [CS-2.1, CS-2.2, CS-2.3, CS-2.4, CS-2.5, CS-2.6]
+    acceptance: ["注册审批可配置", "黑名单/白名单/竞业规则生效"]
+    files: [p0/app/]
+
+  - id: CS_QUOTE
+    title: 报价管理（流程/规则/转人工）
+    status: todo
+    size: L
+    covers: [CS-3.1, CS-3.2, CS-3.3, CS-3.4, CS-3.5, CS-3.6]
+    acceptance: ["小额全自动、大额拦截", "三类规则可配置", "转人工带上下文"]
+    files: [p0/app/quote.py]
+
+  - id: CS_AIQUOTE
+    title: AI 辅助报价（大纲解析→报价 Excel）
+    status: todo
+    size: L
+    covers: [CS-4.1, CS-4.2]
+    acceptance: ["大纲能解析出标准/项目", "输出 CRM 格式 Excel"]
+    files: [p0/app/quote.py]
+
+  - id: CS_ORDER
+    title: 自助下单与委托审核
+    status: todo
+    size: M
+    covers: [CS-5.1, CS-5.2, CS-5.3]
+    acceptance: ["委托单可配置", "注册信息自动带入"]
+    files: [p0/app/]
+
+  - id: CS_DESK
+    title: 委托处置与对话管理
+    status: todo
+    size: M
+    covers: [CS-6.1, CS-6.2]
+    acceptance: ["咨询记录可查可筛", "对话可存档转交"]
+    files: [p0/app/]
+
+  - id: CS_RULECFG
+    title: 规则配置中心
+    status: todo
+    size: M
+    covers: [CS-7.1, CS-7.2]
+    acceptance: ["各业务部门可自助维护规则"]
+    files: [p0/app/admin_config.py]
+
+  - id: CS_INTEG
+    title: 系统对接（企查查/CRM/微信/邮箱）
+    status: todo
+    size: L
+    covers: [CS-8.1, CS-8.2, CS-8.3, CS-8.4]
+    acceptance: ["四个对接可用", "失败可降级"]
+    files: [p0/app/]
+    note: 需客户提供各系统接口凭据
+
+  # ========== 基础设施：目标模式 ==========
+  - id: INFRA_BACKLOG
+    title: 需求清单 + 任务台账（机器可读）
+    status: doing
+    size: S
+    covers: []
+    acceptance: ["覆盖率脚本能算出各领域百分比"]
+    files: [docs/requirements.yaml, docs/BACKLOG.yaml, scripts/coverage.py]
+
+  - id: INFRA_DECISION
+    title: 决策登记与飞书回复解析
+    status: todo
+    size: M
+    deps: [INFRA_BACKLOG]
+    acceptance: ["回归一句 DEC-003 C 能自动恢复原工单", "歧义回复不猜"]
+    files: [bin/decision.py]
+
+  - id: INFRA_SUPERVISOR
+    title: Supervisor 常驻（服务器，每 2 分钟，心跳双看门狗）
+    status: todo
+    size: L
+    deps: [INFRA_BACKLOG, INFRA_DECISION]
+    acceptance: ["Mac 关机仍能转", "延迟 ≤2 分钟", "心跳超时能告警"]
+    files: [bin/supervisor.py]
+
+  - id: INFRA_VERIFY
+    title: 双人验证（独立 agent 对抗性复核）
+    status: todo
+    size: M
+    deps: [INFRA_SUPERVISOR]
+    acceptance: ["解析/判定类改动必须过第二道", "拒绝时能给出具体反例"]
+    files: [bin/verify.py]
+
+  - id: INFRA_REVIEW
+    title: 每日代码质量巡检
+    status: todo
+    size: S
+    deps: [INFRA_SUPERVISOR]
+    acceptance: ["每日一次看当日 diff", "发现重复代码/死代码能报出"]
+    files: [bin/daily_review.py]
+
+  - id: INFRA_BUDGET
+    title: Token 预算熔断
+    status: todo
+    size: S
+    deps: [INFRA_SUPERVISOR]
+    acceptance: ["日 2000 万 / 月 4 亿", "80% 告警、100% 停止派新任务"]
+    files: [bin/supervisor.py]
+
+  # ========== 阻塞项 ==========
+  - id: BLOCK_PROD
+    title: 【硬阻塞】客户真实数据进入前，本地模型路由必须就位
+    status: blocked
+    size: M
+    covers: []
+    acceptance: ["本地模型可路由", "客户数据不出内网"]
+    files: []
+    note: 当前测试数据客户确认可走公网（过期数据），但真实环境必须本地模型
