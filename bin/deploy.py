@@ -10,6 +10,9 @@
   F21 目标机不可达 → 记录 unreachable，不改任何状态到"已部署"
   F22 两轮部署重叠 → 文件锁，抢不到锁直接退出
   F23 打包用的是工作区而不是目标 commit → 必须 `git archive <sha>`，否则可能部署旧代码
+  F28 有人绕过部署器手工改目标机 → 代码与 main 分叉，下次部署会把它悄悄覆盖。
+      机制：部署后记下目标机代码树的 manifest 指纹；每轮部署前先比对，
+      不一致就记 drift 并强制重部署（**不再相信"上次部署成功"**）。
   F24 重启后立刻做健康检查会把"还没起来"当成"部署失败" → 必须重试等待
       （2026-11-08 真实发生：日志显示 16:10:51 重启、16:10:55 返回 200，而检查在 16:10:51 就打了 000）
 
@@ -155,6 +158,26 @@ def wait_healthy(retries: int = 20, delay: int = 2) -> tuple[bool, str]:
     return False, last or "无响应"
 
 
+TREE_PATHS = "app config static scripts"
+
+
+def tree_manifest() -> str | None:
+    """目标机 p0 代码树的内容指纹（F28）。
+
+    只算版本库跟踪的四个目录，排除 __pycache__ 与 data/venv。
+    指纹不一致 = 有人手工改过，或者部署没真正落地。
+    """
+    cmd = (f"cd {TARGET_DIR} && find {TREE_PATHS} -type f -not -path '*__pycache__*' "
+           f"-not -name '*.pyc' -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null "
+           f"| sha256sum | cut -c1-64")
+    try:
+        proc = ssh(cmd, 120)
+        value = (proc.stdout or "").strip()
+        return value or None
+    except Exception:
+        return None
+
+
 def restart_and_check() -> tuple[bool, str]:
     """重启 + 健康检查（重试等待）+ 测试。任何一步失败都算失败（F17：跑不起来≠通过）。"""
     try:
@@ -197,6 +220,16 @@ def run(dry_run: bool) -> int:
 
     state = read_state()
     sha = local_main_sha()
+
+    # F28：先确认目标机还是上次部署的那份代码
+    if state.get("status") == "ok" and state.get("manifest"):
+        current = tree_manifest()
+        if current and current != state["manifest"]:
+            log(f"检测到部署漂移：目标机 manifest {current[:12]} ≠ 记录 {state['manifest'][:12]}")
+            state["drift_detected_at"] = now().isoformat(timespec="seconds")
+            state["status"] = "drift"
+            write_state(state)
+
     should, reason = needs_deploy(state, sha)
     if not should:
         print(reason)
@@ -241,7 +274,8 @@ def run(dry_run: bool) -> int:
     history = (state.get("history") or [])[-9:]
     history.append({"sha": sha, "at": now().isoformat(timespec="seconds"), "backup": backup})
     state.update({"deployed_sha": sha, "deployed_at": now().isoformat(timespec="seconds"),
-                  "status": "ok", "detail": detail, "backup": backup, "history": history})
+                  "status": "ok", "detail": detail, "backup": backup, "history": history,
+                  "manifest": tree_manifest()})
     write_state(state)
     log(f"部署成功 {sha[:8]}：{detail[:80]}")
     return 0
