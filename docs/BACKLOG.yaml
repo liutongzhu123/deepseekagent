@@ -370,12 +370,13 @@ tasks:
   # ========== 待做：智能客服（尚未开始） ==========
   - id: CS_BASE
     title: 基础数据管理（价格库/排期/资质/名称映射）
-    status: todo
+    status: done
+    pr: 155
     size: L
     covers: [CS-1.1, CS-1.2, CS-1.3, CS-1.4]
     acceptance: ["四类库可维护", "与 CRM 可对接"]
     files: [p0/app/crm.py]
-    note: 需客户提供 CRM 接口与认可清单
+    note: 四类库本地维护+名称映射+Excel/CSV 同步骨架完成；真实 CRM API、认可清单解析、AI 排期识别待客户接口/清单
 
   - id: CS_REG
     title: 客户注册与身份识别
