@@ -38,6 +38,7 @@ def test_weighted_mean_range_stddev_and_percentage():
         "requirement": (
             "试验结果按加权平均值计算；极差为最大值与最小值之差；"
             "标准差按式（1）计算；变化率按式（2）计算，变化率=（A-B）/B×100%。"
+            "式中：A——实测值；B——基准值。"
         ),
         "method": "",
     }
