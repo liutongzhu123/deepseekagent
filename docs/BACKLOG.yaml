@@ -12,7 +12,7 @@
 meta:
   updated_at: 2026-11-08
   owner: supervisor
-  next_task_hint: B5
+  next_task_hint: B6
 
 tasks:
   # ========== 已完成：早期基础规则（R01–R11，早于台账建立） ==========
@@ -206,12 +206,13 @@ tasks:
   # ========== 待做：标准解析剩余 ==========
   - id: B5
     title: 数值修约规则（有效数字/小数位/四舍六入五单双）
-    status: todo
+    status: done
     size: M
+    pr: 134
     deps: [B2, C1]
     covers: [SP-7.1, SP-7.2]
     acceptance: ["能识别 3 类修约表述", "绑定到对应检测项", "相对基准百分比限值能处理"]
-    files: [p0/app/standard_extract/rounding.py]
+    files: [p0/app/standard_extract/rounding.py, p0/app/standard_extract/limits.py, p0/app/standard_parser.py, p0/tests/test_standard_rounding.py]
 
   - id: B6
     title: 合格判定规则自动生成
