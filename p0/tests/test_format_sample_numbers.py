@@ -52,6 +52,8 @@ def test_rule_is_in_catalog():
         ("TS24LXJ8A-01、TS24LXJ8A-02", "3件", "样品数量 3 与样品编号 2 个不对应"),
         # 验证#154 反例 3：同一编号的全角/半角前缀分隔符写法必须判重。
         ("TS24LXJ8A-01、TS24LXJ8A－01", "1", "编号重复：TS24LXJ8A-01（样品编号字段，2 次）"),
+        # 验证#172 反例：52 个编号的范围要展开，数量不符时报 52 个而不是 1 个。
+        ("TS24LXJ8A-01～52", "51", "样品数量 51 与样品编号 52 个不对应"),
     ],
 )
 def test_fail_cases(sample_no, qty, needle):
@@ -74,6 +76,8 @@ def test_fail_cases(sample_no, qty, needle):
         ("TS24LXJ8A－01～03", "3", None, "样品编号=3"),
         # 验证#154 反例 2：字段 ASCII + 表格全角前缀，应归一为同样 2 个编号而非 4 个。
         ("TS24LXJ8A-01、TS24LXJ8A-02", "2", FULLWIDTH_PREFIX_TABLE, "未发现断号或重复"),
+        # 验证#172 反例：52 个编号的范围不能因旧的 50 步上限被当成 1 个。
+        ("TS24LXJ8A-01～52", "52", None, "样品编号=52"),
         ("", "2", ITEM_TABLE, "未发现断号或重复"),
         ("TS24LXJ8A-01、TS24LXJ8A-02", "XX", None, "未发现断号或重复"),
     ],
@@ -106,6 +110,22 @@ def test_range_dash_variants_expand(sample_no):  # F11 / F12
     assert finding["status"] == "pass"
     assert "样品编号=3" in finding["evidence"]
     assert "样品数量 3 与样品编号" not in finding["message"]
+
+
+@pytest.mark.parametrize(
+    "sample_no",
+    [
+        "TS24LXJ8A-01～52",
+        "TS24LXJ8A-01－52",
+        "TS24LXJ8A-01－TS24LXJ8A-52",
+    ],
+)
+def test_range_over_50_expands(sample_no):  # F13
+    finding = _r24(_data(sample_no, "52"))
+
+    assert finding["status"] == "pass"
+    assert "样品编号=52" in finding["evidence"]
+    assert "样品数量 52 与样品编号" not in finding["message"]
 
 
 @pytest.mark.parametrize("dash", ["\u2010", "\u2011", "\ufe58", "\u2e3a"])
@@ -156,6 +176,8 @@ def test_fullwidth_prefix_participates_in_gap_and_dup():
         # F12：前缀本身以数字结尾时，单个「－」按前缀分隔符处理，不展开成 24..27。
         ("TS24－27", None, "仅识别到 1 个样品编号"),
         ("TS24－01", None, "仅识别到 1 个样品编号"),
+        # F13：超过 9999 步的范围不展开，避免异常输入产生巨量 token。
+        ("TS24LXJ8A-01～10001", None, "仅识别到 1 个样品编号"),
         ("", None, "未识别到可判定的样品编号"),
         ("", LONG_TABLE, "未识别到可判定的样品编号"),
     ],
