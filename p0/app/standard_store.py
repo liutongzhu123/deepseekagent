@@ -470,7 +470,7 @@ def version_record(standard_id: str, version: int) -> dict:
 # a new edition that only moves these fields did not change the clause.
 _DIFF_EXCLUDED = frozenset(
     {"seq", "name_auto", "confidence", "review_required", "review_fields",
-     "reviewed", "page", "method_page"}
+     "reviewed", "reviewed_at", "reviewed_by", "page", "method_page"}
 )
 _DIFF_FIELDS = ("name", "group", "requirement", "method_clause", "method")
 _DIFF_LABELS = {
