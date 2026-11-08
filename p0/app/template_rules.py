@@ -11,11 +11,24 @@ F7 配置缺失/不可读 → skip；F8/F9 页数变体/缺页数 → 模板族�
 F10 空值、重复标记、非字符串配置项 → 不崩
 F11 封面同一行既有标准号又有主机厂名称 → 只去掉标准号，不能把整行丢掉
     （否则 Q/BYDQ 标准号会把「比亚迪」模板标记一起吞掉，错用模板判成 skip）
+
+固定注意事项（R28 / RA-4.11）失败路径（``tests/test_fixed_content.py`` 逐条覆盖）：
+
+F1 无注意事项标题 → skip，不冒充 pass
+F2 有标题但无编号条目 → fail，按应有条数逐条报缺
+F3 缺中间条目且后续条目重新编号 → 按固定文本匹配报缺，不因编号连续而漏报
+F4 条目位置互换 → 报顺序错误
+F5 单条措辞被改 → 报措辞错误并给出应为/实际
+F6 多出条目 → 报多余内容
+F7 全角/半角、弯引号、空格差异 → 归一化后一致，不误报
+F8 中文按 8 条、英文按 7 条；语言由标题判定
+F9 英文模板固定文本尚未取得客户确认 → 用对应译文兜底，并在 README 标注局限
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -186,3 +199,139 @@ def match_template(
         )
     return TemplateMatch(status="warn", severity="low", message="未识别为已知主机厂模板",
                          evidence=evidence, suggestion="确认主机厂模板")
+
+
+# --- R28 固定注意事项（RA-4.11）：中文 8 条 / 英文 7 条 ----------------------
+# 中文取自 12 份真实 BYD 草稿（逐字一致）。英文模板尚未取得客户样例，7 条对应
+# 中文 1–7 条（第 8 条是资质认定标志的国内说明），措辞待客户英文报告确认后替换。
+
+FIXED_NOTICES_ZH: tuple[str, ...] = (
+    "报告无“检验检测专用章”或“试验专用章”无效。",
+    "未经本检验中心批准，不得部分复制本检验报告。复制报告未重新加盖“检验检测专用章”或“试验专用章”无效。",
+    "报告无主检、审核、批准人签字无效。",
+    "报告涂改无效。",
+    "对检验报告若有异议，请以书面形式通知本检验中心总师室受理。",
+    "送样检验仅对样品负责。",
+    "委托方（客户）对样品及提供的数据和信息的真实性承担责任。",
+    "报告中未注资质认定标志时，仅供委托方（客户）内部使用，不具有对社会的证明作用。",
+)
+
+FIXED_NOTICES_EN: tuple[str, ...] = (
+    "The report is invalid without the Special Seal for Inspection and Testing or the Special Seal for Test.",
+    "The report shall not be partially reproduced without the approval of this inspection center. "
+    "Copies without the Special Seal for Inspection and Testing or the Special Seal for Test re-affixed are invalid.",
+    "The report is invalid without the signatures of the main tester, reviewer and approver.",
+    "The report is invalid if altered.",
+    "Any objection to the report shall be submitted in writing to the Chief Engineer Office of this inspection center.",
+    "Sample inspection is only responsible for the samples submitted.",
+    "The client is responsible for the authenticity of the samples and of the data and information provided.",
+)
+
+_NOTICE_HEADS_EN = frozenset({
+    "notice", "notices", "note", "notes", "precaution", "precautions", "importantnote",
+    "importantnotice", "importantnotes"})
+_NOTICE_END_ZH = ("检验单位地址电话", "委托单位地址电话")
+_NOTICE_END_EN = re.compile(r"^(address|tel|telephone|postcode|fax)")
+_NOTICE_ITEM_RE = re.compile(
+    r"^\s*(?:[（(]\s*(\d{1,2})\s*[）)]|(\d{1,2})\s*[.．、)）])\s*(\S.*)$")
+
+
+@dataclass(frozen=True)
+class FixedContentResult:
+    status: str = "skip"  # pass | fail | skip
+    message: str = ""
+    evidence: str = ""
+    suggestion: str = ""
+
+
+def _normalize_notice(text: str) -> str:
+    """Compare notice wording ignoring width, quotes, whitespace and end punctuation."""
+    text = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    text = text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    return re.sub(r"\s+", "", text).rstrip(".。;；,，")
+
+
+def _fixed_notice_items(paragraphs: Iterable[str]) -> tuple[str, list[str], list[int]] | None:
+    """Return (language, item texts, item numbers) for the first notice heading."""
+    lines = [str(line or "") for line in paragraphs or []]
+    fallback: tuple[str, list[str], list[int]] | None = None
+    for index, line in enumerate(lines):
+        compact = re.sub(r"\s+", "", line).rstrip(":：")
+        if compact == "注意事项":
+            language = "zh"
+        elif compact.casefold() in _NOTICE_HEADS_EN:
+            language = "en"
+        else:
+            continue
+        texts: list[str] = []
+        numbers: list[int] = []
+        for follow in lines[index + 1:index + 31]:
+            plain = re.sub(r"\s+", "", follow)
+            if any(marker in plain for marker in _NOTICE_END_ZH):
+                break
+            if _NOTICE_END_EN.match(plain.casefold()):
+                break
+            match = _NOTICE_ITEM_RE.match(follow)
+            if match:
+                numbers.append(int(match.group(1) or match.group(2)))
+                texts.append(match.group(3).strip())
+        if texts:
+            return language, texts, numbers
+        if fallback is None:
+            fallback = (language, texts, numbers)
+    return fallback
+
+
+def check_fixed_content(
+    paragraphs: Iterable[str],
+    expected_zh: Iterable[str] = FIXED_NOTICES_ZH,
+    expected_en: Iterable[str] = FIXED_NOTICES_EN,
+) -> FixedContentResult:
+    """Compare the notice block with the fixed text, item by item (R28)."""
+    found = _fixed_notice_items(paragraphs)
+    if found is None:
+        return FixedContentResult(message="未识别到注意事项段落（中文「注意事项」/英文 NOTICE），不判定")
+    language, actual, numbers = found
+    expected = [str(item) for item in (expected_zh if language == "zh" else expected_en)]
+    label = "中文" if language == "zh" else "英文"
+    normalized_expected = [_normalize_notice(item) for item in expected]
+    normalized_actual = [_normalize_notice(item) for item in actual]
+    matched: dict[int, int] = {}
+    for actual_index, text in enumerate(normalized_actual):
+        if text in normalized_expected:
+            matched.setdefault(normalized_expected.index(text), actual_index)
+    matched_actual = set(matched.values())
+
+    missing, order, wording, extra = [], [], [], []
+    if numbers != list(range(1, len(numbers) + 1)):
+        order.append("编号顺序错误：实际 " + "、".join(map(str, numbers))
+                     + f"，应为 1..{len(numbers)}")
+    previous = -1
+    for expected_index, actual_index in sorted(matched.items(), key=lambda pair: pair[1]):
+        if expected_index < previous:
+            order.append(f"第 {numbers[actual_index]} 条顺序错误：该条应排在第 {expected_index + 1} 位")
+        previous = max(previous, expected_index)
+    explained: set[int] = set()
+    for actual_index, text in enumerate(normalized_actual):
+        if actual_index in matched_actual:
+            continue
+        if actual_index < len(expected) and actual_index not in matched:
+            wording.append(f"第 {numbers[actual_index]} 条措辞不符：应为「{expected[actual_index]}」，"
+                           f"实际「{actual[actual_index]}」")
+            explained.add(actual_index)
+        else:
+            extra.append(f"第 {numbers[actual_index]} 条为多余内容：「{actual[actual_index]}」")
+    for expected_index, text in enumerate(expected):
+        if expected_index not in matched and expected_index not in explained:
+            missing.append(f"缺第 {expected_index + 1} 条：「{text}」")
+
+    issues = missing + order + wording + extra
+    evidence = (f"语言={language}; 应有={len(expected)}; 实际={len(actual)}; 缺={len(missing)}; "
+                f"顺序={len(order)}; 措辞={len(wording)}; 多余={len(extra)}")
+    if issues:
+        return FixedContentResult(
+            status="fail", message="；".join(issues), evidence=evidence,
+            suggestion=f"按模板固定注意事项逐条补齐/调整顺序与措辞（{label} {len(expected)} 条），不要自行改写",
+        )
+    return FixedContentResult(
+        status="pass", message=f"{label}固定注意事项 {len(expected)} 条逐条一致", evidence=evidence)
