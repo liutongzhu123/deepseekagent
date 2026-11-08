@@ -4,6 +4,7 @@
 口径（刻意保守）：
   done    — 至少一个 done 任务覆盖
   doing   — 只有 doing 任务覆盖（在做，但还没完成）
+  waiting — 卡在客户数据/外部依赖上，不是我们能推进的
   todo    — 只有 todo/blocked 任务覆盖，或无人覆盖
 
 用法：
@@ -38,11 +39,11 @@ def coverage_map(backlog: dict) -> dict[str, str]:
 
     同一需求被多个任务覆盖时取最好的状态（done > doing > todo）。
     """
-    rank = {"done": 2, "doing": 1, "todo": 0}
+    rank = {"done": 3, "doing": 2, "waiting": 1, "todo": 0}
     status: dict[str, str] = {}
     for task in backlog.get("tasks") or []:
         state = str(task.get("status") or "todo")
-        # blocked 视为 todo：阻塞不等于在做
+        # blocked 视为 todo：阻塞不等于在做；waiting 单独统计（等外部依赖）
         if state == "blocked":
             state = "todo"
         for req in task.get("covers") or []:
@@ -60,13 +61,13 @@ def main() -> int:
     requirements, backlog = load()
     status = coverage_map(backlog)
 
-    totals = {"done": 0, "doing": 0, "todo": 0}
-    print(f"{'领域':<18}{'条目':>6}{'完成':>6}{'进行中':>7}{'未开始':>7}{'完成率':>8}")
-    print("-" * 56)
+    totals = {"done": 0, "doing": 0, "waiting": 0, "todo": 0}
+    print(f"{'领域':<18}{'条目':>6}{'完成':>6}{'进行中':>7}{'等外部':>7}{'未开始':>7}{'完成率':>8}")
+    print("-" * 64)
 
     uncovered: list[tuple[str, str, str]] = []
     for area in requirements["areas"]:
-        counts = {"done": 0, "doing": 0, "todo": 0}
+        counts = {"done": 0, "doing": 0, "waiting": 0, "todo": 0}
         for module in area["modules"]:
             for item in module["items"]:
                 state = status.get(item["id"], "todo")
@@ -77,12 +78,14 @@ def main() -> int:
         rate = counts["done"] / total * 100 if total else 0.0
         for key in totals:
             totals[key] += counts[key]
-        print(f"{area['name']:<18}{total:>6}{counts['done']:>6}{counts['doing']:>7}{counts['todo']:>7}{rate:>7.1f}%")
+        print(f"{area['name']:<18}{total:>6}{counts['done']:>6}{counts['doing']:>7}"
+              f"{counts['waiting']:>7}{counts['todo']:>7}{rate:>7.1f}%")
 
     total = sum(totals.values())
     rate = totals["done"] / total * 100 if total else 0.0
-    print("-" * 56)
-    print(f"{'合计':<18}{total:>6}{totals['done']:>6}{totals['doing']:>7}{totals['todo']:>7}{rate:>7.1f}%")
+    print("-" * 64)
+    print(f"{'合计':<18}{total:>6}{totals['done']:>6}{totals['doing']:>7}"
+          f"{totals['waiting']:>7}{totals['todo']:>7}{rate:>7.1f}%")
 
     blocked = [t for t in backlog.get("tasks") or [] if t.get("status") == "blocked"]
     if blocked:
