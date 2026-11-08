@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""Supervisor 失败路径测试（对应 bin/supervisor.py 里的 F1–F10）。
+
+这些用例的存在理由很具体：2026-11-08 的 queued 漏洞（F1）是上线后才被用户
+发现的。凡是"判定要不要派单"的逻辑，都必须有一条测试对应它的反面情况。
+
+跑法：python3 -m pytest tests/test_supervisor.py -q
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+TZ = timezone(timedelta(hours=8))
+
+
+def load_supervisor():
+    spec = importlib.util.spec_from_file_location("supervisor", ROOT / "bin" / "supervisor.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+sup = load_supervisor()
+
+
+def backlog(tasks):
+    return {"tasks": tasks}
+
+
+def ticket(title, state="open"):
+    return {"title": title, "state": state}
+
+
+# ---------- F1：worker 正在启动时不能再派 ----------
+
+def test_f1_no_dispatch_when_running_or_queued(monkeypatch):
+    """running=0 但 queued=1 时，必须判定为"忙"，否则会并行改同一文件。"""
+    monkeypatch.setattr(sup, "api_state", lambda: {"load": {"running": 0, "queued": 1}})
+    monkeypatch.setattr(sup, "api_tickets", lambda: [])
+    monkeypatch.setattr(sup, "pull_repo", lambda: True)
+    monkeypatch.setattr(sup, "load_yaml", lambda _p: backlog([
+        {"id": "T1", "title": "某任务", "status": "todo", "deps": []},
+    ]))
+    sent = []
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: d)
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+
+    sup.run(dry_run=True)
+    assert sent == [], "queued>0 时不应该派单"
+
+
+# ---------- 派单条件 ----------
+
+def test_dispatch_only_when_idle(monkeypatch):
+    monkeypatch.setattr(sup, "api_state", lambda: {"load": {"running": 0, "queued": 0}})
+    monkeypatch.setattr(sup, "api_tickets", lambda: [])
+    monkeypatch.setattr(sup, "pull_repo", lambda: True)
+    monkeypatch.setattr(sup, "load_yaml", lambda _p: backlog([
+        {"id": "T1", "title": "某任务", "status": "todo", "deps": []},
+    ]))
+    sent = []
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: d)
+    monkeypatch.setattr(sup, "write_json", lambda _p, _d: None)
+    monkeypatch.setattr(sup, "handle_decisions", lambda _dry: None)
+
+    sup.run(dry_run=True)
+    assert len(sent) == 1 and "T1" in sent[0]
+
+
+def test_deps_block_dispatch():
+    """A 依赖 B：B 没完成时不能派 A，但 B 自己可以派。"""
+    ng = backlog([
+        {"id": "A", "status": "todo", "deps": ["B"]},
+        {"id": "B", "status": "todo", "deps": []},
+    ])
+    task, _ = sup.next_task(ng, busy=set(), dispatched={})
+    assert task is not None and task["id"] == "B"
+
+
+def test_deps_all_done_unblocks():
+    ng = backlog([
+        {"id": "A", "status": "todo", "deps": ["B"]},
+        {"id": "B", "status": "done", "deps": []},
+    ])
+    task, _ = sup.next_task(ng, busy=set(), dispatched={})
+    assert task is not None and task["id"] == "A"
+
+
+def test_deps_satisfied_dispatch():
+    ng = backlog([
+        {"id": "A", "status": "todo", "deps": ["B"]},
+        {"id": "B", "status": "todo", "deps": []},
+    ])
+    task, _ = sup.next_task(ng, busy=set(), dispatched={})
+    assert task is None or task["id"] == "B"
+
+
+# ---------- F2/F9：重派与上限 ----------
+
+def test_recent_dispatch_waits():
+    """刚派过、还在等待窗口内 → 不再派。"""
+    recent = (datetime.now(TZ) - timedelta(seconds=60)).isoformat(timespec="seconds")
+    ng = backlog([{"id": "T1", "status": "todo", "deps": []}])
+    task, _ = sup.next_task(ng, busy=set(), dispatched={"T1": {"attempts": 1, "last_at": recent}})
+    assert task is None
+
+
+def test_stale_dispatch_retries():
+    """超过等待窗口且未达上限 → 允许重派。"""
+    old = (datetime.now(TZ) - timedelta(seconds=sup.REDISPATCH_SECONDS + 60)).isoformat(timespec="seconds")
+    ng = backlog([{"id": "T1", "status": "todo", "deps": []}])
+    task, _ = sup.next_task(ng, busy=set(), dispatched={"T1": {"attempts": 1, "last_at": old}})
+    assert task is not None
+
+
+def test_max_attempts_stops():
+    """达到尝试上限 → 不再重派（交给告警）。"""
+    old = (datetime.now(TZ) - timedelta(days=1)).isoformat(timespec="seconds")
+    ng = backlog([{"id": "T1", "status": "todo", "deps": []}])
+    task, _ = sup.next_task(ng, busy=set(), dispatched={"T1": {"attempts": sup.MAX_ATTEMPTS, "last_at": old}})
+    assert task is None
+
+
+# ---------- 在跑的任务不重复派 ----------
+
+def test_in_flight_task_not_dispatched():
+    ng = backlog([{"id": "A_LOWCONF", "status": "todo", "deps": []}])
+    busy = sup.in_flight([ticket("A_LOWCONF：规则生成只用高置信限值")], {"A_LOWCONF"})
+    task, _ = sup.next_task(ng, busy=busy, dispatched={})
+    assert task is None
+
+
+def test_closed_ticket_is_not_in_flight():
+    busy = sup.in_flight([ticket("A_LOWCONF：xxx", state="closed")], {"A_LOWCONF"})
+    assert busy == set()
+
+
+# ---------- 任务 id 匹配不能误伤 ----------
+
+def test_task_id_boundary():
+    ids = {"A1", "A10", "B2"}
+    assert sup.contains_task("A10 标准分类", ids) == "A10"
+    assert sup.contains_task("A1 空白页", ids) == "A1"
+    assert sup.contains_task("A100 不存在的任务", ids) is None
+
+
+def test_task_id_must_be_leading():
+    """标题中间提到任务 id 不算（踩过的坑："解析覆盖率审计…（B5 暂停）" 被认成 B5）。"""
+    ids = {"B5", "B4"}
+    assert sup.contains_task("解析覆盖率审计：逐份统计（B5 暂停）", ids) is None
+    assert sup.contains_task("多版式标准解析健壮性：修复（B4 暂停）", ids) is None
+    assert sup.contains_task("B5 数值修约规则", ids) == "B5"
+    assert sup.contains_task("B5：数值修约规则", ids) == "B5"
+
+
+# ---------- F4：合并提交反查完成 ----------
+
+def test_reconcile_marks_done(monkeypatch):
+    monkeypatch.setattr(sup, "closed_completed", lambda: [
+        {"title": "C1 表格脚注单位关联", "pr": 130},
+    ])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: pr == 130)
+    ng = backlog([
+        {"id": "C1", "status": "doing", "title": "脚注单位"},
+        {"id": "B7", "status": "todo", "title": "分类"},
+    ])
+    changed = sup.reconcile(ng)
+    assert "C1" in changed
+    assert ng["tasks"][0]["status"] == "done"
+    assert ng["tasks"][1]["status"] == "todo"
+
+
+def test_reconcile_ignores_done(monkeypatch):
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "C1 已完成", "pr": 130}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    ng = backlog([{"id": "C1", "status": "done"}])
+    assert sup.reconcile(ng) == []
+
+
+def test_reconcile_needs_merge_not_just_completion(monkeypatch):
+    """工单说完成但 PR 没合并 → 不能标 done（否则台账会虚高）。"""
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "C1 表格脚注单位关联", "pr": 999}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: False)
+    ng = backlog([{"id": "C1", "status": "doing"}])
+    assert sup.reconcile(ng) == []
+    assert ng["tasks"][0]["status"] == "doing"
+
+
+def test_reconcile_without_pr_number(monkeypatch):
+    """工单完成但报告里没写 PR 号 → 不动台账，等人看。"""
+    monkeypatch.setattr(sup, "closed_completed", lambda: [{"title": "C1 xxx", "pr": None}])
+    monkeypatch.setattr(sup, "merge_commit_for", lambda pr: True)
+    ng = backlog([{"id": "C1", "status": "doing"}])
+    assert sup.reconcile(ng) == []
+
+
+# ---------- F5：台账拉取失败不派单 ----------
+
+def test_no_dispatch_when_pull_fails(monkeypatch):
+    monkeypatch.setattr(sup, "api_state", lambda: {"load": {"running": 0, "queued": 0}})
+    monkeypatch.setattr(sup, "pull_repo", lambda: False)
+    monkeypatch.setattr(sup, "load_yaml", lambda _p: backlog([
+        {"id": "T1", "status": "todo", "deps": []},
+    ]))
+    sent = []
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: d)
+    monkeypatch.setattr(sup, "handle_decisions", lambda _dry: None)
+    sup.run(dry_run=True)
+    assert sent == []
+
+
+# ---------- F6：预算超限 ----------
+
+def test_no_dispatch_when_budget_exceeded(monkeypatch):
+    monkeypatch.setattr(sup, "read_json", lambda p, d: {"exceeded": True} if "budget" in str(p) else d)
+    monkeypatch.setattr(sup, "api_state", lambda: {"load": {"running": 0, "queued": 0}})
+    sent = []
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: sent.append(text) or True)
+    sup.run(dry_run=True)
+    assert sent == []
+
+
+# ---------- F7：决策恢复失败要计数 ----------
+
+def test_decision_retry_counts_and_alert(monkeypatch):
+    store = {"decisions": [{"id": "DEC-001", "answer": "C", "options": {"C": "先修"},
+                            "ticket": "t", "question": "q", "attempts": sup.MAX_ATTEMPTS - 1}]}
+    written = {}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, data: written.update(data))
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: False)
+    alerts = []
+    monkeypatch.setattr(sup, "send_alert", lambda t, b, dry=False: alerts.append(t) or True)
+
+    sup.handle_decisions(dry_run=False)
+    assert store["decisions"][0]["attempts"] == sup.MAX_ATTEMPTS
+    assert alerts, "达到上限应告警"
+
+
+def test_decision_success_marks_resumed(monkeypatch):
+    store = {"decisions": [{"id": "DEC-002", "answer": "A", "options": {"A": "隔离"},
+                            "ticket": "t", "question": "q"}]}
+    monkeypatch.setattr(sup, "read_json", lambda _p, d: store)
+    monkeypatch.setattr(sup, "write_json", lambda _p, data: None)
+    monkeypatch.setattr(sup, "send_as_user", lambda text, dry=False: True)
+    monkeypatch.setattr(sup, "send_alert", lambda *a, **k: True)
+
+    sup.handle_decisions(dry_run=False)
+    assert store["decisions"][0]["resumed"] is True
+
+
+# ---------- 派单文本包含关键约束 ----------
+
+def test_dispatch_message_contains_acceptance_and_protocol():
+    text = sup.dispatch_message({
+        "id": "B7", "title": "标准类型分类", "covers": ["SP-10.1"],
+        "files": ["p0/app/x.py"], "acceptance": ["误判率 <10%"], "note": "备注",
+    }, attempt=2)
+    assert "B7" in text and "SP-10.1" in text and "误判率 <10%" in text
+    assert "第 2 次派发" in text
+    assert "10.3c" in text, "派单必须带上『超阈值继续做下一件』的协议约束"
