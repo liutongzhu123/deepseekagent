@@ -425,11 +425,13 @@ tasks:
 
   - id: CS_RULECFG
     title: 规则配置中心
-    status: todo
+    status: done
+    pr: 158
     size: M
     covers: [CS-7.1, CS-7.2]
     acceptance: ["各业务部门可自助维护规则"]
-    files: [p0/app/admin_config.py]
+    files: [p0/app/admin_config.py, p0/app/auth.py, p0/app/main.py, p0/static/index.html, p0/static/ui.js]
+    note: 业务规则（梯度折扣/加急/中介/黑白名单）配置、校验与分区分权完成；认可清单与基础报价库沿用 CS_BASE 接口，规则消费待客户接口
 
   - id: CS_INTEG
     title: 系统对接（企查查/CRM/微信/邮箱）
