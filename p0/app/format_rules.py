@@ -1116,8 +1116,8 @@ def r27_raw_record_version(data: ReportData):
 # 字段；不读正文、不做语义推理，避免把合法组合误报。
 # Failure branches (each covered in p0/tests/test_product_name.py):
 # F1 样品名称为空 -> skip（空缺项由 R14 报出，不重复）。
-# F2 样品名称是占位符/不适用值（XXXXX、XX、___、待填、—、/ 等）-> skip（R14 负责）。
-# F3 样品名称是纯编号/代号（001、A-001、SN2024、2024-01、001号样品）-> fail。
+# F2 样品名称是占位符/不适用值（XXXXX、XX、___、待填、—/–/－ 等横线）-> skip（R14 负责）。
+# F3 样品名称是纯编号/代号（001、A-001、SN2024、2024-01、第001号样品、一号样品）-> fail。
 # F4 样品名称只由检测项目词构成（气味、拉伸强度、外观检查、门板尺寸）-> fail：
 #    与检验项目相同 -> “与检验项目相同”；与检验项目不同 -> “明显不符”。
 # F5 样品名称只是通用词（样品/产品/零部件/总成/材料）-> fail，无法判定种类。
@@ -1140,7 +1140,7 @@ _TEST_ITEM_TERMS = tuple(sorted((
 _NAME_WRAPPERS = (
     "试验件", "样品", "试样", "样件", "检测", "测试", "试验", "检验",
     "项目", "方法", "等级", "结果", "要求", "报告", "记录", "名称",
-    "检查", "编号", "号", "值",
+    "检查", "编号", "第", "号", "样", "值",
 )
 _GENERIC_NAMES = {
     "样品", "产品", "试样", "样件", "试验件", "零部件", "零件", "部件",
@@ -1153,6 +1153,8 @@ _NAME_PLACEHOLDERS = {
 }
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _PURE_ID_RE = re.compile(r"^(?=.*\d)[a-z0-9]+$")
+# 横线各写法（–/—/－/‒/―/−/‐/‑/⸺）都表示“不适用”，先归一，避免同一语义落进不同分支。
+_DASH_RE = re.compile(r"[‐‑‒–—―−⸺－]")
 _NAME_SEPARATORS_RE = re.compile(r"[^0-9a-z\u3400-\u9fff]+")
 
 
@@ -1194,8 +1196,9 @@ def r29_product_name(data: ReportData):
             "R29", title, "skip", "info", "未识别到样品名称字段，无法判定产品种类（空缺项由 R14 报出）",
             evidence, section="样品名称", cell="样品名称",
         )
-    if (compact in _NAME_PLACEHOLDERS or re.fullmatch(r"x+", compact)
-            or re.fullmatch(r"[_＿.·…]+", compact)):
+    if (compact in _NAME_PLACEHOLDERS or _DASH_RE.sub("-", compact) in _NAME_PLACEHOLDERS
+            or re.fullmatch(r"-+", _DASH_RE.sub("-", compact))
+            or re.fullmatch(r"x+", compact) or re.fullmatch(r"[_＿.·…]+", compact)):
         return _finding(
             "R29", title, "skip", "info", "样品名称为占位符/不适用值，无法判定产品种类（占位符由 R14 报出）",
             evidence, section="样品名称", cell=name_text[:40],
@@ -1225,7 +1228,9 @@ def r29_product_name(data: ReportData):
             f"样品名称「{name_text}」仅含通用词，无法判定产品种类",
             evidence, suggestion, section="样品名称", cell=name_text[:40],
         )
-    if not _CJK_RE.search(residual) and _PURE_ID_RE.match(residual) and not re.search(r"[a-z]{4,}", residual):
+    if ((not _CJK_RE.search(residual) and _PURE_ID_RE.match(residual)
+            and not re.search(r"[a-z]{4,}", residual))
+            or re.fullmatch(r"[一二三四五六七八九十百千万零〇两]+", residual)):
         return _finding(
             "R29", title, "fail", "medium",
             f"样品名称「{name_text}」为纯编号/代号，无法判定产品种类",
