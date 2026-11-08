@@ -24,6 +24,8 @@
   F27 台账回写被"agent 忙就返回"挡住 → 记账与催办都必须在负载判断之前
   F28 任务标了 doing 却没有工单也没有 PR → 永远不会被自动收尾（INFRA_BACKLOG 卡了一天）
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
+  F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
+      → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
   F30 漂移检测只覆盖目标机的 p0/，漏掉服务器自己的 bin/ → Supervisor 自身代码也会与 main 分叉
       机制：每轮把 bin/*.py 与 origin/main 比对并自动同步，**但同步前先做语法检查**，
       防止把写坏的文件同步上来把自己跑挂
@@ -346,7 +348,9 @@ def reconcile(backlog: dict) -> list[str]:
     merged: dict[int, bool] = {}
     changed = []
     for task in backlog.get("tasks") or []:
-        if str(task.get("status")) == "done":
+        status = str(task.get("status"))
+        # F41：partial/waiting 是人工判断，自动推断不许覆盖
+        if status in ("done", "partial", "waiting"):
             continue
         tid = str(task.get("id"))
         for ticket in tickets:
