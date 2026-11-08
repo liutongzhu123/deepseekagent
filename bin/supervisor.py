@@ -19,6 +19,9 @@
   F14 agent 要人拍板时不登记 → 扫 agent 消息里的 `[DEC-00x]` 区块，自动建决策（幂等）
   F15 已合并的 PR 被反复催办 → 以 GitHub 的 PR state 为准，不信可能过期的本地 git log
   F16 催办没有冷却，每 2 分钟刷一次 → `_last_nag_at` 必须持久化（曾被自己的写入覆盖掉）
+  F25 reconcile 只改了内存里的台账，没写回文件 → git add 永远 "nothing to commit"
+  F26 提交时没配 git 身份 → detached HEAD 上 commit 会因 Author identity unknown 失败
+  F27 台账回写被"agent 忙就返回"挡住 → 记账与催办都必须在负载判断之前
       （2026-11-08 真实发生：#137/#138 交付后被丢下，agent 直接去做了 B10）
 
 用法：
@@ -309,10 +312,12 @@ def reconcile(backlog: dict) -> list[str]:
 
 
 def commit_backlog(message: str) -> bool:
+    """F26：显式带 git 身份；detached HEAD 上用 HEAD:main 推送。"""
+    identity = ["-c", "user.name=supervisor", "-c", "user.email=supervisor@local"]
     try:
         if git(["add", "docs/BACKLOG.yaml"]).returncode != 0:
             return False
-        if git(["commit", "-m", message]).returncode != 0:
+        if git(identity + ["commit", "-m", message]).returncode != 0:
             return False
         return git(["push", "origin", "HEAD:main"], timeout=120).returncode == 0
     except Exception:
@@ -420,6 +425,47 @@ def nag_pending(waiting: dict[str, int], dry_run: bool) -> None:
             tracked["_last_nag_at"] = now_iso
             write_json(AWAITING_STATE, tracked)
         log(f"{'[dry-run] ' if dry_run else ''}催办合并：{', '.join(f'{t}#{p}' for t, p in waiting.items())}")
+
+
+def set_task_status(path: Path, task_id: str, status: str, pr: int | None = None) -> bool:
+    """把某个任务的状态**按行**写回 YAML，保留注释与缩进（F25）。
+
+    不用 yaml.safe_dump：那会把整个文件的注释和格式全部冲掉，diff 无法审阅。
+    """
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except Exception:
+        return False
+
+    target = f"  - id: {task_id}"
+    start = next((i for i, line in enumerate(lines) if line.rstrip("\n") == target), None)
+    if start is None:
+        return False
+
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("  - id: ") or (lines[i].strip() and not lines[i].startswith(("    ", "\n"))):
+            end = i
+            break
+
+    changed = False
+    for i in range(start, end):
+        stripped = lines[i].strip()
+        if stripped.startswith("status:"):
+            lines[i] = f"    status: {status}\n"
+            changed = True
+            break
+    if not changed:
+        lines.insert(start + 1, f"    status: {status}\n")
+        end += 1
+    if pr is not None:
+        if not any(lines[i].strip().startswith("pr:") for i in range(start, end)):
+            lines.insert(start + 2, f"    pr: {pr}\n")
+    try:
+        path.write_text("".join(lines), encoding="utf-8")
+        return True
+    except Exception:
+        return False
 
 
 def next_task(backlog: dict, busy: set[str], dispatched: dict,
@@ -668,25 +714,34 @@ def run(dry_run: bool) -> int:
     if known_ids:
         nag_pending(awaiting_merge(known_ids), dry_run)
 
-    load = (api_state().get("load") or {})
-    if int(load.get("running") or 0) > 0 or int(load.get("queued") or 0) > 0:  # F1
-        return 0
-
+    # F27：记账与催办都不该依赖 agent 忙不忙——agent 忙着做新任务时，台账最需要更新
     pulled = pull_repo()
     backlog = load_yaml(REPO / "docs" / "BACKLOG.yaml")
     if not backlog:
         log("台账读取失败，跳过本轮")
         return 0
-    if not pulled:  # F5
+
+    changed = reconcile(backlog)                       # 改的是内存
+    if changed:
+        written = []
+        by_id = {str(t.get("id")): t for t in backlog.get("tasks") or []}
+        for tid in changed:
+            task = by_id.get(tid) or {}
+            if set_task_status(REPO / "docs" / "BACKLOG.yaml", tid, "done", task.get("pr")):
+                written.append(tid)                    # F25：写回文件
+        if dry_run:
+            log(f"[dry-run] 将更新台账：{', '.join(changed)}")
+        elif written and commit_backlog(f"chore(backlog): 自动标记完成 {', '.join(written)}"):
+            log(f"台账自动更新：{', '.join(written)} 标为 done")
+        else:
+            log(f"台账写回/提交失败：{', '.join(changed)}")
+
+    load = (api_state().get("load") or {})
+    if int(load.get("running") or 0) > 0 or int(load.get("queued") or 0) > 0:  # F1
+        return 0
+    if not pulled:  # F5：台账没拉新就不派单（但上面的记账已经做完）
         log("台账拉取失败，用本地缓存，本轮不派新任务")
         return 0
-
-    changed = reconcile(backlog)
-    if changed:
-        if not dry_run and commit_backlog(f"chore(backlog): 自动标记完成 {', '.join(changed)}"):
-            log(f"台账自动更新：{', '.join(changed)} 标为 done")
-        else:
-            log(f"台账待更新（未提交）：{', '.join(changed)}")
 
     ids = task_ids(backlog)
     busy = in_flight(api_tickets(), ids)
