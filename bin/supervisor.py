@@ -26,6 +26,7 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F50 拒绝日志每 2 分钟重复刷（状态没变也记）→ 只在 PR 变化时记一次
   F48 reconcile 用「工单报告里的 PR」判断拒绝，不认 task.pr
       （2026-11-08：F45 把 task.pr 指向返工 PR #167，reconcile 仍盯着旧 PR #151）
       → 有 task.pr 时优先用它
@@ -338,6 +339,7 @@ def in_flight(tickets: list[dict], ids: set[str]) -> set[str]:
 
 
 VERIFY_STATE = STATE / "verify.json"
+REJECT_LOG_STATE = STATE / "reject_logged.json"
 
 
 def rejected_prs() -> set[int]:
@@ -444,7 +446,12 @@ def reconcile(backlog: dict) -> list[str]:
             if pr not in merged:
                 merged[pr] = merge_commit_for(pr)
             if pr in rejected:
-                log(f"任务 {tid} 的 PR #{pr} 验证未通过，保持 todo 待返工")
+                # F50：只在"这个任务的拒绝 PR 变了"时记一次，别每 2 分钟刷屏
+                seen = read_json(REJECT_LOG_STATE, {})
+                if str(seen.get(tid)) != str(pr):
+                    log(f"任务 {tid} 的 PR #{pr} 验证未通过，保持 todo 待返工")
+                    seen[tid] = pr
+                    write_json(REJECT_LOG_STATE, seen)
                 continue
             if merged[pr]:
                 task["status"] = "done"
