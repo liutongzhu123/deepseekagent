@@ -379,7 +379,8 @@ tasks:
 
   - id: CS_REG
     title: 客户注册与身份识别
-    status: todo
+    status: waiting
+    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
     size: L
     covers: [CS-2.1, CS-2.2, CS-2.3, CS-2.4, CS-2.5, CS-2.6]
     acceptance: ["注册审批可配置", "黑名单/白名单/竞业规则生效"]
@@ -387,7 +388,8 @@ tasks:
 
   - id: CS_QUOTE
     title: 报价管理（流程/规则/转人工）
-    status: todo
+    status: waiting
+    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
     size: L
     covers: [CS-3.1, CS-3.2, CS-3.3, CS-3.4, CS-3.5, CS-3.6]
     acceptance: ["小额全自动、大额拦截", "三类规则可配置", "转人工带上下文"]
@@ -395,7 +397,8 @@ tasks:
 
   - id: CS_AIQUOTE
     title: AI 辅助报价（大纲解析→报价 Excel）
-    status: todo
+    status: waiting
+    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
     size: L
     covers: [CS-4.1, CS-4.2]
     acceptance: ["大纲能解析出标准/项目", "输出 CRM 格式 Excel"]
@@ -403,7 +406,8 @@ tasks:
 
   - id: CS_ORDER
     title: 自助下单与委托审核
-    status: todo
+    status: waiting
+    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
     size: M
     covers: [CS-5.1, CS-5.2, CS-5.3]
     acceptance: ["委托单可配置", "注册信息自动带入"]
@@ -411,7 +415,8 @@ tasks:
 
   - id: CS_DESK
     title: 委托处置与对话管理
-    status: todo
+    status: waiting
+    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
     size: M
     covers: [CS-6.1, CS-6.2]
     acceptance: ["咨询记录可查可筛", "对话可存档转交"]
@@ -427,7 +432,8 @@ tasks:
 
   - id: CS_INTEG
     title: 系统对接（企查查/CRM/微信/邮箱）
-    status: todo
+    status: waiting
+    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
     size: L
     covers: [CS-8.1, CS-8.2, CS-8.3, CS-8.4]
     acceptance: ["四个对接可用", "失败可降级"]
