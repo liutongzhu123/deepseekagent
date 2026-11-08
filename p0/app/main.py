@@ -38,7 +38,7 @@ from . import crm, monitoring, quote_store, store, task_worker
 from . import feedback_store, oidc, report_store, report_writer, report_inputs, partial_rules, rule_dsl, semantic_audit, standard_parse, standard_qa, standard_store, weknora
 from . import visual_checks
 from . import xlsx_writer
-from .standard_extract import items_list
+from .standard_extract import items_list, samples as samples_extract
 from .store import tasks
 from .docx_parser import parse_docx
 from .rules import RecordInput, audit_report, rules_catalog, validate_records
@@ -1549,6 +1549,39 @@ def get_standard(standard_id: str, request: Request) -> dict:
         record.get("meta") or {}, record.get("items") or []
     )
     return payload
+
+
+def _load_sample_guide(standard_id: str, request: Request) -> tuple[dict, dict]:
+    """Load a standard and build its sample guide (also checks project access)."""
+    user = _require_permission(request, "standard:read")
+    try:
+        record = standard_store.load(standard_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="standard not found") from exc
+    _assert_project_access(user, record.get("meta", {}))
+    guide = samples_extract.build_sample_guide(
+        record.get("samples") or [], record.get("items") or []
+    )
+    return user, guide
+
+
+@app.get("/api/v1/standards/{standard_id}/sample-guide")
+def get_sample_guide(standard_id: str, request: Request) -> dict:
+    """Generate the sample-preparation guide from the parsed standard."""
+    _user, guide = _load_sample_guide(standard_id, request)
+    return {"standard_id": standard_id, "guide": guide}
+
+
+@app.post("/api/v1/standards/{standard_id}/sample-guide/validate")
+def validate_sample_guide(standard_id: str, payload: dict, request: Request) -> dict:
+    """Check commission-order sample info (``order`` object) against the guide."""
+    user, guide = _load_sample_guide(standard_id, request)
+    result = samples_extract.check_sample_order(guide, payload.get("order") or payload)
+    _audit_event(
+        request, user, "sample_guide_validated",
+        standard_id=standard_id, mismatches=len(result["mismatches"]),
+    )
+    return {"standard_id": standard_id, "guide": guide, **result}
 
 
 @app.patch("/api/v1/standards/{standard_id}")

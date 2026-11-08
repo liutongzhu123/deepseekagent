@@ -194,3 +194,164 @@ def apply_samples(items: list[dict], lines: list[tuple[str, int]]) -> tuple[list
         "sample_pretreatments": counts["pretreatment"],
     }
     return entries, summary
+
+
+# SP-8.2 sample-preparation guide + commission-order (委托单) cross-check.
+# Failure list (tests/test_sample_guide.py): unowned entries stay in
+# ``unassigned``; missing requirements are ``not_extracted``; a total order
+# quantity only fits one item; quantity/unit/size/pretreatment contradictions
+# are reported, missing order data never is.
+
+_KIND_ORDER = {"quantity": 0, "size": 1, "pretreatment": 2}
+_COUNT_UNITS = {"件", "个", "只", "支", "根", "片", "块", "份", "台"}
+_SET_UNITS = {"套", "组"}
+_DIM_TOKEN = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm|毫米)?\s*(?=[×xX*]|[（(，,。;；]|$)")
+_NO_PREP = re.compile(
+    r"^(?:无需|无须|不(?:需要|要求|用|作|做)|未(?:进行|做)?|免|无|没有)"
+    r"(?:任何|特殊)?(?:预处理|处理|状态调节)?[。；;，, ]*$"
+)
+
+_kind = lambda entry: _KIND_ORDER.get(entry.get("kind"), 9)
+
+
+def _step(entry: dict) -> str:
+    if entry.get("kind") == "quantity":
+        top = entry.get("value_max")
+        amount = f"{entry['value']}～{top}" if top not in (None, entry["value"]) else f"{entry['value']}"
+        return f"准备 {amount}{entry.get('unit') or ''}样品"
+    label = "试样尺寸：" if entry.get("kind") == "size" else "预处理："
+    return label + str(entry.get("text") or entry.get("raw") or "")
+
+
+def build_sample_guide(samples: list[dict], items: list[dict]) -> dict:
+    """Build a per-item preparation guide from document-level ``samples[]``."""
+    grouped: dict[str, list[dict]] = {}
+    unassigned: list[dict] = []
+    for entry in samples or []:
+        clause = str(entry.get("item_clause") or "").strip()
+        if clause:
+            grouped.setdefault(clause, []).append(entry)
+        else:
+            unassigned.append(entry)
+    guide = []
+    for item in items or []:
+        clause = str(item.get("clause") or "").strip()
+        requirements = sorted(grouped.pop(clause, []), key=_kind)
+        guide.append({
+            "item_clause": clause, "item_name": str(item.get("name") or item.get("item_name") or ""),
+            "requirements": requirements, "steps": [_step(entry) for entry in requirements],
+            "status": "ready" if requirements else "not_extracted",
+        })
+    # Requirements whose owning item was removed by a review edit must survive.
+    leftovers = unassigned + [entry for entries in grouped.values() for entry in entries]
+    leftovers.sort(key=_kind)
+    return {
+        "items": guide,
+        "unassigned": {"requirements": leftovers, "steps": [_step(entry) for entry in leftovers]},
+        "summary": {
+            "items": len(guide), "items_with_requirements": sum(1 for item in guide if item["requirements"]),
+            "requirements": len(samples or []), "unassigned_requirements": len(leftovers),
+        },
+    }
+
+
+def _qty(value) -> tuple[float | int | None, str]:
+    if value is None or isinstance(value, bool):
+        return None, ""
+    if isinstance(value, (int, float)):
+        return _num(value), ""
+    numbers = re.findall(r"\d+(?:\.\d+)?", str(value))
+    unit = re.search(_QTY_UNIT, str(value))
+    return (_num(numbers[0]) if len(numbers) == 1 else None), (unit.group(0) if unit else "")
+
+
+def _unit_ok(left: str, right: str) -> bool:
+    if not left or not right:
+        return True
+    group = lambda unit: "set" if unit in _SET_UNITS else "count" if unit in _COUNT_UNITS else unit
+    return group(left) == group(right)
+
+
+def _dims(text: str) -> list:
+    if not text or not re.search(r"(?:mm|毫米|[×xX*])", str(text)):
+        return []
+    return [_num(match.group(1)) for match in _DIM_TOKEN.finditer(str(text))]
+
+
+def _norm(value) -> str:
+    return re.sub(r"[\s（）()、，,。.;；:：\-—_]+", "", str(value or "")).lower()
+
+
+def _match(orders: list[dict], clause: str, name: str) -> dict | None:
+    for item in orders:
+        if clause and str(item.get("clause") or "").strip() == clause:
+            return item
+    wanted = _norm(name)
+    return next((item for item in orders if wanted and _norm(item.get("name")) == wanted), None)
+
+
+def _order_qty(order: dict, item: dict | None, item_count: int) -> tuple[float | int | None, str]:
+    if item is not None and item.get("quantity") is not None:
+        value, unit = _qty(item["quantity"])
+        return value, unit or str(item.get("unit") or "")
+    if item_count == 1 and order.get("quantity") is not None:
+        value, unit = _qty(order["quantity"])
+        return value, unit or str(order.get("unit") or "")
+    return None, ""
+
+
+def _order_size(order: dict, item: dict | None) -> tuple[str, list]:
+    for source in (item or {}, order):
+        for key in ("size", "model"):
+            text = str(source.get(key) or "").strip()
+            if _dims(text):
+                return text, _dims(text)
+    return "", []
+
+
+def _bad(code: str, item: dict, message: str) -> dict:
+    return {"code": code, "item_clause": item.get("item_clause", ""), "item_name": item.get("item_name", ""), "message": message}
+
+
+def check_sample_order(guide: dict, order: dict | None) -> dict:
+    """Report contradictions between the guide and commission-order samples.
+
+    Missing order fields are not mismatches; ``checked`` distinguishes a real
+    comparison from "not comparable because the order did not supply it".
+    """
+    order = order or {}
+    orders = [item for item in (order.get("items") or []) if isinstance(item, dict)]
+    items = [item for item in guide.get("items", []) if item.get("requirements")]
+    mismatches: list[dict] = []
+    checked = {"quantity": 0, "size": 0, "pretreatment": 0}
+    for item in items:
+        order_item = _match(orders, item["item_clause"], item["item_name"])
+        quantity = next((entry for entry in item["requirements"] if entry.get("kind") == "quantity" and entry.get("value") is not None), None)
+        if quantity is not None:
+            actual, actual_unit = _order_qty(order, order_item, len(items))
+            unit = str(quantity.get("unit") or "")
+            top = quantity.get("value_max")
+            expected = f"{quantity['value']}～{top}{unit}" if top not in (None, quantity["value"]) else f"{quantity['value']}{unit}"
+            if actual is not None and not _unit_ok(unit, actual_unit):
+                mismatches.append(_bad("unit_mismatch", item, f"委托单单位 {actual_unit or '空'} 与标准 {expected} 不一致"))
+            elif actual is not None:
+                checked["quantity"] += 1
+                if float(actual) < float(quantity["value"]):
+                    mismatches.append(_bad("quantity_short", item, f"委托单样品数量 {actual}{actual_unit} 少于标准要求 {expected}"))
+        sizes = [entry for entry in item["requirements"] if entry.get("kind") == "size"]
+        if sizes:
+            text, actual_dims = _order_size(order, order_item)
+            expected_dims = {dim for entry in sizes for dim in _dims(entry.get("text") or entry.get("raw") or "")}
+            if text and expected_dims - set(actual_dims):
+                checked["size"] += 1
+                expected = "、".join(str(entry.get("text") or entry.get("raw") or "") for entry in sizes)
+                mismatches.append(_bad("size_mismatch", item, f"委托单规格 {text} 缺少标准尺寸 {expected}"))
+            elif text and expected_dims:
+                checked["size"] += 1
+        pretreatment = next((entry for entry in item["requirements"] if entry.get("kind") == "pretreatment"), None)
+        text = str(order.get("pretreatment") or "").strip()
+        if pretreatment is not None and text and _NO_PREP.match(text):
+            checked["pretreatment"] += 1
+            expected = str(pretreatment.get("text") or pretreatment.get("raw") or "")
+            mismatches.append(_bad("pretreatment_missing", item, f"委托单声明无需预处理，但标准要求：{expected}"))
+    return {"ok": not mismatches, "mismatches": mismatches, "checked": checked}
