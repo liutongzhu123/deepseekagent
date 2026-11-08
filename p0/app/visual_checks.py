@@ -226,7 +226,22 @@ _STAGE_RE = re.compile(r"试验\s*([前中后])")
 _STAGE_NAMES = {"前": "before", "中": "middle", "后": "after"}
 # Step 2: body narrative mentions photos but is not a caption.
 _NARRATIVE_PATTERN_RE = re.compile(r"(?:附照片\s*\d+\s*张|详见照片\s*\d+|见照片\s*\d+\s*张)")
-_NARRATIVE_SUFFIX_RE = re.compile(r"照片\s*\d+\s*(?:张|页|所示|为)")
+_NARRATIVE_SUFFIX_RE = re.compile(r"照片\s*\d+\s*(?:张|幅|页|组|所示|为)")
+# A clause, not a series label: prose before the photo word, or report wording
+# after it.  Both are checked *around* 照片N, so a caption may still end with a
+# description (``外包装照片2，试验前完整外观检查，无破损。``).
+_NARRATIVE_PREFIX_RE = re.compile(
+    r"(?:随报告|随附|附上|共附|合计|详见|参见|另见|见附|拍摄|记录了?|采集|"
+    r"引用|展示|说明|显示|我们|本文|本报告)"
+)
+_PRONOUN_PREFIX_RE = re.compile(r"^(?:该|这|那|其|此|上述|本次)")
+_NARRATIVE_TAIL_RE = re.compile(
+    r"(?:附在|位于|放在|置于|另见|参见|详见|见附|正文|如下|供参考|"
+    r"可以看到|可见|报告末尾|报告正文|报告中)"
+)
+_SENTENCE_END = "。！？；;"
+# A series label is a short noun phrase; a long leading clause is prose.
+_MAX_SERIES_LEN = 12
 _HEADING_RE = re.compile(
     r"^(?:附\s*录|附\s*件|[一二三四五六七八九十]+[、.]|\d+(?:\.\d+)*[、.．](?!\d)|[（(]\d+[)）]"
     r"|(?:分项|项目)\s*[一二三四五六七八九十\d]+)"
@@ -241,15 +256,29 @@ def _normalise_line(text: str) -> str:
 
 
 def _is_photo_narrative(text: str) -> bool:
-    """True for a prose sentence that merely mentions photos."""
+    """True for a prose sentence that merely mentions photos.
+
+    Length alone is not evidence: a standard caption can be long because it
+    carries a description.  Prose is recognised by wording around 照片N, or by
+    a long sentence whose text before 照片N is a clause rather than a series
+    label (``试验过程中拍摄了多张照片1，…``).
+    """
     stripped = (text or "").strip()
     if not stripped:
         return False
-    if stripped.endswith("。") and len(stripped) > 20:
-        return True
     if _NARRATIVE_PATTERN_RE.search(stripped):
         return True
-    return bool(_NARRATIVE_SUFFIX_RE.search(stripped))
+    if _NARRATIVE_SUFFIX_RE.search(stripped):
+        return True
+    match = _PHOTO_NUMBER_RE.search(stripped)
+    prefix = stripped[:match.start()] if match else stripped
+    if _NARRATIVE_PREFIX_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
+        return True
+    if match and _NARRATIVE_TAIL_RE.search(stripped[match.end():]):
+        return True
+    if stripped.endswith(_SENTENCE_END) and len(stripped) > 20:
+        return not _is_series_label(prefix)
+    return False
 
 
 def _normalise(text: str) -> str:
@@ -278,6 +307,26 @@ def _split_stage(prefix: str) -> tuple[str, str]:
         stages.append(_STAGE_NAMES[bare])
         remainder = ""
     return (stages[0] if stages else ""), remainder
+
+
+def _is_series_label(prefix: str) -> bool:
+    """True when the text before 照片N is a short series label, not a clause.
+
+    Empty is allowed: the group is inherited from the nearest heading.  A clause
+    carries sentence punctuation, narrative wording or a long leading phrase,
+    so the line is prose even when it ends with ``。``.
+    """
+    _, remainder = _split_stage(prefix)
+    label = _normalise(remainder)
+    if not label:
+        return True
+    if len(label) > _MAX_SERIES_LEN:
+        return False
+    if re.search(r"[，,。；;！？!?、]", prefix):
+        return False
+    if _NARRATIVE_PREFIX_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
+        return False
+    return True
 
 
 def _annotation_after(text: str, start: int) -> tuple[str, int]:
