@@ -227,18 +227,20 @@ _STAGE_NAMES = {"前": "before", "中": "middle", "后": "after"}
 # Step 2: body narrative mentions photos but is not a caption.
 _NARRATIVE_PATTERN_RE = re.compile(r"(?:附照片\s*\d+\s*张|详见照片\s*\d+|见照片\s*\d+\s*张)")
 _NARRATIVE_SUFFIX_RE = re.compile(r"照片\s*\d+\s*(?:张|幅|页|组|所示|为)")
-# A clause, not a series label: prose before the photo word, or report wording
-# after it.  Both are checked *around* 照片N, so a caption may still end with a
-# description (``外包装照片2，试验前完整外观检查，无破损。``).
-_NARRATIVE_PREFIX_RE = re.compile(
-    r"(?:随报告|随附|附上|共附|合计|详见|参见|另见|见附|拍摄|记录了?|采集|"
-    r"引用|展示|说明|显示|我们|本文|本报告)"
+# Prose words count only when they touch 照片N: immediately before it, or
+# immediately after it (optionally after an annotation).  A description after
+# punctuation (``外包装照片2，试验前可见划痕。``) and a series name that merely
+# contains such a word (``显示面板照片1``) stay captions.
+_NARRATIVE_WORDS = (
+    r"(?:随报告|随附|附上?|共附|合计|详见|参见|另见|见附|拍摄了?|记录了?|"
+    r"显示了?|展示了?|说明了?|引用了?|采集了?|附在|位于|放在|置于|可见|如下|"
+    r"正文|报告末尾|报告正文|报告中|供参考|可以看到|我们|本文|本报告)"
+)
+_NARRATIVE_BEFORE_RE = re.compile(rf"{_NARRATIVE_WORDS}\s*$")
+_NARRATIVE_AFTER_RE = re.compile(
+    rf"^\s*(?:[（(][^）)]*[）)])?\s*{_NARRATIVE_WORDS}"
 )
 _PRONOUN_PREFIX_RE = re.compile(r"^(?:该|这|那|其|此|上述|本次)")
-_NARRATIVE_TAIL_RE = re.compile(
-    r"(?:附在|位于|放在|置于|另见|参见|详见|见附|正文|如下|供参考|"
-    r"可以看到|可见|报告末尾|报告正文|报告中)"
-)
 _SENTENCE_END = "。！？；;"
 # A series label is a short noun phrase; a long leading clause is prose.
 _MAX_SERIES_LEN = 12
@@ -259,9 +261,9 @@ def _is_photo_narrative(text: str) -> bool:
     """True for a prose sentence that merely mentions photos.
 
     Length alone is not evidence: a standard caption can be long because it
-    carries a description.  Prose is recognised by wording around 照片N, or by
-    a long sentence whose text before 照片N is a clause rather than a series
-    label (``试验过程中拍摄了多张照片1，…``).
+    carries a description.  A prose word counts only when it touches 照片N
+    (immediately before or after), so a series named ``显示面板`` and a
+    description ``…，试验前可见划痕。`` are still captions.
     """
     stripped = (text or "").strip()
     if not stripped:
@@ -272,9 +274,9 @@ def _is_photo_narrative(text: str) -> bool:
         return True
     match = _PHOTO_NUMBER_RE.search(stripped)
     prefix = stripped[:match.start()] if match else stripped
-    if _NARRATIVE_PREFIX_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
+    if _NARRATIVE_BEFORE_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
         return True
-    if match and _NARRATIVE_TAIL_RE.search(stripped[match.end():]):
+    if match and _NARRATIVE_AFTER_RE.match(stripped[match.end():]):
         return True
     if stripped.endswith(_SENTENCE_END) and len(stripped) > 20:
         return not _is_series_label(prefix)
@@ -313,8 +315,8 @@ def _is_series_label(prefix: str) -> bool:
     """True when the text before 照片N is a short series label, not a clause.
 
     Empty is allowed: the group is inherited from the nearest heading.  A clause
-    carries sentence punctuation, narrative wording or a long leading phrase,
-    so the line is prose even when it ends with ``。``.
+    carries sentence punctuation, a prose word touching 照片N, or a long leading
+    phrase, so the line is prose even when it ends with ``。``.
     """
     _, remainder = _split_stage(prefix)
     label = _normalise(remainder)
@@ -324,7 +326,7 @@ def _is_series_label(prefix: str) -> bool:
         return False
     if re.search(r"[，,。；;！？!?、]", prefix):
         return False
-    if _NARRATIVE_PREFIX_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
+    if _NARRATIVE_BEFORE_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
         return False
     return True
 
