@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from app.docx_parser import ReportData
+from app.format_rules import _standard_tokens
 from app.rules import RULES, audit_report
 
 
@@ -52,6 +53,44 @@ def test_enterprise_standard_without_year_fails():
 
     assert finding["status"] == "fail"
     assert "Q/BYDQ-A1901.404 缺年代号" in finding["message"]
+
+
+def test_enterprise_standard_with_letter_led_code_without_year_fails():
+    finding = _r22("Q/JLY J7110109C")
+
+    assert finding["status"] == "fail"
+    assert "Q/JLY J7110109C 缺年代号" in finding["message"]
+    assert "缺年代号=1" in finding["evidence"]
+
+
+def test_enterprise_standard_with_letter_led_code_and_year_passes():
+    finding = _r22("Q/JLY J7111074B-2021")
+
+    assert finding["status"] == "pass"
+    assert "1 个标准号" in finding["message"]
+
+
+def test_legal_standard_followed_by_fullwidth_colon_passes():
+    finding = _r22("GB/T 1037-2021：塑料薄膜水蒸气透过率试验方法")
+
+    assert finding["status"] == "pass"
+    assert "1 个标准号" in finding["message"]
+
+
+def test_double_year_colon_is_preserved():
+    finding = _r22("GB/T 1037-2021:2015")
+
+    assert finding["status"] == "pass"
+    assert "1 个标准号" in finding["message"]
+
+
+def test_colon_only_joins_a_following_number():
+    def tokens(text):
+        return [token for token, _, _ in _standard_tokens(text)]
+
+    assert tokens("GB/T 1037-2021：塑料薄膜水蒸气透过率试验方法") == ["GB/T 1037-2021"]
+    assert tokens("GB/T 1037-2021:2015") == ["GB/T 1037-2021:2015"]
+    assert tokens("Q/BYDQ-A1901.404-2025：气味等级≤3.3") == ["Q/BYDQ-A1901.404-2025"]
 
 
 @pytest.mark.parametrize(
