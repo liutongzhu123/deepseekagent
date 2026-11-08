@@ -318,11 +318,13 @@ tasks:
 
   - id: RA_PROOF
     title: 错别字与病句检查
-    status: todo
+    status: done
+    pr: 148
     size: M
     covers: [RA-4.4]
     acceptance: ["专业术语白名单避免误报", "错别字定位到段落"]
-    files: [p0/app/typo_rules.py]
+    files: [p0/app/typo_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_typo_rules.py, docs/report-format-checks/README.md]
+    note: BYD 12 份草稿 R21 实测 12/12 pass、0 误报；词典/白名单为内置高精度子集，广义语义仍由 S01 兜底
 
   - id: RA_STDVER
     title: 检测依据标准年代号检查
