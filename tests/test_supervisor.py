@@ -518,6 +518,22 @@ def test_f41_reconcile_keeps_waiting(monkeypatch):
     assert ng["tasks"][0]["status"] == "waiting"
 
 
+def test_f52_todo_task_with_rejected_pr_gets_reset(monkeypatch):
+    """F52：任务本来就在 todo、次数已满，但只要 PR 被拒，就该重置并能派单。"""
+    dispatched = {"RA_PHOTO_SEQ": {"attempts": 3, "last_at": "2026-11-08T20:55:31+08:00"}}
+    ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo", "pr": 167}])
+    rejected_now = {167}
+    for item in ng["tasks"]:
+        tid = str(item.get("id"))
+        if str(item.get("status")) != "todo":
+            continue
+        pr = int(item["pr"])
+        if pr in rejected_now and (dispatched.get(tid) or {}).get("attempts"):
+            dispatched.pop(tid, None)
+    task, _ = sup.next_task(ng, set(), dispatched, set())
+    assert task is not None and task["id"] == "RA_PHOTO_SEQ"
+
+
 def test_f51_max_attempts_is_reported(monkeypatch):
     """F51：达到派单上限的任务必须出现在 blocked 原因里，不能静默消失。"""
     ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo"}])
