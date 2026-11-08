@@ -236,7 +236,8 @@ tasks:
 
   - id: B8
     title: 标准版本管理与对比
-    status: todo
+    status: done
+    pr: 137
     size: M
     deps: [B0]
     covers: [SP-9.1, SP-9.2]
