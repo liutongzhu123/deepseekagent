@@ -392,7 +392,8 @@ tasks:
 
   - id: SP_MULTIFMT
     title: 支持 PDF/Word/图片格式标准文档上传解析
-    status: todo
+    pr: 195
+    status: done
     size: M
     covers: [SP-1.1]
     acceptance: ["PDF 可上传并解析", "扫描图片可上传（文字提取可依赖 OCR 能力边界并明确提示）", "格式不支持时给明确错误"]
