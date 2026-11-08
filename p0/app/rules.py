@@ -12,7 +12,7 @@ from datetime import date
 from typing import Iterable
 
 from . import rule_dsl, semantic_audit
-from .docx_parser import ReportData, fields_for_consistency, parse_date
+from .docx_parser import DATE_RE, ReportData, fields_for_consistency, parse_date
 from .format_rules import FORMAT_RULES, evaluate_format_rules
 
 
@@ -57,7 +57,9 @@ RULES: list[tuple[str, str, str]] = [
     ("R09", "标记符号", "报告不得含黄色高亮/红色字体"),
     ("R10", "签名/印章完整", "签名姓名与印章图片应完整嵌入"),
     ("R11", "模板识别", "按检验依据/项目识别报告模板"),
-] + list(FORMAT_RULES)
+] + list(FORMAT_RULES) + [
+    ("R19", "单项检验时间", "单项测试时间落在汇总检验时间起止范围内，最早/最晚与汇总起止一致"),
+]
 
 
 DEFAULT_MEAN_TOLERANCE = 0.05
@@ -75,6 +77,7 @@ _RULE_FUNCTIONS = {
     "R09": "r09_markup",
     "R10": "r10_signature",
     "R11": "r11_template",
+    "R19": "r19_item_times",
 }
 
 
@@ -282,6 +285,118 @@ def r05_device(data: ReportData) -> Finding:
             "更换在有效期内的设备，或补充期间核查记录",
         )
     return _pass("R05", "设备溯源有效", f"设备有效期 {valid} 覆盖检验日期 {test_end}")
+
+
+# Only 检验/试验/测试/检测 date columns turn a table into an item-time source,
+# so summary tables holding 生产/抽样/送样 dates are never mistaken for items.
+_ITEM_TIME_HEADERS = (
+    "检验日期", "试验日期", "测试日期", "检测日期",
+    "检验时间", "试验时间", "测试时间", "检测时间",
+    "检验起止日期", "试验起止日期", "检验起止时间", "试验起止时间",
+)
+_ITEM_LABEL_HEADERS = ("检验项目", "试验项目", "测试项目", "检测项目", "项目名称", "项目")
+_SUMMARY_LABELS = ("合计", "汇总", "总计", "平均")
+
+
+def _header_text(text: str) -> str:
+    value = re.sub(r"[（(].*?[）)]", "", text or "")
+    return re.sub(r"[\s:：]", "", value).split("/")[0]
+
+
+def _is_header(text: str, candidates: tuple[str, ...]) -> bool:
+    value = _header_text(text)
+    return any(value.startswith(candidate) for candidate in candidates)
+
+
+def _dates_in(text: str) -> list[date]:
+    return [parsed for match in DATE_RE.finditer(text or "") if (parsed := parse_date(match.group(0)))]
+
+
+def _item_time_rows(data: ReportData) -> list[tuple[str, date, date]]:
+    """Return ``(label, start, end)`` for each dated row of an item table.
+
+    A single date gives ``start == end``; a range keeps both endpoints.
+    Summary rows are skipped so an aggregate line alone cannot cause a pass.
+    """
+    rows: list[tuple[str, date, date]] = []
+    for table in data.tables:
+        for header_index, header in enumerate(table[:3]):
+            date_columns = [
+                index for index, cell in enumerate(header) if _is_header(cell.text, _ITEM_TIME_HEADERS)
+            ]
+            if date_columns:
+                break
+        else:
+            continue
+        label_column = next(
+            (
+                index
+                for row in reversed(table[: header_index + 1])
+                for index, cell in enumerate(row)
+                if _is_header(cell.text, _ITEM_LABEL_HEADERS)
+            ),
+            None,
+        )
+        last_label = ""
+        for row_index, row in enumerate(table[header_index + 1:], start=header_index + 2):
+            label = row[label_column].text.strip() if label_column is not None and label_column < len(row) else ""
+            label = label or last_label or next(
+                (cell.text.strip() for index, cell in enumerate(row) if index not in date_columns and cell.text.strip()),
+                "",
+            )
+            if any(word in label for word in _SUMMARY_LABELS):
+                continue
+            last_label = label
+            for column in date_columns:
+                values = _dates_in(row[column].text) if column < len(row) else []
+                if values:
+                    rows.append((label or f"第{row_index}行", values[0], values[-1]))
+    return rows
+
+
+def r19_item_times(data: ReportData) -> Finding:
+    """单项测试时间必须落在汇总检验时间内，且最早/最晚与起止端点一致。
+
+    失败场景（对应 ``p0/tests/test_time_item_range.py``）：
+    F1 单项开始早于汇总开始
+    F2 单项结束晚于汇总结束
+    F3 最早单项开始与汇总开始不一致
+    F4 最晚单项结束与汇总结束不一致
+    F5 单项起止倒置
+    F6 汇总检验时间起止倒置
+    F7 未识别到汇总检验时间（skip）
+    F8 未识别到单项检验时间（skip）
+    """
+    title = "单项检验时间"
+    start, end = _date(data.test_start), _date(data.test_end)
+    if start is None and end is None:
+        return _skip("R19", title, "未识别到汇总检验时间")
+    start, end = start or end, end or start
+    assert start is not None and end is not None
+    rows = _item_time_rows(data)
+    if not rows:
+        return _skip("R19", title, "未识别到单项检验时间")
+    problems: list[str] = []
+    if start > end:
+        problems.append(f"汇总检验时间起止倒置 {start} > {end}")
+    for label, item_start, item_end in rows:
+        if item_start > item_end:
+            problems.append(f"{label}: 单项起止倒置 {item_start} > {item_end}")
+        if item_start < start:
+            problems.append(f"{label}: 开始 {item_start} 早于汇总开始 {start}")
+        if item_end > end:
+            problems.append(f"{label}: 结束 {item_end} 晚于汇总结束 {end}")
+    earliest = min(item_start for _, item_start, _ in rows)
+    latest = max(item_end for _, _, item_end in rows)
+    if earliest != start:
+        problems.append(f"最早单项时间 {earliest} 与汇总开始 {start} 不一致")
+    if latest != end:
+        problems.append(f"最晚单项时间 {latest} 与汇总结束 {end} 不一致")
+    if problems:
+        return _fail("R19", title, f"单项检验时间与汇总检验时间存在 {len(problems)} 处不一致",
+                     "; ".join(problems[:6]), "medium", "按单项检验时间修正汇总检验时间，或补齐各单项检验时间")
+    return _pass("R19", title, f"{len(rows)} 项检验时间均在 {start}~{end} 内且端点一致",
+                 f"最早={earliest}; 最晚={latest}")
 
 
 def r06_judgment(data: ReportData) -> Finding:
@@ -667,6 +782,7 @@ _LOCATIONS = {
     "R09": {"page": 1, "section": "全文", "cell": "高亮/红色字体"},
     "R10": {"page": 0, "section": "签名栏", "cell": "批准/审核/主检/印章"},
     "R11": {"page": 1, "section": "检验依据", "cell": "模板"},
+    "R19": {"page": 1, "section": "检验项目表", "cell": "单项检验时间"},
 }
 
 
