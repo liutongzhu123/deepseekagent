@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-_SCOPE = re.compile(r"(?<!不)本(?:标准|文件|规范|部分)\s*适用于([^\n。；;]+)")
+_SCOPE = re.compile(r"(?<!不)本(?:标准|文件|规范|部分)\s*适用于([^\n。；;]+(?:\n(?=[\u4e00-\u9fff])[^\n。；;]+)*)")
 _PART_HEADER = (
     "适用零件", "适用部件", "适用车型", "适用材料", "适用对象",
     "零件类型", "部件类型",
@@ -58,7 +58,7 @@ def extract_scope_parts(lines: list[tuple[str, int]]) -> list[str]:
     text = "\n".join(str(line).strip() for line, _page in lines)
     text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
     for match in _SCOPE.finditer(text):
-        if parts := normalise_parts(match.group(1)):
+        if parts := normalise_parts(re.sub(r"\s+", "", match.group(1))):
             return parts
     return []
 

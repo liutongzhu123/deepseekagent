@@ -13,6 +13,9 @@ def test_scope_parts_split_only_on_real_component_boundaries():
     assert items_list.extract_scope_parts([
         ("本标准适用于汽车电气和电子零部件（包括以下电压等级的电子零部件）", 1)
     ]) == ["汽车电气和电子零部件"]
+    assert items_list.extract_scope_parts([
+        ("本标准适用于汽车电气", 1), ("和电子零部件。", 1)
+    ]) == ["汽车电气和电子零部件"]
 
 
 def test_parse_generates_reviewable_item_list():
