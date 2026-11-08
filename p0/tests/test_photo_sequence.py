@@ -136,16 +136,15 @@ def test_each_sub_item_needs_its_own_stages(first, second):  # F12
     assert "缺试验前、试验中、试验后照片" in finding["evidence"]
 
 
-def test_sub_item_prefixes_are_grouped_separately():  # F12
-    """分项写在题注前缀里（分项2照片1）也要单独判，不能并进分项1。"""
+def test_named_prefix_is_a_photo_group_not_a_test_item():  # F15
+    """分项写在题注前缀里（分项2照片1）是一个具名照片组，不单独强求前/中/后。"""
     finding = _r23(_data([
         APPENDIX,
         "分项1照片1", "分项1照片2", "分项1试验前照片", "分项1试验中照片", "分项1试验后照片",
         "分项2照片1", "分项2照片2",
     ]))
 
-    assert finding["status"] == "fail"
-    assert "分项2 缺试验前、试验中、试验后照片" in finding["evidence"]
+    assert finding["status"] == "pass"
 
 
 def test_multiple_numbers_on_one_line_are_all_captions():  # F12
@@ -158,3 +157,57 @@ def test_multiple_numbers_on_one_line_are_all_captions():  # F12
     # 两个编号都识别到，且两项都完整 → pass；证据里的题注数不能丢。
     assert finding["status"] == "pass"
     assert "题注=8" in finding["evidence"] and "有序号=2" in finding["evidence"]
+
+
+# ---------- 第三轮验证反例（F13 / F14 / F15） ----------
+
+def test_sample_caption_is_not_a_test_item():  # F13
+    """「1号样品照片1」是题注（样品名+照片1），不是一个检验项目，不能报缺前/中/后。"""
+    finding = _r23(_data([
+        APPENDIX,
+        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
+        "1号样品照片1",
+    ]))
+
+    assert finding["status"] == "pass"
+    assert "1号样品" not in finding["evidence"]
+
+
+def test_two_series_on_one_line_each_start_at_one():  # F14
+    """「外包装照片1、内包装照片1」是两个不同系列，序号各自从 1 开始，不判重复。"""
+    finding = _r23(_data([
+        APPENDIX,
+        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
+        "外包装照片1、内包装照片1",
+    ]))
+
+    assert finding["status"] == "pass"
+    assert "重复" not in finding["evidence"]
+
+
+@pytest.mark.parametrize(
+    "captions",
+    [
+        "外观照片1、外观照片2",
+        "分项2照片1、分项2照片2",
+        "照片1（外观）、照片2（外观）",
+    ],
+)
+def test_named_series_naming_does_not_flip_verdict(captions):  # F15
+    """「外观照片N」「分项2照片N」「照片N（外观）」是同一语义，判定必须一致。"""
+    finding = _r23(_data([
+        APPENDIX,
+        "分项1：气味试验", "试验前照片", "试验中照片", "试验后照片",
+        "分项2：外观试验", captions,
+    ]))
+
+    assert finding["status"] == "pass"
+    assert "缺试验前" not in finding["evidence"]
+
+
+def test_duplicate_number_within_one_series_still_fails():  # F14 boundary
+    """按系列计数不能放过同一系列内的重复号。"""
+    finding = _r23(_data([APPENDIX, "外包装照片1、外包装照片2、外包装照片2"]))
+
+    assert finding["status"] == "fail"
+    assert "序号 2 重复" in finding["evidence"]
