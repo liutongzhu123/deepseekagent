@@ -60,6 +60,7 @@ RULES: list[tuple[str, str, str]] = [
 ] + list(FORMAT_RULES) + [
     ("R19", "单项检验时间", "单项测试时间落在汇总检验时间起止范围内，最早/最晚与汇总起止一致"),
     ("R20", "计算结果正确性", "重算平均值/最大值/变化率并与报告值比对，偏差超过容差报出"),
+    ("R21", "错别字与病句", "常见错别字/词序颠倒 + 相邻重复字词/标点；术语白名单防误报，定位到段落"),
 ]
 
 
@@ -1129,6 +1130,13 @@ def audit_report(
             finding.location = _location_for(rule_id, data)
         findings.append(finding)
     for finding in evaluate_format_rules(data):
+        finding = _apply_rule_meta(finding, meta.get(finding.rule_id))
+        if not finding.location:
+            finding.location = _location_for(finding.rule_id, data)
+        findings.append(finding)
+    from .typo_rules import evaluate_typo_rules  # local import: avoids a rules<->typo_rules cycle
+
+    for finding in evaluate_typo_rules(data):
         finding = _apply_rule_meta(finding, meta.get(finding.rule_id))
         if not finding.location:
             finding.location = _location_for(finding.rule_id, data)
