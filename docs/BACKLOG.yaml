@@ -483,7 +483,8 @@ tasks:
 
   - id: INFRA_REVIEW
     title: 每日代码质量巡检
-    status: todo
+    status: done
+    pr: 161
     size: S
     deps: [INFRA_SUPERVISOR]
     acceptance: ["每日一次看当日 diff", "发现重复代码/死代码能报出"]
