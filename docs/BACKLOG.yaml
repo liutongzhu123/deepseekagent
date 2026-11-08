@@ -328,11 +328,13 @@ tasks:
 
   - id: RA_STDVER
     title: 检测依据标准年代号检查
-    status: todo
+    status: done
+    pr: 149
     size: S
     covers: [RA-4.15]
     acceptance: ["无年代号能报出", "标准号格式合法"]
-    files: [p0/app/format_rules.py]
+    files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_format_standard_years.py, docs/report-format-checks/README.md]
+    note: BYD 12 份草稿 R22 实测 12/12 pass、0 误报；只查检验依据字段，不校验标准现行版本
 
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
