@@ -390,6 +390,7 @@ tasks:
     acceptance: ["管理员配置了条件表达式时按配置求值并给证据"]
     skip_scope: ["配置为空或表达式无法解析时 skip"]
     files: [p0/app/admin_config.py, p0/app/rules.py, p0/tests/test_custom_rule.py, docs/report-format-checks/README.md]
+    note: 验证 #192 通过（8 例独立复核：命中/边界/缺数据/禁用/非法表达式 skip）
 
   - id: RA_PRODNAME
     title: 产品名称异常识别（与产品不符或无法判定种类）
