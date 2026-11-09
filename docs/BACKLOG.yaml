@@ -412,6 +412,7 @@ tasks:
     acceptance: ["PDF/Word 可解析；不支持的格式给明确错误"]
     skip_scope: ["扫描件文字提取依赖 OCR，未配置时 skip 并说明"]
     files: [p0/app/standard_parse.py, p0/app/main.py, p0/tests/test_multiformat.py]
+    note: 验证 #195 通过（三条错误路径均有明确提示：不支持的格式/损坏 docx/OCR 不可用）
 
   - id: SP_REVIEWSAVE
     title: 检测项目人工复核确认后入库
