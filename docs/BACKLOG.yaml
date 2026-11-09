@@ -429,7 +429,7 @@ tasks:
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
     status: done
-    pr: 181
+    pr: 201
     size: M
     deps: [VIS]
     covers: [RA-4.16, RA-4.17]
