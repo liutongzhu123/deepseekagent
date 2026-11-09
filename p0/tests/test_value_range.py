@@ -1,6 +1,6 @@
 """R26 数值合理性、单位一致性与小数位数（RA-2.4 / RA-2.5）。
 
-失败场景 F1–F14 见 ``p0/app/format_rules.py``；验收三条：
+失败场景 F1–F15 见 ``p0/app/format_rules.py``；验收三条：
 数值超出判定要求范围能报出、单位与判定要求不一致能报出、平行样小数位数不一致能报出。
 保守判定：单位未知/缺失/无法可靠换算时 skip，且不拿原始数值硬比。
 """
@@ -97,6 +97,16 @@ def test_unknown_unit_is_not_compared_by_raw_value():
     assert "未覆盖：未知单位「bar」" in finding["evidence"]
 
 
+@pytest.mark.parametrize("result", ["70 dB", "5 ppm", "5 N·m"])
+def test_dimension_mismatch_decided_before_conversion(result):
+    # F15：先比量纲，再找换算。两侧单位都能识别但量纲不同 -> fail；
+    # dB/ppm 没有可靠换算系数，也不能因此退回 skip（回归 #211：dB/ppm skip、N·m fail）。
+    finding = _r26(("压力", "S1", result, "", "", "≤10 MPa", "符合"))
+    assert finding["status"] == "fail"
+    assert "单位" in finding["message"] and "不一致" in finding["message"]
+    assert "无法可靠换算" not in finding["evidence"]
+
+
 @pytest.mark.parametrize(
     ("result", "unit", "limit", "status"),
     [
@@ -111,6 +121,7 @@ def test_unknown_unit_is_not_compared_by_raw_value():
         ("15 ‰", "", "≤1 %", "fail"),
         # F14：同量纲但无可靠换算（dB vs dB(A)）-> skip，不误报单位不一致。
         ("70", "dB", "≤75 dB(A)", "skip"),
+        ("5", "ppm", "≤5 mol/L", "skip"),
         # F11：同单位只做数值比较，全/半角括号与 µ/μ 写法归一。
         ("70", "dB(A)", "≤75 dB(A)", "pass"),
         ("70", "dB（A）", "≤75 dB(A)", "pass"),
