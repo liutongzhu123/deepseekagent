@@ -810,8 +810,11 @@ def dispatch_message(task: dict, attempt: int) -> str:
              f"- 覆盖需求：{covers}",
              f"- 预计文件：{files}"]
     if task.get("acceptance"):
-        lines.append("- 验收标准：")
+        lines.append("- 验收标准（能判的）：")
         lines.extend(f"  · {item}" for item in task["acceptance"])
+    if task.get("skip_scope"):
+        lines.append("- 明确不判（判不了就 skip，并在证据里写原因）：")
+        lines.extend(f"  · {item}" for item in task["skip_scope"])
     if task.get("note"):
         lines.append(f"- 备注：{task['note']}")
     if attempt > 1:
