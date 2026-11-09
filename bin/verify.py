@@ -245,7 +245,9 @@ def collect(dry_run: bool = False) -> int:
             "status": verdict,
             "verdict_at": message.get("create_time") or now().isoformat(timespec="seconds"),
             # F39：通过也要人来复核——同模型的盲区是共享的
-            "review": "pending" if verdict == "pass" else "confirmed",
+            # F49：已复核（ok/overturn）的结论不能被重新回收冲掉
+            "review": (entry.get("review") if entry.get("review") in ("ok", "overturn")
+                       else ("pending" if verdict == "pass" else "confirmed")),
             "evidence": text[:400],
         })
         verified[pr] = entry
