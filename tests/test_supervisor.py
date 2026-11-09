@@ -622,11 +622,18 @@ def test_f48_reconcile_prefers_task_pr(monkeypatch):
     assert ng["tasks"][0]["status"] == "done"
 
 
+def test_f60_sync_uses_pr_titles(monkeypatch):
+    """F60：关联要用 GitHub PR 标题，不能用 git 提交标题（合并提交里没标记）。"""
+    monkeypatch.setattr(sup, "merged_task_prs", lambda limit=60: {"RA_VALUE_RANGE": 186})
+    ng = backlog([{"id": "RA_VALUE_RANGE", "status": "todo", "pr": None}])
+    updated = sup.sync_task_pr(ng)
+    assert updated == ["RA_VALUE_RANGE"]
+    assert ng["tasks"][0]["pr"] == 186
+
+
 def test_f45_sync_task_pr_from_title(monkeypatch):
-    """F45：返工 PR 标题带 [任务ID] → task.pr 更新为新 PR，旧拒绝不再拦着。"""
-    monkeypatch.setattr(sup, "git", lambda args, timeout=120: type(
-        "R", (), {"returncode": 0,
-                  "stdout": "abc|fix(report): [RA_PHOTO_SEQ] 第二轮返工 (#167)\\n", "stderr": ""})())
+    """F45/F60：返工 PR 标题带 [任务ID] → task.pr 更新为新 PR。"""
+    monkeypatch.setattr(sup, "merged_task_prs", lambda limit=60: {"RA_PHOTO_SEQ": 167})
     ng = backlog([{"id": "RA_PHOTO_SEQ", "status": "todo", "pr": 151}])
     updated = sup.sync_task_pr(ng)
     assert updated == ["RA_PHOTO_SEQ"]
@@ -634,10 +641,7 @@ def test_f45_sync_task_pr_from_title(monkeypatch):
 
 
 def test_f45_ignores_unmarked_or_unknown(monkeypatch):
-    monkeypatch.setattr(sup, "git", lambda args, timeout=120: type(
-        "R", (), {"returncode": 0,
-                  "stdout": "abc|fix: 没有标记 (#200)\\ndef|fix: [NOT_A_TASK] 未知 (#201)\\n",
-                  "stderr": ""})())
+    monkeypatch.setattr(sup, "merged_task_prs", lambda limit=60: {"NOT_A_TASK": 201})
     ng = backlog([{"id": "RA_TEMPLATE", "status": "todo", "pr": 153}])
     assert sup.sync_task_pr(ng) == []
     assert ng["tasks"][0]["pr"] == 153
