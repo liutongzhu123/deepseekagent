@@ -361,7 +361,7 @@ tasks:
   - id: RA_RAWVER
     title: 原始记录版本有效性检查
     pr: 189
-    status: done
+    status: todo
     size: S
     covers: [RA-4.7]
     acceptance: ["能识别到原始记录编号与版本号时判是否最新"]
