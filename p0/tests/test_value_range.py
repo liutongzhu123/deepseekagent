@@ -1,7 +1,8 @@
 """R26 数值合理性、单位一致性与小数位数（RA-2.4 / RA-2.5）。
 
-失败场景 F1–F12 见 ``p0/app/format_rules.py``；验收三条：
+失败场景 F1–F14 见 ``p0/app/format_rules.py``；验收三条：
 数值超出判定要求范围能报出、单位与判定要求不一致能报出、平行样小数位数不一致能报出。
+保守判定：单位未知/缺失/无法可靠换算时 skip，且不拿原始数值硬比。
 """
 from __future__ import annotations
 
@@ -71,19 +72,77 @@ def test_mean_is_checked_too():
         ("9.5", "N·m", "≤10 MPa", "fail"),
         ("9.5 N·m", "", "≤10 MPa", "fail"),
         ("9.5 MPa", "N·m", "≤10 MPa", "fail"),
-        ("9500 kPa", "", "≤10 MPa", "fail"),
+        ("9500 kPa", "", "≤10 MPa", "pass"),
         ("9.5MPa", "", "≤10 MPa", "pass"),
         ("9.5", "℃", "≤10 °C", "pass"),
-        ("9.5", "bar", "≤10 MPa", "pass"),
-        ("9.5", "", "≤10 MPa", "pass"),
+        ("9.5", "bar", "≤10 MPa", "skip"),
+        ("9.5", "", "≤10 MPa", "skip"),
     ],
 )
 def test_unit_consistency(result, unit, limit, status):
-    # F6/F7：数值、单位列、表头与判定要求单位对比；只出现一侧或未知单位时保守跳过。
+    # F6/F7/F13/F14：量纲不同 fail；同单位/可靠换算 pass；未知或缺少单位 skip。
     finding = _r26(("压力", "S1", result, unit, "", limit, "符合"))
     assert finding["status"] == status
     if status == "fail":
         assert "单位" in finding["message"] and "不一致" in finding["message"]
+    if status == "skip":
+        assert "未覆盖：" in finding["evidence"]
+
+
+def test_unknown_unit_is_not_compared_by_raw_value():
+    # F7：95 bar 与 ≤10 MPa 单位未知，不能拿 95 和 10 硬比，必须 skip 并写明未覆盖。
+    finding = _r26(("压力", "S1", "95 bar", "", "", "≤10 MPa", "符合"))
+    assert finding["status"] == "skip"
+    assert "超出判定要求" not in finding["message"]
+    assert "未覆盖：未知单位「bar」" in finding["evidence"]
+
+
+@pytest.mark.parametrize(
+    ("result", "unit", "limit", "status"),
+    [
+        # F13：同量纲、系数可靠 -> 换算后比较（kPa↔MPa 即验收点名的换算）。
+        ("9500 kPa", "", "≤10 MPa", "pass"),
+        ("12000 kPa", "", "≤10 MPa", "fail"),
+        ("950 g", "", "≤1 kg", "pass"),
+        ("1500 g", "", "≤1 kg", "fail"),
+        ("9.5 mm", "", "≤1 cm", "pass"),
+        ("15 mm", "", "≤1 cm", "fail"),
+        ("5 ‰", "", "≤1 %", "pass"),
+        ("15 ‰", "", "≤1 %", "fail"),
+        # F14：同量纲但无可靠换算（dB vs dB(A)）-> skip，不误报单位不一致。
+        ("70", "dB", "≤75 dB(A)", "skip"),
+        # F11：同单位只做数值比较，全/半角括号与 µ/μ 写法归一。
+        ("70", "dB(A)", "≤75 dB(A)", "pass"),
+        ("70", "dB（A）", "≤75 dB(A)", "pass"),
+        ("70dB（A）", "", "≤75 dB(A)", "pass"),
+        ("80dB（A）", "", "≤75 dB(A)", "fail"),
+    ],
+)
+def test_reliable_unit_conversion(result, unit, limit, status):
+    finding = _r26(("压力", "S1", result, unit, "", limit, "符合"))
+    assert finding["status"] == status
+    if status == "fail":
+        assert "超出判定要求" in finding["message"]
+    if status == "skip":
+        assert "未覆盖：" in finding["evidence"]
+
+
+@pytest.mark.parametrize(
+    ("result", "unit", "limit", "needle"),
+    [
+        # F14：结果/单位列没有单位而判定要求有单位 -> 缺数据，skip。
+        ("9.5", "", "≤10 MPa", "缺少单位（检验结果）"),
+        ("9.5", "N/A", "≤10 MPa", "缺少单位（检验结果）"),
+        # F14：判定要求没有单位而结果有单位 -> 无法确认可比较，skip。
+        ("9.5 MPa", "", "≤10", "判定要求缺少单位"),
+        # F7：判定要求单位不认识 -> skip，不硬比。
+        ("9.5", "MPa", "≤10 bar", "判定要求单位未知「bar」"),
+    ],
+)
+def test_missing_or_unknown_units_skip(result, unit, limit, needle):
+    finding = _r26(("压力", "S1", result, unit, "", limit, "符合"))
+    assert finding["status"] == "skip"
+    assert needle in finding["evidence"]
 
 
 @pytest.mark.parametrize(("second", "status"), [("3.50", "fail"), ("3.5", "pass")])

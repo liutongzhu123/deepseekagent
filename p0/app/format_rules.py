@@ -975,16 +975,85 @@ def r25_judge_consistency(data: ReportData):
 
 
 # --- R26: 数值合理性、单位一致性与小数位数 --------------------------------
-# RA-2.4 / RA-2.5；F1–F12 见 p0/tests/test_value_range.py 与 README A16。数值超限但已判「不符合」不报。
+# RA-2.4 / RA-2.5；F1–F14 见 p0/tests/test_value_range.py 与 README A21。
+# 保守判定：单位未知/缺失/无法可靠换算时 skip，不拿原始数值硬比；
+# 数值超限但已判「不符合」不报。
 _NUM = r"[-+]?\d+(?:\.\d+)?"
 _UNIT_PART = r"[A-Za-zµμΩ°℃%‰][A-Za-zµμΩ°℃0-9²³·/²]*"
 _REQ_TRANS = str.maketrans({
     "≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "＜": "<", "＞": ">",
     "～": "~", "－": "-", "−": "-", "–": "-", "—": "-", "％": "%", "，": ",",
 })
-_UNIT_ANY = re.compile(r"(?<![A-Za-z])([A-Za-zµμΩ°℃%‰][A-Za-zµμΩ°℃0-9²³·/²]*)(?![A-Za-z])")
-_PLAIN_NUM = re.compile(rf"^({_NUM})({_UNIT_PART})?$")
+_UNIT_ANY = re.compile(
+    r"(?<![A-Za-z])(dB\(A\)|[A-Za-zµμΩ°℃%‰][A-Za-zµμΩ°℃0-9²³·/²]*)(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_PLAIN_NUM = re.compile(rf"^({_NUM})({_UNIT_PART}|dB\(A\))?$", re.IGNORECASE)
 _NEG_JUDGMENT = re.compile(r"不符合|不合格|不通过|不满足")
+
+# 可靠换算表：canonical 单位 -> (量纲, 换算到量纲基准单位的系数)。
+# 系数为 None 表示同量纲但不做换算（如 dB 与 dB(A)）；不在表内的单位一律视为未知。
+# 只收精确、无歧义的换算；bar、ppm、mol/L 等不在此表（或系数为 None），遇到即 skip。
+_UNIT_CONVERSIONS: dict[str, tuple[str, float | None]] = {
+    "Pa": ("pressure", 1.0),
+    "hPa": ("pressure", 100.0),
+    "kPa": ("pressure", 1_000.0),
+    "MPa": ("pressure", 1_000_000.0),
+    "GPa": ("pressure", 1_000_000_000.0),
+    "℃": ("temperature", 1.0),
+    "N": ("force", 1.0),
+    "kN": ("force", 1_000.0),
+    "N·m": ("torque", 1.0),
+    "kN·m": ("torque", 1_000.0),
+    "%": ("ratio", 1.0),
+    "‰": ("ratio", 0.1),
+    "nm": ("length", 1e-9),
+    "μm": ("length", 1e-6),
+    "mm": ("length", 1e-3),
+    "cm": ("length", 1e-2),
+    "m": ("length", 1.0),
+    "km": ("length", 1e3),
+    "mm²": ("area", 1e-6),
+    "m²": ("area", 1.0),
+    "m³": ("volume", 1.0),
+    "cm³": ("volume", 1e-6),
+    "L": ("volume", 1e-3),
+    "mL": ("volume", 1e-6),
+    "μL": ("volume", 1e-9),
+    "mg": ("mass", 1e-6),
+    "g": ("mass", 1e-3),
+    "kg": ("mass", 1.0),
+    "t": ("mass", 1e3),
+    "s": ("time", 1.0),
+    "min": ("time", 60.0),
+    "h": ("time", 3600.0),
+    "d": ("time", 86400.0),
+    "Hz": ("frequency", 1.0),
+    "kHz": ("frequency", 1e3),
+    "MHz": ("frequency", 1e6),
+    "V": ("voltage", 1.0),
+    "kV": ("voltage", 1e3),
+    "mV": ("voltage", 1e-3),
+    "A": ("current", 1.0),
+    "mA": ("current", 1e-3),
+    "W": ("power", 1.0),
+    "kW": ("power", 1e3),
+    "MW": ("power", 1e6),
+    "Ω": ("resistance", 1.0),
+    "kΩ": ("resistance", 1e3),
+    "r/min": ("speed", 1.0),
+    "rpm": ("speed", 1.0),
+    "J": ("energy", 1.0),
+    "kJ": ("energy", 1e3),
+    "dB": ("sound", None),
+    "dB(A)": ("sound", None),
+    "ppm": ("concentration", None),
+    "mol/L": ("concentration", None),
+    "mg/L": ("concentration", 1.0),
+    "g/m³": ("concentration", 1.0),
+    "mg/m³": ("concentration", 1e-3),
+    "μg/m³": ("concentration", 1e-6),
+}
 
 
 def _canonical_unit(token: str) -> str:
@@ -992,10 +1061,42 @@ def _canonical_unit(token: str) -> str:
     return text if text in {"%", "‰"} else _UNIT_CANONICAL.get(text.lower(), "")
 
 
-def _canonical_units(text: str) -> set[str]:
-    units = {_canonical_unit(match.group(1)) for match in _UNIT_ANY.finditer(text or "")}
-    units.discard("")
-    return units
+def _unit_parts(text: str) -> tuple[set[str], list[str]]:
+    """Return (known canonical units, unknown raw unit tokens) found in text."""
+    norm = _norm_cell(text or "").replace("（", "(").replace("）", ")")
+    if not norm or norm.lower() in _NA_VALUES:
+        return set(), []
+    known: set[str] = set()
+    unknown: list[str] = []
+    for match in _UNIT_ANY.finditer(norm):
+        token = match.group(1)
+        canonical = _canonical_unit(token)
+        if canonical:
+            known.add(canonical)
+        elif token not in unknown:
+            unknown.append(token)
+    return known, unknown
+
+
+def _unit_relation(from_unit: str, to_unit: str) -> str:
+    """Return same / convertible / incompatible / unknown for two canonical units."""
+    if from_unit == to_unit:
+        return "same"
+    source = _UNIT_CONVERSIONS.get(from_unit)
+    target = _UNIT_CONVERSIONS.get(to_unit)
+    if not source or not target or source[1] is None or target[1] is None:
+        return "unknown"
+    return "convertible" if source[0] == target[0] else "incompatible"
+
+
+def _convert_value(value: float, from_unit: str, to_unit: str) -> float | None:
+    """Convert within one dimension only when both units have a reliable factor."""
+    relation = _unit_relation(from_unit, to_unit)
+    if relation == "same":
+        return value
+    if relation != "convertible":
+        return None
+    return value * _UNIT_CONVERSIONS[from_unit][1] / _UNIT_CONVERSIONS[to_unit][1]
 
 
 def _parse_requirement(text: str) -> tuple[float | None, float | None] | None:
@@ -1022,13 +1123,20 @@ def _parse_requirement(text: str) -> tuple[float | None, float | None] | None:
     return None
 
 
-def _cell_number(text: str) -> tuple[float, str, int] | None:
-    """Return (value, canonical unit, decimal places) for a plain numeric cell."""
-    match = _PLAIN_NUM.match(_norm_cell(text).translate(_REQ_TRANS))
+def _cell_number(text: str) -> tuple[float, str, str, int] | None:
+    """Return (value, raw unit token, canonical unit or "", decimal places)."""
+    norm = _norm_cell(text).translate(_REQ_TRANS).replace("（", "(").replace("）", ")")
+    match = _PLAIN_NUM.match(norm)
     if not match:
         return None
     number = match.group(1)
-    return float(number), _canonical_unit(match.group(2) or ""), len(number.split(".", 1)[1]) if "." in number else 0
+    raw_unit = match.group(2) or ""
+    return (
+        float(number),
+        raw_unit,
+        _canonical_unit(raw_unit),
+        len(number.split(".", 1)[1]) if "." in number else 0,
+    )
 
 
 def r26_value_range(data: ReportData):
@@ -1060,9 +1168,13 @@ def r26_value_range(data: ReportData):
     }
     if columns["result"] is None:
         return _finding("R26", title, "skip", "info", "检验结果表没有「检验结果」列，无法检查数值", section="检验结果表", cell="检验结果")
-    header_units = {key: _canonical_units(header[columns[key]]) if columns[key] is not None else set() for key in ("result", "mean", "limit")}
+    header_units = {
+        key: _unit_parts(header[columns[key]]) if columns[key] is not None else (set(), [])
+        for key in ("result", "mean", "limit")
+    }
     problems: list[str] = []
-    range_checked = unit_checked = 0
+    uncovered: list[str] = []
+    range_checked = unit_checked = converted = 0
     groups: dict[tuple[str, str], list[tuple[str, int]]] = {}
     for row_index, row in enumerate(rows[1:], start=2):
         if not any(cell.strip() for cell in row):
@@ -1075,39 +1187,96 @@ def r26_value_range(data: ReportData):
         label = next((cell(key) for key in ("item", "sample") if cell(key)), f"第{row_index}行")
         limit_text, judgment = cell("limit"), cell("judgment")
         requirement = _parse_requirement(limit_text) if limit_text else None
-        measurements = [
-            (key, row[columns[key]].strip(), parsed[0], parsed[1], parsed[2])
-            for key in ("result", "mean")
-            if columns[key] is not None and columns[key] < len(row) and (parsed := _cell_number(row[columns[key]])) is not None
-        ]
-        unit_cell_units = _canonical_units(cell("unit"))
-        value_units = {unit for _key, _raw, _number, unit, _dec in measurements if unit} | unit_cell_units
-        effective_units = []
-        for key, _raw, _number, unit, _dec in measurements:
-            value_units |= header_units[key]
-            effective_units.append({unit} if unit else (set(unit_cell_units) or set(header_units[key])))
-        requirement_units = _canonical_units(limit_text)
-        if requirement is not None and measurements:
-            range_checked += 1
-            low, high = requirement
-            if not _NEG_JUDGMENT.search(judgment):
-                for (key, raw, number, _unit, _dec), units in zip(measurements, effective_units):
-                    if len(requirement_units) == 1 and len(units) == 1 and requirement_units != units:
-                        continue  # 单位不同只报单位不一致，不做跨单位数值比较
-                    if (low is not None and number < low - 1e-9) or (high is not None and number > high + 1e-9):
-                        problems.append(f"{label} {header[columns[key]]}「{raw}」超出判定要求「{limit_text}」")
-        if measurements and len(value_units) > 1:
-            problems.append(f"{label} 检验结果/单位列/表头单位不一致：{'、'.join(sorted(value_units))}")
-        elif measurements and len(requirement_units) == 1 and len(value_units) == 1:
-            unit_checked += 1
-            if requirement_units != value_units:
-                problems.append(
-                    f"{label} 单位与判定要求不一致：判定要求「{limit_text}」为「{next(iter(requirement_units))}」，"
-                    f"检验结果/单位列/表头为「{next(iter(value_units))}」"
-                )
+        measurements = []
+        for key in ("result", "mean"):
+            index = columns[key]
+            if index is None or index >= len(row):
+                continue
+            parsed = _cell_number(row[index])
+            if parsed is not None:
+                measurements.append((key, row[index].strip(), *parsed))
+        if not measurements:
+            continue
         primary = next((item for item in measurements if item[0] == "result"), None)
         if primary is not None and (cell("item") or cell("sample")):
-            groups.setdefault((cell("item"), cell("sample")), []).append((primary[1], primary[4]))
+            groups.setdefault((cell("item"), cell("sample")), []).append((primary[1], primary[5]))
+
+        unit_cell_known, unit_cell_unknown = _unit_parts(cell("unit"))
+        value_known = set(unit_cell_known)
+        value_unknown = list(unit_cell_unknown)
+        for key, _raw, _number, raw_unit, canonical_unit, _decimals in measurements:
+            if raw_unit and not canonical_unit and raw_unit not in value_unknown:
+                value_unknown.append(raw_unit)
+            if canonical_unit:
+                value_known.add(canonical_unit)
+            header_known, header_unknown = header_units[key]
+            value_known |= header_known
+            for token in header_unknown:
+                if token not in value_unknown:
+                    value_unknown.append(token)
+        if value_unknown:
+            uncovered.append("未知单位「" + "、".join(value_unknown[:3]) + "」")
+            continue
+        if len(value_known) > 1:
+            problems.append(f"{label} 检验结果/单位列/表头单位不一致：{'、'.join(sorted(value_known))}")
+            continue
+
+        requirement_known, requirement_unknown = _unit_parts(limit_text)
+        if not requirement_known and not requirement_unknown:
+            requirement_known, requirement_unknown = header_units["limit"]
+        if requirement_unknown:
+            uncovered.append("判定要求单位未知「" + "、".join(requirement_unknown[:3]) + "」")
+            continue
+        if len(requirement_known) > 1:
+            uncovered.append("判定要求含多个单位")
+            continue
+        requirement_unit = next(iter(requirement_known), "")
+        if requirement_unit and len(value_known) == 1:
+            value_unit = next(iter(value_known))
+            relation = _unit_relation(value_unit, requirement_unit)
+            if relation in {"same", "convertible"}:
+                unit_checked += 1
+            elif relation == "incompatible":
+                unit_checked += 1
+                problems.append(
+                    f"{label} 单位与判定要求不一致：判定要求「{limit_text}」为「{requirement_unit}」，"
+                    f"检验结果/单位列/表头为「{value_unit}」"
+                )
+            else:
+                uncovered.append(f"单位「{value_unit}」与「{requirement_unit}」无法可靠换算")
+        if requirement is not None:
+            low, high = requirement
+            limit_label = header[columns["limit"]] if columns["limit"] is not None else "判定要求"
+            row_compared = False
+            for key, raw, number, _raw_unit, canonical_unit, _decimals in measurements:
+                if canonical_unit:
+                    unit = canonical_unit
+                elif len(unit_cell_known) == 1:
+                    unit = next(iter(unit_cell_known))
+                elif len(header_units[key][0]) == 1:
+                    unit = next(iter(header_units[key][0]))
+                else:
+                    unit = ""
+                if requirement_unit:
+                    if not unit:
+                        uncovered.append(f"缺少单位（{header[columns[key]]}）")
+                        continue
+                    if unit != requirement_unit:
+                        converted_value = _convert_value(number, unit, requirement_unit)
+                        if converted_value is None:
+                            continue  # 单位不一致/无法换算已在上面计入问题或未覆盖
+                        number = converted_value
+                        converted += 1
+                elif unit:
+                    uncovered.append(f"判定要求缺少单位（{limit_label}）")
+                    continue
+                row_compared = True
+                if _NEG_JUDGMENT.search(judgment):
+                    continue
+                if (low is not None and number < low - 1e-9) or (high is not None and number > high + 1e-9):
+                    problems.append(f"{label} {header[columns[key]]}「{raw}」超出判定要求「{limit_text}」")
+            if row_compared:
+                range_checked += 1
     decimal_groups = 0
     for (item, sample), entries in groups.items():
         if len(entries) < 2:
@@ -1116,11 +1285,21 @@ def r26_value_range(data: ReportData):
         if len({decimals for _raw, decimals in entries}) > 1:
             values = "、".join(f"{raw}（{decimals} 位）" for raw, decimals in entries[:4])
             problems.append(f"{item or sample} 平行样小数位数不一致：{values}")
-    evidence = f"数值范围={range_checked}行; 单位比对={unit_checked}行; 小数位组={decimal_groups}; 问题={len(problems)}"
+    coverage = Counter(uncovered)
+    coverage_text = "；".join(f"{reason}×{count}" for reason, count in coverage.items()) if coverage else "无"
+    evidence = (
+        f"数值范围={range_checked}行; 单位比对={unit_checked}行; 换算={converted}次; "
+        f"小数位组={decimal_groups}; 未覆盖：{coverage_text}; 问题={len(problems)}"
+    )
     if problems:
         return _finding(
             "R26", title, "fail", "medium", f"数值/单位/小数位问题 {len(problems)} 处：" + "；".join(problems[:6]),
             evidence, "按判定要求核对数值范围、统一单位，并按平行样统一小数位数", section="检验结果表", cell="数值/单位/小数位",
+        )
+    if uncovered:
+        return _finding(
+            "R26", title, "skip", "info", f"存在无法可靠判定的数值/单位，未覆盖：{coverage_text}",
+            evidence, "补齐单位或改用标准单位后复核；未知单位不做数值比较", section="检验结果表", cell="数值/单位/小数位",
         )
     if range_checked or unit_checked or decimal_groups:
         return _finding(
