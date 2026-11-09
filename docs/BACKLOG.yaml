@@ -346,6 +346,7 @@ tasks:
     acceptance: ["结论页有判定表述时对比结果表；两边都无判定时不报"]
     skip_scope: ["结论页表述含糊、无法判定有无判定时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_judge_consistency.py, docs/report-format-checks/README.md]
+    note: 验证 #185 通过（6 例独立复核）
 
   - id: RA_VALUE_RANGE
     title: 数值合理性、单位正确性、小数位数检查
@@ -367,6 +368,7 @@ tasks:
     acceptance: ["能识别到原始记录编号与版本号时判是否最新"]
     skip_scope: ["识别不到版本号时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_raw_record_version.py, docs/report-format-checks/README.md]
+    note: 验证 #189 拒绝：Q/ 代号后空格未归一（文档承诺但无测试）
 
   - id: RA_FIXEDTEXT
     title: 固定内容校验（中文 8 条 / 英文 7 条注意事项）
@@ -377,6 +379,7 @@ tasks:
     acceptance: ["按整行/整段匹配注意事项条文，缺条与错序可判"]
     skip_scope: ["段落被打散、无法还原条文时 skip；不得按顿号/标点切分"]
     files: [p0/app/template_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_fixed_content.py, docs/report-format-checks/README.md]
+    note: 验证 #188 通过（8 例独立复核，含地址顿号反例）
 
   - id: RA_CUSTOMRULE
     title: 支持自建逻辑条件（如检测日期距生产日期不超过 N 天）
@@ -397,6 +400,7 @@ tasks:
     acceptance: ["产品名称与检测项目明显不符、或为纯编号（如 001）时可判"]
     skip_scope: ["名称语义无法判断时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_product_name.py, docs/report-format-checks/README.md]
+    note: 验证 #193 通过（7 例独立复核）
 
   - id: SP_MULTIFMT
     title: 支持 PDF/Word/图片格式标准文档上传解析
