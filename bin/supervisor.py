@@ -26,6 +26,10 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F60 sync_task_pr 从 `git log` 的提交标题里找 [任务ID]，但合并提交的标题是
+      「Merge pull request #186 from …」，**不含任务标记** → 关联永远失败
+      （2026-11-09：RA_VALUE_RANGE 的 PR #186 已合并，台账 pr 仍是 None）
+      → 改成查 GitHub 的 PR 标题（权威源）
   F59 set_task_status 只在"没有 pr 行"时插入，**不会更新已有的 pr** → 关联返工 PR 时
       台账里的旧 PR 号永远改不掉（2026-11-09：RA_PHOTO_SEQ 应 181→203，实际没变）
       → 传入 pr 时必须覆盖已有行
@@ -384,35 +388,52 @@ def rejected_prs() -> set[int]:
 TASK_MARK_RE = re.compile(r"\[([A-Za-z][A-Za-z0-9_]{1,20})\]")
 
 
+def merged_task_prs(limit: int = 60) -> dict[str, int]:
+    """F60：从 GitHub 已合并 PR 的标题里建 [任务ID] → PR 号 的映射。
+
+    不能用 `git log` 的提交标题：合并提交是「Merge pull request #186 from …」，
+    里面没有任务标记。PR 标题才是带着 [任务ID] 的地方，而且是权威源。
+    同一个任务有多个 PR 时取**最新**的那个。
+    """
+    env = {**os.environ, "HOME": "/home/dshadmin"}
+    try:
+        proc = subprocess.run(
+            ["gh-agent", "pr", "list", "--repo", REPO_SLUG, "--state", "merged",
+             "--limit", str(limit), "--json", "number,title"],
+            capture_output=True, text=True, timeout=120, env=env)
+        items = json.loads(proc.stdout or "[]")
+    except Exception:
+        return {}
+    result: dict[str, int] = {}
+    for item in items if isinstance(items, list) else []:
+        number = item.get("number")
+        if not isinstance(number, int):
+            continue
+        for marker in TASK_MARK_RE.findall(str(item.get("title") or "")):
+            key = marker.upper()
+            if key not in result or number > result[key]:      # 取最新
+                result[key] = number
+    return result
+
+
 def sync_task_pr(backlog: dict) -> list[str]:
     """F45：从已合并 PR 的标题里认领任务，更新 task.pr。
 
     约定：开发/返工消息的标题里带 `[任务ID]`，PR 标题会继承它。
     这样"返工 PR"能自动接替"旧 PR"，旧 PR 的拒绝状态就不会一直拦着新修复。
     """
-    ids = task_ids(backlog)
+    ids = {i.upper(): i for i in task_ids(backlog)}
+    mapping = merged_task_prs()             # F60：以 GitHub PR 标题为准
     updated = []
-    try:
-        proc = git(["log", "-n", "40", "--pretty=%s"])
-        subjects = proc.stdout.splitlines() if proc.returncode == 0 else []
-    except Exception:
-        subjects = []
-    for subject in subjects:
-        match = re.search(r"#(\d+)", subject)
-        if not match:
+    for marker, pr in mapping.items():
+        tid = ids.get(marker)
+        if not tid:
             continue
-        pr = int(match.group(1))
-        for marker in TASK_MARK_RE.findall(subject):
-            tid = next((i for i in ids if i.upper() == marker.upper()), None)
-            if not tid:
-                continue
-            task = next((t for t in backlog.get("tasks") or [] if str(t.get("id")) == tid), None)
-            if task is None:
-                continue
-            if task.get("pr") == pr:
-                continue
-            task["pr"] = pr
-            updated.append(tid)
+        task = next((t for t in backlog.get("tasks") or [] if str(t.get("id")) == tid), None)
+        if task is None or task.get("pr") == pr:
+            continue
+        task["pr"] = pr
+        updated.append(tid)
     return updated
 
 
