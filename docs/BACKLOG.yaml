@@ -440,7 +440,7 @@ tasks:
 
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
-    status: todo
+    status: done
     pr: 216
     size: M
     deps: [VIS]
