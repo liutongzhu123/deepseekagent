@@ -26,6 +26,8 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F61 派单时不带上次验证的反例 → agent 只能从头摸索，返工轮次高（R23 花了 5 轮）
+      → 派单消息自动附上该 PR 最近一次的拒绝理由
   F60 sync_task_pr 从 `git log` 的提交标题里找 [任务ID]，但合并提交的标题是
       「Merge pull request #186 from …」，**不含任务标记** → 关联永远失败
       （2026-11-09：RA_VALUE_RANGE 的 PR #186 已合并，台账 pr 仍是 None）
@@ -779,6 +781,26 @@ def next_task(backlog: dict, busy: set[str], dispatched: dict,
     return None, "没有 todo 任务"
 
 
+def last_reject_reason(pr) -> str:
+    """F61：取该 PR 最近一次的验证拒绝理由，附进派单消息。
+
+    带上反例能让返工直接命中问题，而不是重新摸索——R23 曾经连做 5 轮，
+    每轮都在猜上一次错在哪。
+    """
+    try:
+        number = int(pr)
+    except (TypeError, ValueError):
+        return ""
+    data = read_json(VERIFY_STATE, {})
+    item = (data.get("verified") or {}).get(str(number)) or {}
+    if item.get("status") != "reject":
+        return ""
+    evidence = str(item.get("evidence") or "").strip()
+    if not evidence:
+        return f"- 验证 #{number} 判拒绝（未记录理由）"
+    return f"- 验证 #{number} 判拒绝：{evidence[:600]}"
+
+
 def dispatch_message(task: dict, attempt: int) -> str:
     covers = "、".join(task.get("covers") or []) or "（无）"
     files = "、".join(task.get("files") or []) or "（自定）"
@@ -794,6 +816,9 @@ def dispatch_message(task: dict, attempt: int) -> str:
         lines.append(f"- 备注：{task['note']}")
     if attempt > 1:
         lines.append(f"\n（这是第 {attempt} 次派发：上一次没有收到接单确认）")
+    reason = last_reject_reason(task.get("pr"))          # F61
+    if reason:
+        lines += ["", "## 上次验证拒绝的理由（先复现这个再动手）", reason]
     lines += [
         "",
         "要求：≤300 行、CI 绿、自己合；超阈值发卡片后**继续做下一件**（§10.3c）。",
