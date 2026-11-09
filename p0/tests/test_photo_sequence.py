@@ -482,6 +482,87 @@ def test_photo_zero_with_stative_shoot_still_fails():
     assert "外包装 序号从 0 开始" in finding["evidence"]
 
 
+# ---------------------------------------------------------------------------
+# Round 7 (verification #209): a demonstrative determiner before a short
+# series name is still a caption.  ``该外包装照片1`` must group with
+# ``外包装照片2``; a bare ``该照片8`` names no series and stays prose.
+# A dropped prose line is recorded in skipped so the remaining captions cannot
+# look like a gap the dropped line owns.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("prefix", ["该", "上述", "本次"])
+def test_demonstrative_series_caption_is_judged(prefix):
+    finding = _r23([
+        APPENDIX,
+        f"{prefix}外包装照片1拍摄于试验前。",
+        "外包装照片2",
+        "外包装照片3",
+    ])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
+@pytest.mark.parametrize("prefix", ["该", "上述", "本次"])
+def test_demonstrative_series_zero_still_fails(prefix):
+    finding = _r23([
+        APPENDIX,
+        f"{prefix}外包装照片0拍摄于试验前。",
+        "外包装照片1",
+        "外包装照片2",
+    ])
+
+    assert finding["status"] == "fail"
+    assert "外包装 序号从 0 开始" in finding["evidence"]
+
+
+@pytest.mark.parametrize("middle", [
+    "该外包装照片1拍摄于试验前。",
+    "该外包装照片1拍摄了试验前的外观。",
+    "该外包装照片1记录了试验前的外观。",
+    "该外包装照片1显示了试验前的外观。",
+    "该外包装照片1 试验前",
+])
+def test_demonstrative_caption_forms_group_with_plain_series(middle):
+    finding = _r23([APPENDIX, middle, "外包装照片2", "外包装照片3"])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
+def test_demonstrative_plain_caption_groups_with_plain_series():
+    finding = _r23([APPENDIX, "该外包装照片1", "外包装照片2", "外包装照片3"])
+
+    assert finding["status"] == "skip"  # no stage word anywhere
+    assert "标准题注=3" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
+def test_bare_pronoun_photo_stays_narrative():
+    finding = _r23([APPENDIX, "该照片8拍摄于试验前。", "外包装照片1", "外包装照片2"])
+
+    assert finding["status"] == "skip"
+    assert "正文叙述句" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
+@pytest.mark.parametrize("narrative", [
+    "照片1可见破损。",
+    "照片1详见正文。",
+    "照片1附在报告末尾。",
+    "随报告附照片2张。",
+    "拍摄照片1",
+])
+def test_narrative_mixed_with_captions_skips_not_gap(narrative):
+    finding = _r23([APPENDIX, narrative, "照片2", "照片3"])
+
+    assert finding["status"] == "skip"
+    assert "正文叙述句" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
 @pytest.mark.parametrize("caption", [
     "显示面板照片1",
     "记录仪照片1",

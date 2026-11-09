@@ -209,8 +209,12 @@ def extract_images(docx_bytes: bytes) -> list[bytes]:
 # S3  non-numeric number ``照片一`` / ``照片A`` -> skip.
 # S4  no series name and no heading -> skip (grouping unreliable).
 # S5  no embedded photo / no stage word in the report -> skip.
-# S6  narrative that only mentions photos (``随报告附照片2张。``) -> skip.
+# S6  narrative that only mentions photos (``随报告附照片2张。``) -> skip;
+#     the line is recorded in evidence so a following 照片2/3 cannot look like
+#     a gap the narrative line owns.
 # S7  zero standard captions -> skip, never pass.
+# S8  a determiner plus a series name is a caption (``该外包装照片1``), while a
+#     bare pronoun (``该照片8``) stays prose: the prefix alone decides nothing.
 # ---------------------------------------------------------------------------
 
 PHOTO_RULE_ID = "R23"
@@ -250,7 +254,14 @@ _NARRATIVE_BEFORE_RE = re.compile(rf"(?:{_NARRATIVE_BEFORE_WORDS})\s*$")
 _NARRATIVE_AFTER_RE = re.compile(
     rf"^\s*(?:[（(][^）)]*[）)])?\s*(?:{_NARRATIVE_AFTER_WORDS})"
 )
-_PRONOUN_PREFIX_RE = re.compile(r"^(?:该|这|那|其|此|上述|本次)")
+# A demonstrative determiner is not part of a series name: ``该外包装照片1``
+# belongs to 外包装, so it must group with ``外包装照片2``.  A bare pronoun
+# (``该照片8``) names no series and stays a prose reference.  Only the three
+# forms named by the README are stripped; 这/那/其/此 can start ordinary words
+# (其他/此外) and are out of this rework's scope.
+_DEMONSTRATIVE_PREFIX_RE = re.compile(r"^(?:该|上述|本次)")
+_BARE_PRONOUN_RE = re.compile(r"^(?:该|这|那|其|此|上述|本次)$")
+_LEGACY_PRONOUN_PREFIX_RE = re.compile(r"^(?:这|那|其|此)")
 _SENTENCE_END = "。！？；;"
 # A series label is a short noun phrase; a long leading clause is prose.
 _MAX_SERIES_LEN = 12
@@ -274,7 +285,9 @@ def _is_photo_narrative(text: str) -> bool:
     carries a description.  A verb before 照片N is narrative (``拍摄照片1``);
     a verb after it describes the photo and stays part of the caption
     (``外包装照片0拍摄于试验前。``).  Only pointer words immediately after
-    照片N (可见/如下/详见正文/附在…) mark prose.
+    照片N (可见/如下/详见正文/附在…) mark prose.  A bare demonstrative
+    (``该照片8``) only refers to a photo; the same word before a series name
+    (``该外包装照片1``) is a determiner and the line stays a caption.
     """
     stripped = (text or "").strip()
     if not stripped:
@@ -285,7 +298,7 @@ def _is_photo_narrative(text: str) -> bool:
         return True
     match = _PHOTO_NUMBER_RE.search(stripped)
     prefix = stripped[:match.start()] if match else stripped
-    if _NARRATIVE_BEFORE_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
+    if _NARRATIVE_BEFORE_RE.search(prefix) or _is_prose_pronoun(prefix):
         return True
     if match and _NARRATIVE_AFTER_RE.match(stripped[match.end():]):
         return True
@@ -322,6 +335,28 @@ def _split_stage(prefix: str) -> tuple[str, str]:
     return (stages[0] if stages else ""), remainder
 
 
+def _is_bare_pronoun(prefix: str) -> bool:
+    """True when the whole prefix is just a demonstrative pronoun.
+
+    ``该外包装`` names a series, so it is a caption; ``该`` alone only refers
+    to a photo already named elsewhere.  Stage words are removed first, so
+    ``该试验前`` is still a bare reference.
+    """
+    _, remainder = _split_stage(prefix)
+    return bool(_BARE_PRONOUN_RE.match(_normalise(remainder)))
+
+
+def _is_prose_pronoun(prefix: str) -> bool:
+    """True for a reference pronoun, including the out-of-scope legacy forms.
+
+    该/上述/本次 only count when the prefix is the pronoun alone; a series
+    name after them makes a caption.  这/那/其/此 keep their old behavior
+    (series-prefixed or bare forms drop as prose) because they also start
+    ordinary words and this rework did not change them.
+    """
+    return _is_bare_pronoun(prefix) or bool(_LEGACY_PRONOUN_PREFIX_RE.match(prefix))
+
+
 def _is_series_label(prefix: str) -> bool:
     """True when the text before 照片N is a short series label, not a clause.
 
@@ -337,7 +372,7 @@ def _is_series_label(prefix: str) -> bool:
         return False
     if re.search(r"[，,。；;！？!?、]", prefix):
         return False
-    if _NARRATIVE_BEFORE_RE.search(prefix) or _PRONOUN_PREFIX_RE.match(prefix):
+    if _NARRATIVE_BEFORE_RE.search(prefix) or _is_prose_pronoun(prefix):
         return False
     return True
 
@@ -358,7 +393,10 @@ def _caption_parts(text: str, match: re.Match) -> tuple[int, str, str]:
     stage, remainder = _split_stage(prefix)
     tail_stage, _ = _split_stage(tail)
     stage = stage or tail_stage
-    series = _normalise(remainder)
+    # ``该/上述/本次`` is a determiner, not the series name: 该外包装照片1 and
+    # 外包装照片1 must share one group, otherwise the prefixed caption looks
+    # like a second group starting at 1 and the plain 2/3 lines report a gap.
+    series = _DEMONSTRATIVE_PREFIX_RE.sub("", _normalise(remainder))
     if not series and annotation:
         annotation_stage, annotation_rest = _split_stage(annotation)
         stage = stage or annotation_stage
@@ -381,7 +419,9 @@ def _make_photo_entry(index: int, text: str, number: int, stage: str,
 def _parse_caption_line(text: str, index: int, section: str) -> tuple[dict | None, str | None]:
     """One line -> (standard-caption entry, skip reason), never split a line."""
     if _is_photo_narrative(text):  # S6
-        return None, None
+        # Record the drop: a silently ignored prose line makes the remaining
+        # captions start above 1 and report a gap that the skipped line owns.
+        return None, "正文叙述句"
     matches = list(_PHOTO_NUMBER_RE.finditer(text))
     if len(matches) > 1:  # S1
         zero = next((int(m.group(1)) for m in matches if int(m.group(1)) < 1), None)
@@ -490,12 +530,13 @@ def evaluate_photo_rules(data: ReportData) -> list[Finding]:
             "照片序号至少应从 1 开始，把照片0 改为照片1 后重试", page,
         )]
     if not entries or skipped:
-        # A skipped caption form may carry numbers of a group judged here
-        # (外包装照片1、内包装照片1 followed by 外包装照片2), so a gap would be
-        # an artefact of the skip.  Never report it, never claim pass.
+        # A skipped caption form (or a prose line) may carry numbers of a group
+        # judged here (外包装照片1、内包装照片1 followed by 外包装照片2, or
+        # 照片1可见破损。 followed by 照片2/3), so a gap would be an artefact of
+        # the skip.  Never report it, never claim pass.
         reasons = "；".join(sorted({item["reason"] for item in skipped})) if skipped else ""
         if not entries:
-            message = (f"未识别到可判定的标准照片题注（{reasons}），未核对照片序号"
+            message = (f"未识别到附录照片题注（{reasons}），未核对照片序号"
                        if skipped else "未识别到附录照片题注，无法核对照片序号")
         else:
             message = (f"仅核对 {len(entries)} 条标准题注，另有 {len(skipped)} 行"
