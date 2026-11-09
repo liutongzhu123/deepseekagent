@@ -349,7 +349,7 @@ tasks:
 
   - id: RA_VALUE_RANGE
     title: 数值合理性、单位正确性、小数位数检查
-    pr: 211
+    pr: 215
     status: todo
     note: 验证 #211 拒绝：dB/ppm vs MPa 量纲不符时返回 skip（应为 fail），与 N·m vs MPa 的处理不一致；根因是先查换算系数再比量纲
     size: M
@@ -430,7 +430,7 @@ tasks:
 
   - id: SP_SAMPLEGUIDE
     title: 样品制备指引生成与委托单联动校验
-    pr: 206
+    pr: 214
     status: todo
     size: M
     covers: [SP-8.2]
