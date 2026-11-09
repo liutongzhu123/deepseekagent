@@ -974,6 +974,163 @@ def r25_judge_consistency(data: ReportData):
     )
 
 
+# --- R26: 数值合理性、单位一致性与小数位数 --------------------------------
+# RA-2.4 / RA-2.5；F1–F12 见 p0/tests/test_value_range.py 与 README A16。数值超限但已判「不符合」不报。
+_NUM = r"[-+]?\d+(?:\.\d+)?"
+_UNIT_PART = r"[A-Za-zµμΩ°℃%‰][A-Za-zµμΩ°℃0-9²³·/²]*"
+_REQ_TRANS = str.maketrans({
+    "≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "＜": "<", "＞": ">",
+    "～": "~", "－": "-", "−": "-", "–": "-", "—": "-", "％": "%", "，": ",",
+})
+_UNIT_ANY = re.compile(r"(?<![A-Za-z])([A-Za-zµμΩ°℃%‰][A-Za-zµμΩ°℃0-9²³·/²]*)(?![A-Za-z])")
+_PLAIN_NUM = re.compile(rf"^({_NUM})({_UNIT_PART})?$")
+_NEG_JUDGMENT = re.compile(r"不符合|不合格|不通过|不满足")
+
+
+def _canonical_unit(token: str) -> str:
+    text = (token or "").strip().replace("°C", "℃").replace("°c", "℃").replace("µ", "μ")
+    return text if text in {"%", "‰"} else _UNIT_CANONICAL.get(text.lower(), "")
+
+
+def _canonical_units(text: str) -> set[str]:
+    units = {_canonical_unit(match.group(1)) for match in _UNIT_ANY.finditer(text or "")}
+    units.discard("")
+    return units
+
+
+def _parse_requirement(text: str) -> tuple[float | None, float | None] | None:
+    """Return the allowed (low, high) from a 限值/判定要求 cell; None if absent."""
+    norm = _norm_cell(text).translate(_REQ_TRANS)
+    match = re.search(rf"({_NUM})\s*(?:{_UNIT_PART})?\s*±\s*({_NUM})", norm)
+    if match:
+        center, spread = float(match.group(1)), abs(float(match.group(2)))
+        return center - spread, center + spread
+    match = re.search(rf"({_NUM})\s*(?:{_UNIT_PART})?\s*(?:~|至|到)\s*({_NUM})", norm) or re.search(
+        rf"({_NUM})\s*(?:{_UNIT_PART})?\s*-\s*({_NUM})", norm
+    )
+    if match:
+        low, high = float(match.group(1)), float(match.group(2))
+        return min(low, high), max(low, high)
+    upper = re.search(rf"(?:<=|不大于|不超过|最多|最高|最大|小于|低于|<)\s*({_NUM})", norm)
+    lower = re.search(rf"(?:>=|不小于|不低于|最少|最低|最小|大于|高于|>)\s*({_NUM})", norm)
+    if upper or lower:
+        return (float(lower.group(1)) if lower else None, float(upper.group(1)) if upper else None)
+    at_least = re.search(rf"({_NUM})\s*(?:{_UNIT_PART})?\s*(?:及)?以上", norm)
+    at_most = re.search(rf"({_NUM})\s*(?:{_UNIT_PART})?\s*(?:及)?(?:以下|以内)", norm)
+    if at_least or at_most:
+        return (float(at_least.group(1)) if at_least else None, float(at_most.group(1)) if at_most else None)
+    return None
+
+
+def _cell_number(text: str) -> tuple[float, str, int] | None:
+    """Return (value, canonical unit, decimal places) for a plain numeric cell."""
+    match = _PLAIN_NUM.match(_norm_cell(text).translate(_REQ_TRANS))
+    if not match:
+        return None
+    number = match.group(1)
+    return float(number), _canonical_unit(match.group(2) or ""), len(number.split(".", 1)[1]) if "." in number else 0
+
+
+def r26_value_range(data: ReportData):
+    title = "数值合理性与单位/小数位"
+    rows = data.result_cells
+    if not rows:
+        # 兜底：解析器只收「评价员+检验结果」表；其他含检验结果+限值要求的表也判。
+        for table in data.tables:
+            names = [cell.text.strip() for cell in table[0]] if table else []
+            if "检验结果" in names and any("限值" in name or "技术要求" in name for name in names):
+                rows = _expand_table(table)
+                break
+    if not rows:
+        return _finding("R26", title, "skip", "info", "未识别到检验结果表，无法检查数值合理性", section="检验结果表", cell="数值/单位/小数位")
+    header = [cell.strip() for cell in rows[0]]
+
+    def column(*names: str) -> int | None:
+        return next((index for index, name in enumerate(header) if any(token in _norm_cell(name) for token in names)), None)
+
+    columns = {
+        "result": column("检验结果", "检测结果", "实测结果"),
+        "mean": column("检验均值", "平均值", "均值"),
+        "limit": column("限值要求", "判定要求", "技术要求"),
+        # 「判定要求」是限值列，不能被当成判定列；判定列名不能含「要求」。
+        "judgment": next((index for index, name in enumerate(header) if "判定" in _norm_cell(name) and "要求" not in _norm_cell(name)), None),
+        "unit": column("单位"),
+        "item": column("检验项目", "检测项目"),
+        "sample": column("样品编号"),
+    }
+    if columns["result"] is None:
+        return _finding("R26", title, "skip", "info", "检验结果表没有「检验结果」列，无法检查数值", section="检验结果表", cell="检验结果")
+    header_units = {key: _canonical_units(header[columns[key]]) if columns[key] is not None else set() for key in ("result", "mean", "limit")}
+    problems: list[str] = []
+    range_checked = unit_checked = 0
+    groups: dict[tuple[str, str], list[tuple[str, int]]] = {}
+    for row_index, row in enumerate(rows[1:], start=2):
+        if not any(cell.strip() for cell in row):
+            continue
+
+        def cell(key: str) -> str:
+            index = columns[key]
+            return row[index].strip() if index is not None and index < len(row) else ""
+
+        label = next((cell(key) for key in ("item", "sample") if cell(key)), f"第{row_index}行")
+        limit_text, judgment = cell("limit"), cell("judgment")
+        requirement = _parse_requirement(limit_text) if limit_text else None
+        measurements = [
+            (key, row[columns[key]].strip(), parsed[0], parsed[1], parsed[2])
+            for key in ("result", "mean")
+            if columns[key] is not None and columns[key] < len(row) and (parsed := _cell_number(row[columns[key]])) is not None
+        ]
+        unit_cell_units = _canonical_units(cell("unit"))
+        value_units = {unit for _key, _raw, _number, unit, _dec in measurements if unit} | unit_cell_units
+        effective_units = []
+        for key, _raw, _number, unit, _dec in measurements:
+            value_units |= header_units[key]
+            effective_units.append({unit} if unit else (set(unit_cell_units) or set(header_units[key])))
+        requirement_units = _canonical_units(limit_text)
+        if requirement is not None and measurements:
+            range_checked += 1
+            low, high = requirement
+            if not _NEG_JUDGMENT.search(judgment):
+                for (key, raw, number, _unit, _dec), units in zip(measurements, effective_units):
+                    if len(requirement_units) == 1 and len(units) == 1 and requirement_units != units:
+                        continue  # 单位不同只报单位不一致，不做跨单位数值比较
+                    if (low is not None and number < low - 1e-9) or (high is not None and number > high + 1e-9):
+                        problems.append(f"{label} {header[columns[key]]}「{raw}」超出判定要求「{limit_text}」")
+        if measurements and len(value_units) > 1:
+            problems.append(f"{label} 检验结果/单位列/表头单位不一致：{'、'.join(sorted(value_units))}")
+        elif measurements and len(requirement_units) == 1 and len(value_units) == 1:
+            unit_checked += 1
+            if requirement_units != value_units:
+                problems.append(
+                    f"{label} 单位与判定要求不一致：判定要求「{limit_text}」为「{next(iter(requirement_units))}」，"
+                    f"检验结果/单位列/表头为「{next(iter(value_units))}」"
+                )
+        primary = next((item for item in measurements if item[0] == "result"), None)
+        if primary is not None and (cell("item") or cell("sample")):
+            groups.setdefault((cell("item"), cell("sample")), []).append((primary[1], primary[4]))
+    decimal_groups = 0
+    for (item, sample), entries in groups.items():
+        if len(entries) < 2:
+            continue
+        decimal_groups += 1
+        if len({decimals for _raw, decimals in entries}) > 1:
+            values = "、".join(f"{raw}（{decimals} 位）" for raw, decimals in entries[:4])
+            problems.append(f"{item or sample} 平行样小数位数不一致：{values}")
+    evidence = f"数值范围={range_checked}行; 单位比对={unit_checked}行; 小数位组={decimal_groups}; 问题={len(problems)}"
+    if problems:
+        return _finding(
+            "R26", title, "fail", "medium", f"数值/单位/小数位问题 {len(problems)} 处：" + "；".join(problems[:6]),
+            evidence, "按判定要求核对数值范围、统一单位，并按平行样统一小数位数", section="检验结果表", cell="数值/单位/小数位",
+        )
+    if range_checked or unit_checked or decimal_groups:
+        return _finding(
+            "R26", title, "pass", "info",
+            f"数值范围/单位/小数位检查通过（范围 {range_checked} 行、单位 {unit_checked} 行、小数位 {decimal_groups} 组）",
+            evidence, section="检验结果表", cell="数值/单位/小数位",
+        )
+    return _finding("R26", title, "skip", "info", "未识别到判定要求、单位或可比较的平行样数值，无法检查", evidence, section="检验结果表", cell="数值/单位/小数位")
+
+
 # --- R27: 原始记录版本有效性（RA-4.7） -------------------------------------
 # 原始记录通过「检验依据」引用试验标准；引用过期版本号即“未使用最新有效版本”。
 # Failure branches (each covered in p0/tests/test_raw_record_version.py):
@@ -1247,4 +1404,4 @@ def evaluate_format_rules(data: ReportData):
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency, "R27": r27_raw_record_version, "R29": r29_product_name}
+_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency, "R26": r26_value_range, "R27": r27_raw_record_version, "R29": r29_product_name}
