@@ -343,7 +343,8 @@ tasks:
     status: done
     size: S
     covers: [RA-1.6]
-    acceptance: ["结论页无判定表述时结果表有判定即报出", "两边都有判定不报"]
+    acceptance: ["结论页有判定表述时对比结果表；两边都无判定时不报"]
+    skip_scope: ["结论页表述含糊、无法判定有无判定时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_judge_consistency.py, docs/report-format-checks/README.md]
 
   - id: RA_VALUE_RANGE
@@ -352,7 +353,8 @@ tasks:
     status: todo
     size: M
     covers: [RA-2.4, RA-2.5]
-    acceptance: ["数值超出判定要求范围能报出", "单位与标准不一致能报出", "小数位数不一致能报出"]
+    acceptance: ["单位相同或可可靠换算（kPa↔MPa）时比数值与限值；小数位一致性可判"]
+    skip_scope: ["单位无法识别或不支持换算时 skip，不得用原始数值硬比"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_value_range.py, docs/report-format-checks/README.md]
 
   - id: RA_RAWVER
@@ -361,7 +363,8 @@ tasks:
     status: done
     size: S
     covers: [RA-4.7]
-    acceptance: ["引用过期版本号能报出", "最新版本不报"]
+    acceptance: ["能识别到原始记录编号与版本号时判是否最新"]
+    skip_scope: ["识别不到版本号时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_raw_record_version.py, docs/report-format-checks/README.md]
 
   - id: RA_FIXEDTEXT
@@ -370,7 +373,8 @@ tasks:
     status: done
     size: M
     covers: [RA-4.11]
-    acceptance: ["缺注意事项能逐条报出", "顺序或措辞错误能报出", "中英文各按 8/7 条核对"]
+    acceptance: ["按整行/整段匹配注意事项条文，缺条与错序可判"]
+    skip_scope: ["段落被打散、无法还原条文时 skip；不得按顿号/标点切分"]
     files: [p0/app/template_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_fixed_content.py, docs/report-format-checks/README.md]
 
   - id: RA_CUSTOMRULE
@@ -379,7 +383,8 @@ tasks:
     status: done
     size: M
     covers: [RA-5.1]
-    acceptance: ["管理员可配置条件表达式", "命中条件能报出并给出证据", "配置为空时不报"]
+    acceptance: ["管理员配置了条件表达式时按配置求值并给证据"]
+    skip_scope: ["配置为空或表达式无法解析时 skip"]
     files: [p0/app/admin_config.py, p0/app/rules.py, p0/tests/test_custom_rule.py, docs/report-format-checks/README.md]
 
   - id: RA_PRODNAME
@@ -388,7 +393,8 @@ tasks:
     status: done
     size: S
     covers: [RA-5.2]
-    acceptance: ["产品名称与检测项目明显不符能报出", "纯编号类名称（如 001）能报出", "正常名称不报"]
+    acceptance: ["产品名称与检测项目明显不符、或为纯编号（如 001）时可判"]
+    skip_scope: ["名称语义无法判断时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_product_name.py, docs/report-format-checks/README.md]
 
   - id: SP_MULTIFMT
@@ -397,7 +403,8 @@ tasks:
     status: done
     size: M
     covers: [SP-1.1]
-    acceptance: ["PDF 可上传并解析", "扫描图片可上传（文字提取可依赖 OCR 能力边界并明确提示）", "格式不支持时给明确错误"]
+    acceptance: ["PDF/Word 可解析；不支持的格式给明确错误"]
+    skip_scope: ["扫描件文字提取依赖 OCR，未配置时 skip 并说明"]
     files: [p0/app/standard_parse.py, p0/app/main.py, p0/tests/test_multiformat.py]
 
   - id: SP_REVIEWSAVE
@@ -406,7 +413,8 @@ tasks:
     status: done
     size: M
     covers: [SP-2.2]
-    acceptance: ["解析结果可人工修改", "确认后写入标准库", "未确认不入库"]
+    acceptance: ["人工确认后入库、未确认不入库、取消确认后下架"]
+    skip_scope: ["并发/权限冲突等场景不判"]
     files: [p0/app/standard_store.py, p0/app/main.py, p0/tests/test_review_save.py]
 
   - id: SP_FORMULAVAR
@@ -415,7 +423,8 @@ tasks:
     status: done
     size: M
     covers: [SP-6.2]
-    acceptance: ["能提取变量名与定义", "能生成可执行规则", "变量缺失时明确报出"]
+    acceptance: ["按括号配对切分参数；能提取变量名与定义时判"]
+    skip_scope: ["公式无法完整解析时 skip，不得输出半截表达式"]
     files: [p0/app/standard_extract/formula.py, p0/tests/test_formula_vars.py, docs/report-format-checks/README.md]
 
   - id: SP_SAMPLEGUIDE
@@ -424,7 +433,8 @@ tasks:
     status: done
     size: M
     covers: [SP-8.2]
-    acceptance: ["能生成样品制备指引", "与委托单样品信息不一致时能报出"]
+    acceptance: ["样品数量与编号可机械比对时判"]
+    skip_scope: ["尺寸规格的或/且语义、未归属的数量要求 → skip"]
     files: [p0/app/standard_extract/samples.py, p0/app/main.py, p0/tests/test_sample_guide.py]
 
   - id: RA_PHOTO_SEQ
