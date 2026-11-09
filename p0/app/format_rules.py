@@ -542,7 +542,9 @@ def r18_toc_pages(data: ReportData):
 # F10 只检查检验依据字段（含“检验依据：”行与标题下一行回退），不扫正文其他引用；F11 名称/方案号/限值数字不误识别为标准号。
 # F12 企业标准 Q/ 组织代号后隔空格、编号以字母开头（Q/JLY J7110109C）-> 识别并判缺年代号，不能 skip。
 # F13 冒号只在紧跟数字时并进标准号（2021:2015 保留；2021：说明文字 或 结尾冒号 断掉），
-#     否则合法标准号后接冒号会被误判格式不合法。
+#     否则合法标准号后接冒号会被误判格式不合法；Q/ 企业标准编号末尾的 :YYYY 同理。
+# F14 「Q/」与组织代号之间也可能隔空格（Q/ BYDQ-A1901.404），先归一，不能当成没有标准号。
+#     NFKC 已把全角空格折成 ASCII 空格，多个空格/制表符在这里一并吸收。
 _BASIS_LABELS = ("检验依据", "检测依据")
 _STD_DASHES = str.maketrans({
     "–": "-", "—": "-", "−": "-", "－": "-", "―": "-",
@@ -551,8 +553,9 @@ _STD_DASHES = str.maketrans({
 })
 _STD_TOKEN_TAIL = r"(?:[A-Za-z0-9.\-]|:(?=\d))*"
 _STD_QT_RE = re.compile(
-    r"(?<![A-Za-z0-9/])(?P<kind>Q|T)/[A-Za-z][A-Za-z0-9]*(?:[.\-][A-Za-z0-9]+)*"
+    r"(?<![A-Za-z0-9/])(?P<kind>Q|T)/[ \t]*[A-Za-z][A-Za-z0-9]*(?:[.\-][A-Za-z0-9]+)*"
     r"(?:[ \t]*(?:[A-Z]+)?\d" + _STD_TOKEN_TAIL + r")?"
+    r"(?:(?<!-\d{4})(?<=\d):\d{4})?"
 )
 _STD_GENERAL_RE = re.compile(
     r"(?<![A-Za-z0-9])"
@@ -1335,7 +1338,8 @@ def r26_value_range(data: ReportData):
 # F10 企业标准编号里的 4 位数字（A1901）不当年份，只认末尾 -YYYY/:YYYY。
 # F11 连字符变体（U+2010/U+2011/U+2012 等）先折成 ASCII "-"，版本号才能切出年份。
 # F12 「Q/ 代号」后的空格与连字符视为同一写法（Q/BYDQ A1901.404 == Q/BYDQ-A1901.404），
-#     版本键归一后再查表；同一标准的两种写法重复引用只报一次。
+#     「Q/」与代号之间的空格同样是分隔符（Q/ BYDQ-A1901.404 == Q/BYDQ-A1901.404），
+#     版本键归一后再查表；同一标准的多种写法重复引用只报一次。
 #
 # 最新有效版本表来源：客户当前 12 份 BYD 草稿与 records.xlsx 的检验依据（2026-11-08 基线）。
 # 只收录能从客户现行资料确认的版本；未收录标准不判，客户升版后在此更新一行即可。
@@ -1348,11 +1352,15 @@ _RAW_RECORD_LATEST_VERSIONS = {
 def _version_key(text: str) -> str:
     """Canonical key where dash and space separators are equivalent.
 
-    Word writes the same enterprise standard as ``Q/BYDQ-A1901.404`` or
-    ``Q/BYDQ A1901.404`` and may use U+2010/U+2011 hyphens; fold them all to
-    one ASCII form before comparing with the registry.
+    Word writes the same enterprise standard as ``Q/BYDQ-A1901.404``,
+    ``Q/BYDQ A1901.404`` or ``Q/ BYDQ-A1901.404`` and may use U+2010/U+2011
+    hyphens.  The space right after the ``Q/``/``T/`` prefix separates the
+    prefix from the code, so drop it instead of turning it into ``-``; fold
+    every other run of whitespace/dash to one ASCII ``-`` before comparing
+    with the registry.
     """
-    return re.sub(r"[\s-]+", "-", _norm_standard_text(text))
+    normalised = re.sub(r"^([QT]/)\s+", r"\1", _norm_standard_text(text))
+    return re.sub(r"[\s-]+", "-", normalised)
 
 
 _RAW_RECORD_LATEST = {_version_key(key): year for key, year in _RAW_RECORD_LATEST_VERSIONS.items()}
@@ -1395,7 +1403,8 @@ def _unique_tokens(tokens: list[tuple[str, str, str]]) -> list[tuple[str, str, s
 
 def _display_token(token: str) -> str:
     """Show enterprise standards in the canonical ``Q/CODE-NUMBER`` form."""
-    return re.sub(r"^([QT]/[A-Za-z0-9]+)[ \t]+", r"\1-", token)
+    shown = re.sub(r"^([QT]/)[ \t]+", r"\1", token)
+    return re.sub(r"^([QT]/[A-Za-z0-9]+)[ \t]+", r"\1-", shown)
 
 
 def r27_raw_record_version(data: ReportData):

@@ -2,7 +2,7 @@
 
 失败场景 F1–F12 见 ``p0/app/format_rules.py``；验收两条：
 引用过期版本号 -> fail；引用最新版本 -> pass（不报）。
-Word 常见的连字符变体（U+2010/U+2011 等）与「Q/ 代号」后空格也要归一，
+Word 常见的连字符变体（U+2010/U+2011 等）以及「Q/」与代号之间、代号与编号之间的空格也要归一，
 不能把同一份过期标准当成“无年代号/未收录”跳过。
 """
 from __future__ import annotations
@@ -50,6 +50,15 @@ def test_latest_version_is_not_reported():
     assert "过期=0" in finding["evidence"]
 
 
+def test_multiple_expired_standards_are_each_listed():
+    finding = _r27("Q/BYDQ-A1901.404—2018、Q/BYDQ-A1901.1373—2017")
+
+    assert finding["status"] == "fail"
+    assert "Q/BYDQ-A1901.404-2018（最新 2025）" in finding["message"]
+    assert "Q/BYDQ-A1901.1373-2017（最新 2018）" in finding["message"]
+    assert "过期=2" in finding["evidence"]
+
+
 def test_second_registered_standard_uses_its_own_latest_version():
     finding = _r27("Q/BYDQ-A1901.1373—2018《汽车零部件总成气味性试验方法》")
 
@@ -92,6 +101,15 @@ def test_space_after_enterprise_code_is_reported():
     assert "过期=1" in finding["evidence"]
 
 
+@pytest.mark.parametrize("gap", ["  ", "\u3000", "\u00a0", "\t"])
+def test_space_after_enterprise_code_variants_are_reported(gap):
+    finding = _r27(f"Q/BYDQ{gap}A1901.404—2018《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "fail"
+    assert "Q/BYDQ-A1901.404-2018（最新 2025）" in finding["message"]
+    assert "过期=1" in finding["evidence"]
+
+
 def test_space_after_code_with_latest_version_is_not_reported():
     finding = _r27("Q/BYDQ A1901.404—2025《汽车零部件气味性试验方法》")
 
@@ -115,6 +133,77 @@ def test_space_after_code_without_year_is_skipped():
 
 def test_same_standard_with_space_and_hyphen_is_reported_once():
     finding = _r27("Q/BYDQ-A1901.404—2018、Q/BYDQ A1901.404-2018")
+
+    assert finding["status"] == "fail"
+    assert "引用了 1 个过期版本号" in finding["message"]
+    assert "引用标准=1" in finding["evidence"]
+
+
+@pytest.mark.parametrize("gap", [" ", "  ", "\u3000", "\u00a0", "\t"])
+def test_space_after_standard_prefix_is_reported(gap):
+    """「Q/」与代号之间的空格（含全角/多个）不能把过期标准吞成 skip。"""
+    finding = _r27(f"Q/{gap}BYDQ-A1901.404—2018《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "fail"
+    assert "Q/BYDQ-A1901.404-2018（最新 2025）" in finding["message"]
+    assert "引用标准=1; 可判定=1; 过期=1; 未收录=0; 无年代号=0" in finding["evidence"]
+
+
+def test_space_after_standard_prefix_with_latest_version_is_not_reported():
+    finding = _r27("Q/ BYDQ-A1901.404—2025《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "pass"
+    assert "过期=0" in finding["evidence"]
+
+
+def test_space_after_prefix_and_after_code_together_is_reported():
+    finding = _r27("Q/ BYDQ A1901.404—2018《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "fail"
+    assert "Q/BYDQ-A1901.404-2018（最新 2025）" in finding["message"]
+    assert "过期=1" in finding["evidence"]
+
+
+def test_space_after_prefix_spellings_of_one_version_count_once():
+    finding = _r27("Q/ BYDQ-A1901.404—2018、Q/  BYDQ-A1901.404-2018")
+
+    assert finding["status"] == "fail"
+    assert "引用了 1 个过期版本号" in finding["message"]
+    assert "引用标准=1" in finding["evidence"]
+
+
+def test_space_after_prefix_without_year_is_skipped():
+    finding = _r27("Q/ BYDQ-A1901.404《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "skip"
+    assert "无年代号=1" in finding["evidence"]
+
+
+def test_colon_separated_year_is_reported():
+    finding = _r27("Q/BYDQ-A1901.404:2018《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "fail"
+    assert "Q/BYDQ-A1901.404:2018（最新 2025）" in finding["message"]
+    assert "引用标准=1; 可判定=1; 过期=1" in finding["evidence"]
+
+
+def test_colon_separated_latest_version_is_not_reported():
+    finding = _r27("Q/BYDQ-A1901.404:2025《汽车零部件气味性试验方法》")
+
+    assert finding["status"] == "pass"
+    assert "过期=0" in finding["evidence"]
+
+
+def test_hyphen_year_is_not_overridden_by_trailing_colon_year():
+    finding = _r27("Q/BYDQ-A1901.404-2018:2025")
+
+    assert finding["status"] == "fail"
+    assert "Q/BYDQ-A1901.404-2018（最新 2025）" in finding["message"]
+    assert "过期=1" in finding["evidence"]
+
+
+def test_dash_spellings_of_one_version_count_once():
+    finding = _r27("Q/BYDQ-A1901.404—2018、Q/BYDQ-A1901.404-2018")
 
     assert finding["status"] == "fail"
     assert "引用了 1 个过期版本号" in finding["message"]
