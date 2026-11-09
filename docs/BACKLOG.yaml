@@ -435,7 +435,7 @@ tasks:
     acceptance: ["按括号配对切分参数；能提取变量名与定义时判"]
     skip_scope: ["公式无法完整解析时 skip，不得输出半截表达式"]
     files: [p0/app/standard_extract/formula.py, p0/tests/test_formula_vars.py, docs/report-format-checks/README.md]
-    note: 验证 #218 拒绝：插入无关记号（PRR=217Hz）时抽出 3 条伪条目，把后一组定义反向前置；正确应 2 条
+    note: 验证 #219 通过（按组归属：无关记号不再借用下一组定义；5 类干扰形态 + agent 16 组对抗）
 
   - id: SP_SAMPLEGUIDE
     title: 样品制备指引生成与委托单联动校验
