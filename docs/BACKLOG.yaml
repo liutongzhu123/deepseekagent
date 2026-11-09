@@ -428,7 +428,7 @@ tasks:
 
   - id: SP_FORMULAVAR
     title: 提取公式变量定义与计算逻辑
-    pr: 205
+    pr: 218
     status: todo
     size: M
     covers: [SP-6.2]
