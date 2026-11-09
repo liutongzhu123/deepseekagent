@@ -769,3 +769,12 @@ def test_f56_verifying_pr_is_in_flight(monkeypatch):
             continue
         reset_happened.append(pr)
     assert reset_happened == [], "验证中的 PR 不应触发重置/派单"
+
+
+def test_f59_pr_line_can_be_overwritten(tmp_path):
+    """F59：传入 pr 时必须覆盖已有的 pr 行，否则关联返工 PR 永远改不掉。"""
+    path = tmp_path / "BACKLOG.yaml"
+    path.write_text("  - id: T1\n    status: todo\n    pr: 181\n", encoding="utf-8")
+    assert sup.set_task_status(path, "T1", "todo", 203) is True
+    text = path.read_text(encoding="utf-8")
+    assert "pr: 203" in text and "pr: 181" not in text
