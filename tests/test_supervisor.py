@@ -808,3 +808,27 @@ def test_f59_pr_line_can_be_overwritten(tmp_path):
     assert sup.set_task_status(path, "T1", "todo", 203) is True
     text = path.read_text(encoding="utf-8")
     assert "pr: 203" in text and "pr: 181" not in text
+
+def test_f66_close_task_tickets(monkeypatch):
+    """F66：任务销账后要关掉它名下还开着的工单。"""
+    stopped = []
+
+    class R:
+        stdout = '{"stopped":true}'
+
+    monkeypatch.setattr(sup, "api_tickets", lambda: [
+        {"id": "t1", "state": "open", "title": "RA_VALUE_RANGE：数值合理性"},
+        {"id": "t2", "state": "open", "title": "其它任务"},
+        {"id": "t3", "state": "closed", "title": "RA_VALUE_RANGE 旧工单"},
+    ])
+    monkeypatch.setattr(sup.subprocess, "run",
+                        lambda *a, **k: (stopped.append(a[0][-1]) or R()))
+    assert sup.close_task_tickets("RA_VALUE_RANGE") == 1
+    assert stopped and stopped[0].endswith("/tickets/t1/stop")
+
+
+def test_f66_ignores_closed_tickets(monkeypatch):
+    monkeypatch.setattr(sup, "api_tickets", lambda: [
+        {"id": "t9", "state": "closed", "title": "RA_RAWVER"},
+    ])
+    assert sup.close_task_tickets("RA_RAWVER") == 0
