@@ -431,7 +431,7 @@ tasks:
   - id: SP_SAMPLEGUIDE
     title: 样品制备指引生成与委托单联动校验
     pr: 206
-    status: done
+    status: todo
     size: M
     covers: [SP-8.2]
     acceptance: ["样品数量与编号可机械比对时判"]
@@ -440,7 +440,7 @@ tasks:
 
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
-    status: done
+    status: todo
     pr: 209
     size: M
     deps: [VIS]
