@@ -421,7 +421,7 @@ tasks:
   - id: SP_FORMULAVAR
     title: 提取公式变量定义与计算逻辑
     pr: 205
-    status: done
+    status: todo
     size: M
     covers: [SP-6.2]
     acceptance: ["按括号配对切分参数；能提取变量名与定义时判"]
