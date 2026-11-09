@@ -1045,6 +1045,7 @@ def run(dry_run: bool) -> int:
         if not dry_run and rows0 and all(rows0):
             commit_backlog(f"chore(backlog): 关联返工 PR {', '.join(synced)}")   # F58
         log(f"{'[dry-run] ' if dry_run else ''}任务 PR 号已更新：{', '.join(synced)}")
+    dispatched = read_json(DISPATCHED, {})             # F64：必须在使用前加载
     reverted = revert_rejected(backlog)                # F44：先回退被拒绝的
     if reverted:
         # F51：返工是正常流程，不能被"最多 3 次"挡住
@@ -1083,7 +1084,6 @@ def run(dry_run: bool) -> int:
     ids = task_ids(backlog)
     busy = in_flight(api_tickets(), ids)
     awaiting = awaiting_merge(ids)
-    dispatched = read_json(DISPATCHED, {})
     # F52/F53：PR 被验证拒绝 → 重置次数以便返工，但同一个被拒 PR **只重置一次**，
     # 并保留冷却时间：否则每 2 分钟清一次、派一次（2026-11-08 实测连派三次）。
     rejected_now = rejected_prs()
