@@ -127,3 +127,62 @@ def test_annotation_before_shi_zhong_is_not_a_formula():
     entries = _e("注：1）脉冲PRR=217Hz。x=(a+b)/n。"
                  "式中：x—平均值；a—测量值；b—测量值；n—次数。")
     assert [entry["target"] for entry in entries] == ["x"]
+
+
+def test_second_equation_with_its_own_shi_zhong_is_kept():
+    """F16: each 式中 group defines its own equation; the second is not dropped."""
+    text = ("x=(a+b)/n。式中：x—平均值；a—测量值；b—测量值；n—次数。"
+            "y=(a+b)/n。式中：y—平均值；a—测量值；b—测量值；n—次数。")
+    entries = _e(text)
+    assert [(entry["target"], entry["rule"]["status"]) for entry in entries] == [
+        ("x", "executable"), ("y", "executable")]
+    assert [item["symbol"] for item in entries[1]["variables"]] == [
+        "y", "a", "b", "n"]
+    assert evaluate_formula(entries[1], {"a": 1, "b": 2, "n": 3})["value"] == 1.0
+    # The second group uses its own definitions, not the first group's.
+    entries = _e("x=(a+b)/n。式中：x—平均值；a—测量值；b—测量值；n—次数。"
+                 "y=(c+d)/m。式中：y—平均值；c—测量值；d—测量值；m—次数。")
+    second = entries[1]
+    assert (second["target"], second["expression"]) == ("y", "(c+d)/m")
+    assert [item["symbol"] for item in second["variables"]] == [
+        "y", "c", "d", "m"]
+    assert (second["rule"]["status"], second["missing_variables"]) == (
+        "executable", [])
+    assert evaluate_formula(second, {"c": 3, "d": 5, "m": 2})["value"] == 4.0
+
+
+def test_equation_without_its_own_shi_zhong_after_a_group_is_skipped():
+    """F15: definitions do not leak into a later sentence that has no 式中."""
+    text = ("x=(a+b)/n。式中：x—平均值；a—测量值；b—测量值；n—次数。"
+            "y=(a+b)/n。")
+    assert [entry["target"] for entry in _e(text)] == ["x"]
+
+
+def test_one_shi_zhong_still_defines_several_preceding_sentences():
+    text = ("试验结果按加权平均值计算；变化率按式（2）计算，"
+            "变化率=（A-B）/B×100%。式中：A——实测值；B——基准值。")
+    entries = _e(text)
+    assert {entry["kind"] for entry in entries} == {"weighted_mean", "percentage"}
+    assert all([item["symbol"] for item in entry["variables"]] == ["A", "B"]
+               for entry in entries)
+
+
+def test_incomplete_expression_is_skipped_not_kept_as_half():
+    """F17: a formula that cannot be parsed in full is skipped, not truncated."""
+    cases = (
+        "x=(a+b)/时间。式中：x—平均值；a—测量值；b—测量值。",
+        "x=(a+b。式中：x—平均值；a—测量值；b—测量值。",
+        "x=max(a,b。式中：a——值；b——值。",
+        "x=a+。式中：x—平均值；a—测量值。",
+    )
+    for text in cases:
+        assert _e(text) == [], text
+
+
+def test_document_level_second_equation_is_kept():
+    text = ("6.1 x=(a+b)/n。式中：x—平均值；a—测量值；b—测量值；n—次数。"
+            "y=(a+b)/n。式中：y—平均值；a—测量值；b—测量值；n—次数。")
+    entries, summary = apply_formulas([], [(text, 1)])
+    assert [entry["target"] for entry in entries] == ["x", "y"]
+    assert summary["formulas"] == 2
+    assert summary["formulas_executable"] == 2

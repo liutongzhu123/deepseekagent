@@ -16,7 +16,9 @@ SP_FORMULAVAR (SP-6.2): target/expression, uses/missing_variables (reported) and
 restricted-AST rule.  F1 no 式中, F2 unused, F3 separators, F4 full-width, F5 ellipsis,
 F6 reference-only, F7 Greek/subscripts, F8 eval error, F9 unsafe AST, F10 series,
 F11 equation without 式中, F12 trailing comma, F13 eval KeyError, F14 argument comma,
-F15 note (注/备注/附注) is not a formula.
+F15 note (注/备注/附注) is not a formula, F16 each 式中 defines its own group so a
+second equation in the same clause keeps its variables, F17 incomplete expression is
+skipped instead of kept as a half expression.
 """
 from __future__ import annotations
 
@@ -70,25 +72,54 @@ _ALLOWED_NODES = (
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow}
 
 
-def _sentences(text: str) -> list[str]:
-    return [
-        part.strip()
-        for part in re.split(r"[。；;]", text or "")
-        if len(part.strip()) >= 4
-    ]
+def _sentences(text: str) -> list[tuple[int, int, str]]:
+    """Sentences as ``(start, end, text)`` spans, in text order."""
+    found: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"[^。；;]+", text or ""):
+        raw = match.group()
+        sentence = raw.strip()
+        if len(sentence) < 4:
+            continue
+        start = match.start() + len(raw) - len(raw.lstrip())
+        found.append((start, match.end() - (len(raw) - len(raw.rstrip())),
+                      sentence))
+    return found
 
 
-def _variables(text: str) -> list[dict]:
-    index = (text or "").find("式中")
-    if index < 0:
-        return []
-    section = re.split(r"[。]", text[index + 2:])[0]
+def _variable_section(section: str) -> list[dict]:
+    """Parse ``symbol—definition`` entries from one 式中 section body."""
     variables: list[dict] = []
     for match in _VARIABLE.finditer(section):
         definition = match.group(2).strip(" ：:，,")
         if definition and len(definition) <= 60:
             variables.append({"symbol": match.group(1), "definition": definition})
     return variables[:12]
+
+
+def _shi_zhong(text: str) -> list[tuple[int, int, list[dict]]]:
+    """Every 式中 section as ``(start, end, variables)``, in text order.
+
+    A section runs from the keyword to the next ``。`` (or the end of the
+    text), so each equation keeps the definitions that directly follow it.
+    A later equation carrying its own 式中 therefore still gets variables
+    instead of being starved by the first section (F16).
+    """
+    sections: list[tuple[int, int, list[dict]]] = []
+    for match in re.finditer(r"式中", text or ""):
+        stop = text.find("。", match.end())
+        end = len(text) if stop < 0 else stop
+        sections.append((match.start(), end,
+                         _variable_section(text[match.end():end])))
+    return sections
+
+
+def _variables_for(sections: list[tuple[int, int, list[dict]]],
+                   start: int) -> list[dict]:
+    """Definitions of the first 式中 section that ends after ``start``."""
+    for _section_start, end, variables in sections:
+        if start < end:
+            return variables
+    return []
 
 
 def _top_level_cut(text: str) -> str:
@@ -108,12 +139,41 @@ def _top_level_cut(text: str) -> str:
     return text
 
 
+_INCOMPLETE_TAIL = "+-*/^=(,√"
+
+
+def _complete(text: str) -> bool:
+    """False when a captured RHS is a half expression such as ``(a+b)/``."""
+    normalized = _norm(text)
+    if not normalized or normalized[-1] in _INCOMPLETE_TAIL:
+        return False
+    depth = 0
+    for char in normalized:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _broken_equation(sentence: str) -> bool:
+    """True when an ``=`` is present but its RHS is not a complete formula."""
+    match = _EQUATION.search(sentence or "")
+    if not match:
+        return False
+    return not _complete(_top_level_cut(match.group("rhs")).strip())
+
+
 def _expression(sentence: str) -> tuple[str, str] | None:
     match = _EQUATION.search(sentence or "")
     if not match:
         return None
     rhs = _top_level_cut(match.group("rhs")).strip()
-    return (match.group("lhs").strip(), rhs) if len(rhs) >= 2 else None
+    if len(rhs) < 2 or not _complete(rhs):
+        return None
+    return (match.group("lhs").strip(), rhs)
 
 
 def _norm(text: str) -> str:
@@ -267,6 +327,10 @@ def _entry(kind, status, sentence, variables, clause, item_clause,
 
 
 def _classify(sentence, variables, clause, item_clause) -> dict | None:
+    if _broken_equation(sentence):
+        # F17: a formula that cannot be parsed in full is skipped, never kept
+        # as a half expression such as ``x=(a+b`` or ``x=a+``.
+        return None
     kind = next((name for name, pattern in _TYPES if pattern.search(sentence)), None)
     expression = _expression(sentence)
     calculated = (
@@ -288,21 +352,22 @@ def extract_text_formulas(
     text: str, clause: str = "", item_clause: str = ""
 ) -> list[dict]:
     """Classify formula sentences from one clause's text (no document scan)."""
-    sentences = [sentence for sentence in _sentences(text)
-                 if not _NOTE.match(sentence)]
-    variables = _variables(text)
-    # 注/备注/附注 sentences are already gone; a 式中 section also defines the
-    # variables of the equation it follows, and later sentences must not inherit
-    # them (F15).
-    boundary = next(
-        (index for index, sentence in enumerate(sentences) if "式中" in sentence),
-        len(sentences),
-    )
-    return [
-        entry for index, sentence in enumerate(sentences)
-        if (entry := _classify(
-            sentence, variables if index <= boundary else [], clause, item_clause))
-    ]
+    sections = _shi_zhong(text)
+    entries: list[dict] = []
+    for start, _end, sentence in _sentences(text):
+        if _NOTE.match(sentence):
+            continue
+        # A 式中 section is definition text, not a formula; the equation it
+        # belongs to is the one before it (possibly the same sentence, after a
+        # comma).  F15: definitions never leak into a later group.
+        if any(section_start <= start < section_end
+               for section_start, section_end, _ in sections):
+            continue
+        entry = _classify(sentence, _variables_for(sections, start),
+                          clause, item_clause)
+        if entry:
+            entries.append(entry)
+    return entries
 
 
 def extract_formulas(lines: list[tuple[str, int]], items: list[dict]) -> list[dict]:
