@@ -431,7 +431,7 @@ tasks:
   - id: SP_SAMPLEGUIDE
     title: 样品制备指引生成与委托单联动校验
     pr: 214
-    status: todo
+    status: done
     size: M
     covers: [SP-8.2]
     acceptance: ["样品数量与编号可机械比对时判"]
