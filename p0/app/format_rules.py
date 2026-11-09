@@ -975,8 +975,9 @@ def r25_judge_consistency(data: ReportData):
 
 
 # --- R26: 数值合理性、单位一致性与小数位数 --------------------------------
-# RA-2.4 / RA-2.5；F1–F14 见 p0/tests/test_value_range.py 与 README A21。
+# RA-2.4 / RA-2.5；F1–F15 见 p0/tests/test_value_range.py 与 README A21。
 # 保守判定：单位未知/缺失/无法可靠换算时 skip，不拿原始数值硬比；
+# 先比量纲再找换算：两侧单位都识别且量纲不同 -> fail；量纲相同再看换算系数。
 # 数值超限但已判「不符合」不报。
 _NUM = r"[-+]?\d+(?:\.\d+)?"
 _UNIT_PART = r"[A-Za-zµμΩ°℃%‰][A-Za-zµμΩ°℃0-9²³·/²]*"
@@ -1079,14 +1080,23 @@ def _unit_parts(text: str) -> tuple[set[str], list[str]]:
 
 
 def _unit_relation(from_unit: str, to_unit: str) -> str:
-    """Return same / convertible / incompatible / unknown for two canonical units."""
+    """Return same / convertible / incompatible / unknown for two canonical units.
+
+    Dimension is compared before conversion factors: two recognized units with
+    different dimensions are incompatible even when one has no reliable factor
+    (dB/ppm/mol/L). Only same-dimension pairs without a reliable factor are unknown.
+    """
     if from_unit == to_unit:
         return "same"
     source = _UNIT_CONVERSIONS.get(from_unit)
     target = _UNIT_CONVERSIONS.get(to_unit)
-    if not source or not target or source[1] is None or target[1] is None:
+    if not source or not target:
         return "unknown"
-    return "convertible" if source[0] == target[0] else "incompatible"
+    if source[0] != target[0]:
+        return "incompatible"
+    if source[1] is None or target[1] is None:
+        return "unknown"
+    return "convertible"
 
 
 def _convert_value(value: float, from_unit: str, to_unit: str) -> float | None:
