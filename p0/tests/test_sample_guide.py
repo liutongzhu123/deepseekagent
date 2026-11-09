@@ -2,7 +2,8 @@
 from fastapi.testclient import TestClient
 
 from app import main, standard_store
-from app.standard_extract.samples import build_sample_guide, check_sample_order
+from app.standard_extract.samples import (
+    build_sample_guide, check_sample_order, extract_samples)
 
 _ITEMS = [{"clause": "5.1", "name": "外观"}, {"clause": "5.2", "name": "密封性能"}]
 
@@ -112,6 +113,33 @@ def test_model_without_dimensions_is_not_a_size_mismatch():
         result = check_sample_order(guide, {"model": model})
         assert result["mismatches"] == [], model
         assert result["checked"]["size"] == 0
+
+
+def test_or_dimensions_are_alternatives_not_requirements():
+    """A real standard: 100mmx100mm 或 30mmx30mm 的方格 — one of them is enough."""
+    samples = extract_samples(
+        [("5.2 DUT 所有待测表面应划分为 100mmx100mm 或 30mmx30mm 的方格。", 1)], [])
+    guide = build_sample_guide(samples, [{"clause": "5.2", "name": "外观"}])
+    for model in ("100mmx100mm", "30mmx30mm", "100mmx100mm、30mmx30mm"):
+        result = check_sample_order(guide, {"model": model})
+        assert result["mismatches"] == [], model
+        assert result["checked"]["size"] == 1
+    for model in ("50mmx50mm", "80mmx40mm"):
+        assert _codes(check_sample_order(guide, {"model": model})) == ["size_mismatch"]
+    # A non-dimension model is still not a comparable order size.
+    assert check_sample_order(guide, {"model": "AX-50"})["checked"]["size"] == 0
+
+
+def test_independent_dimensions_stay_conjunctive():
+    """Only 或 joins alternatives; separate size clauses still require both."""
+    samples = [
+        _entry("size", text="100mm×50mm×2mm"),
+        _entry("size", text="200mm×100mm×3mm"),
+    ]
+    guide = build_sample_guide(samples, _ITEMS)
+    assert _codes(check_sample_order(guide, {"model": "100×50×2mm"})) == ["size_mismatch"]
+    assert check_sample_order(
+        guide, {"model": "100×50×2mm、200×100×3mm"})["mismatches"] == []
 
 
 def test_sample_guide_api(tmp_path, monkeypatch):

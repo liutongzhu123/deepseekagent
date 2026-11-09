@@ -13,6 +13,7 @@ The result is document-level ``samples[]``; owning items also get ``samples`` an
 """
 from __future__ import annotations
 
+import hashlib
 import re
 
 from .conditions import extract_conditions
@@ -40,6 +41,8 @@ _MEASURE = re.compile(r"(?:厚度|宽度|长度|高度)\s*[:：]?\s*(\d+(?:\.\d+
 _PREP_KEY = re.compile(r"(?:预处理|状态调节|试验前|静置|放置|恒温|恒湿)")
 _ROOM = re.compile(r"室温|恒温|恒湿")
 _CLAUSE = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+\S")
+# "A 或 B" joins alternative dimensions; matching one is a full match.
+_ALT_SPLIT = re.compile(r"或\s*者?")
 
 
 def _num(text: str) -> float | int:
@@ -79,18 +82,44 @@ def _quantity_entries(line: str, clause: str, item_clause: str) -> list[dict]:
 
 def _size_entries(line: str, clause: str, item_clause: str) -> list[dict]:
     entries: list[dict] = []
+    for chunk in re.split(r"[；;。]", line):
+        segments = _ALT_SPLIT.split(chunk)
+        alternative = ""
+        if len(segments) > 1:
+            digest = hashlib.sha1(chunk.strip().encode("utf-8")).hexdigest()[:10]
+            alternative = f"{clause}|{digest}"
+        for segment in segments:
+            entries.extend(_segment_size_entries(
+                segment, clause, item_clause, alternative))
+    return entries
+
+
+def _segment_size_entries(
+    line: str, clause: str, item_clause: str, alternative: str
+) -> list[dict]:
+    entries: list[dict] = []
     work = line
     for match in _DIM.finditer(line):
         raw = match.group(0).strip()
         if not re.search(r"mm|毫米", raw):
             continue
-        entries.append(_entry("size", clause, item_clause, raw, text=raw, unit="mm"))
+        entries.append(_size_entry(clause, item_clause, raw, raw, "mm",
+                                   alternative))
         work = work[:match.start()] + " " * (match.end() - match.start()) + work[match.end():]
     for regex in (_SIZE_LABEL, _DIAMETER, _MEASURE):
         for match in regex.finditer(work):
             raw = match.group(0).strip()
-            entries.append(_entry("size", clause, item_clause, raw, text=raw, unit=match.group(2)))
+            entries.append(_size_entry(clause, item_clause, raw, raw,
+                                       match.group(2), alternative))
     return entries
+
+
+def _size_entry(clause, item_clause, raw, text, unit, alternative):
+    entry = _entry("size", clause, item_clause, raw, text=text, unit=unit)
+    if alternative:
+        # Dimensions joined by 或 are alternatives: matching one is enough.
+        entry["alternative"] = alternative
+    return entry
 
 
 def _pretreatment_entry(line: str, clause: str, item_clause: str) -> dict | None:
@@ -201,6 +230,8 @@ def apply_samples(items: list[dict], lines: list[tuple[str, int]]) -> tuple[list
 # ``unassigned`` and are checked against the order total; missing requirements
 # are ``not_extracted``; a total quantity only fits one item; quantity/unit/
 # size/pretreatment contradictions are reported, missing order data never is.
+# Sizes joined by ``或`` are alternatives (one complete match suffices), not a
+# conjunction of every dimension.
 
 _KIND_ORDER = {"quantity": 0, "size": 1, "pretreatment": 2}
 _COUNT_UNITS = {"件", "个", "只", "支", "根", "片", "块", "份", "台"}
@@ -343,6 +374,27 @@ def _order_size(order: dict, item: dict | None) -> tuple[str, list]:
     return "", []
 
 
+def _size_groups(sizes: list[dict]) -> list[list[set]]:
+    """ANDed groups of ORed dimension alternatives.
+
+    ``100mm×50mm 或 80mm×40mm`` is one group with two alternatives.  An entry
+    without an ``alternative`` marker is its own single-alternative group.
+    """
+    grouped: dict[str, list[set]] = {}
+    groups: list[list[set]] = []
+    for entry in sizes:
+        dims = set(_dims(entry.get("text") or entry.get("raw") or ""))
+        key = str(entry.get("alternative") or "")
+        if not key:
+            groups.append([dims])
+            continue
+        if key not in grouped:
+            grouped[key] = []
+            groups.append(grouped[key])
+        grouped[key].append(dims)
+    return groups
+
+
 def _bad(code: str, item: dict, message: str) -> dict:
     return {"code": code, "item_clause": item.get("item_clause", ""), "item_name": item.get("item_name", ""), "message": message}
 
@@ -388,18 +440,24 @@ def _check_requirements(
             dim for entry in sizes
             for dim in _dims(entry.get("text") or entry.get("raw") or "")
         }
-        if text and expected_dims - set(actual_dims):
+        if text and expected_dims:
+            actual = set(actual_dims)
+            # "A 或 B" is an alternative, not a conjunction: the order must
+            # match one complete alternative, never every listed dimension.
+            unmet = [
+                group for group in _size_groups(sizes)
+                if not any(alternative <= actual for alternative in group)
+            ]
             checked["size"] += 1
-            expected = "、".join(
-                str(entry.get("text") or entry.get("raw") or "")
-                for entry in sizes
-            )
-            mismatches.append(_bad(
-                "size_mismatch", item,
-                f"委托单规格 {text} 缺少标准尺寸 {expected}",
-            ))
-        elif text and expected_dims:
-            checked["size"] += 1
+            if unmet:
+                expected = "、".join(
+                    str(entry.get("text") or entry.get("raw") or "")
+                    for entry in sizes
+                )
+                mismatches.append(_bad(
+                    "size_mismatch", item,
+                    f"委托单规格 {text} 缺少标准尺寸 {expected}",
+                ))
     pretreatment = next((
         entry for entry in requirements if entry.get("kind") == "pretreatment"
     ), None)
