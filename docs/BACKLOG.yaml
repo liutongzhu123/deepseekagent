@@ -369,6 +369,7 @@ tasks:
     skip_scope: ["识别不到版本号时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_raw_record_version.py, docs/report-format-checks/README.md]
     note: 验证 #189 拒绝：Q/ 代号后空格未归一（文档承诺但无测试）
+    note: 验证 #217 通过（Q/ 后单空格/多空格/全角空格均归一，过期仍 fail）
 
   - id: RA_FIXEDTEXT
     title: 固定内容校验（中文 8 条 / 英文 7 条注意事项）
