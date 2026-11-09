@@ -26,6 +26,16 @@
   F29 状态文件只剩元字段（_last_nag_at）没有实际条目 → 无条目时应删掉整个文件
   F41 reconcile 把人工设的 partial/waiting 覆盖回 done（2026-11-08 实测：人工标 partial 5 秒后被改回 done）
       → 自动推断只能推进 todo/doing，不能覆盖人工判断的结果
+  F59 set_task_status 只在"没有 pr 行"时插入，**不会更新已有的 pr** → 关联返工 PR 时
+      台账里的旧 PR 号永远改不掉（2026-11-09：RA_PHOTO_SEQ 应 181→203，实际没变）
+      → 传入 pr 时必须覆盖已有行
+  F58 sync_task_pr 只改内存里的 backlog，没有写回台账/提交 → 每轮都"更新"一次，
+      台账里的 pr 永远停在旧值（2026-11-09 实测：日志刷了 197 次"PR 号已更新"，
+      台账 RA_PHOTO_SEQ 仍是 181，而实际返工 PR 已是 203）
+      → synced 也要写回并提交
+  F57 重置分支只改了内存里的 dispatched，没有写回文件 → 下一轮读到旧记录又重置一次
+      （2026-11-08 实测：23:30/23:32/23:35 连续三轮"重置 RA_PHOTO_SEQ"，因为它从没被保存）
+      → 只要发生过重置就要 write_json
   F55 派单时整体替换 record，把 F53 的 reset_for 字段丢了 → 每轮都判"没重置过"→ 又重置又派
       （2026-11-08 实测：23:08 与 23:10 连续两轮 try 重置 + 派单）
       → 更新 record 时保留原有字段
@@ -630,7 +640,13 @@ def set_task_status(path: Path, task_id: str, status: str, pr: int | None = None
         lines.insert(start + 1, f"    status: {status}\n")
         end += 1
     if pr is not None:
-        if not any(lines[i].strip().startswith("pr:") for i in range(start, end)):
+        replaced = False
+        for i in range(start, end):
+            if lines[i].strip().startswith("pr:"):
+                lines[i] = f"    pr: {pr}\n"      # F59：已有就覆盖，不是跳过
+                replaced = True
+                break
+        if not replaced:
             lines.insert(start + 2, f"    pr: {pr}\n")
     try:
         path.write_text("".join(lines), encoding="utf-8")
@@ -970,7 +986,16 @@ def run(dry_run: bool) -> int:
 
     synced = sync_task_pr(backlog)                     # F45：返工 PR 接替旧 PR
     if synced:
-        log(f"任务 PR 号已更新：{', '.join(synced)}")
+        by_id0 = {str(t.get("id")): t for t in backlog.get("tasks") or []}
+        rows0 = []
+        for tid in synced:
+            task0 = by_id0.get(tid) or {}
+            rows0.append(set_task_status(REPO / "docs" / "BACKLOG.yaml", tid,
+                                         str(task0.get("status") or "todo"),
+                                         task0.get("pr")))
+        if not dry_run and rows0 and all(rows0):
+            commit_backlog(f"chore(backlog): 关联返工 PR {', '.join(synced)}")   # F58
+        log(f"{'[dry-run] ' if dry_run else ''}任务 PR 号已更新：{', '.join(synced)}")
     reverted = revert_rejected(backlog)                # F44：先回退被拒绝的
     if reverted:
         # F51：返工是正常流程，不能被"最多 3 次"挡住
@@ -1013,6 +1038,7 @@ def run(dry_run: bool) -> int:
     # F52/F53：PR 被验证拒绝 → 重置次数以便返工，但同一个被拒 PR **只重置一次**，
     # 并保留冷却时间：否则每 2 分钟清一次、派一次（2026-11-08 实测连派三次）。
     rejected_now = rejected_prs()
+    reset_done = False
     if rejected_now:
         for item in backlog.get("tasks") or []:
             tid_now = str(item.get("id"))
@@ -1034,7 +1060,10 @@ def run(dry_run: bool) -> int:
                 "last_at": now().isoformat(timespec="seconds"),
                 "reset_for": pr_now,
             }
+            reset_done = True
             log(f"任务 {tid_now} 的 PR #{pr_now} 被验证拒绝，重置派单次数以便返工")
+        if reset_done and not dry_run:
+            write_json(DISPATCHED, dispatched)     # F57：必须落盘，否则每轮重复重置
 
     in_flight_prs = open_task_prs()
     task, reason = next_task(backlog, busy, dispatched, set(awaiting), in_flight_prs)
