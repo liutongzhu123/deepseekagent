@@ -425,19 +425,40 @@ def test_long_caption_description_is_not_narrative(middle):
 
 
 @pytest.mark.parametrize("before,after", [
-    ("拍摄照片1", "照片1拍摄了试验过程。"),
-    ("记录照片1", "照片1记录了试验过程。"),
-    ("显示照片2", "照片2显示了外包装。"),
     ("可见照片1", "照片1可见破损。"),
     ("如下照片1", "照片1如下所述。"),
+    ("详见照片1", "照片1详见正文。"),
 ])
-def test_narrative_word_position_is_consistent(before, after):
+def test_pointer_word_position_is_consistent(before, after):
     before_finding = _r23([APPENDIX, before])
     after_finding = _r23([APPENDIX, after])
 
     assert before_finding["status"] == after_finding["status"] == "skip"
     assert "未识别到附录照片题注" in before_finding["message"]
     assert "未识别到附录照片题注" in after_finding["message"]
+
+
+@pytest.mark.parametrize("line", ["拍摄照片1", "记录照片1", "显示照片2"])
+def test_action_verb_before_photo_is_narrative(line):
+    finding = _r23([APPENDIX, line])
+
+    assert finding["status"] == "skip"
+    assert "未识别到附录照片题注" in finding["message"]
+
+
+@pytest.mark.parametrize("middle", [
+    "外包装照片2拍摄于试验前。",
+    "外包装照片2拍摄了试验前的外观。",
+    "外包装照片2记录了试验前的外观。",
+    "外包装照片2显示了试验前的外观。",
+])
+def test_action_verb_after_photo_is_a_caption(middle):
+    """A verb after 照片N describes the photo, so it never drops the caption."""
+    finding = _r23([APPENDIX, "外包装照片1", middle, "外包装照片3"])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+    assert "缺" not in finding["message"]
 
 
 def test_stative_shoot_caption_keeps_its_number():

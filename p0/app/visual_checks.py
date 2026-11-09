@@ -231,16 +231,21 @@ _NARRATIVE_SUFFIX_RE = re.compile(r"照片\s*\d+\s*(?:张|幅|页|组|所示|为
 # immediately after it (optionally after an annotation).  A description after
 # punctuation (``外包装照片2，试验前可见划痕。``) and a series name that merely
 # contains such a word (``显示面板照片1``) stay captions.
-# After 照片N a bare 拍摄 is the stative attribute 拍摄于试验前 (a caption), not
-# the narrative verb 拍摄了; keeping the two apart is what stops
-# ``外包装照片0拍摄于试验前。`` from being dropped (F16).
+# Position carries meaning: a verb BEFORE 照片N is a narrative action
+# (``拍摄照片1``), while a verb AFTER it describes the photo and is part of the
+# caption (``照片1拍摄于试验前``, ``照片1显示了外包装``).  Only pointer words
+# (可见/如下/详见正文/附在…) count as narrative when they immediately follow
+# 照片N.  This keeps ``外包装照片0拍摄于试验前。`` from being dropped (F16).
 _NARRATIVE_COMMON_WORDS = (
     r"随报告|随附|附上?|共附|合计|详见|参见|另见|见附|记录了?|"
     r"显示了?|展示了?|说明了?|引用了?|采集了?|附在|位于|放在|置于|可见|如下|"
     r"正文|报告末尾|报告正文|报告中|供参考|可以看到|我们|本文|本报告"
 )
 _NARRATIVE_BEFORE_WORDS = _NARRATIVE_COMMON_WORDS + r"|拍摄了?"
-_NARRATIVE_AFTER_WORDS = _NARRATIVE_COMMON_WORDS + r"|拍摄(?!于)"
+_NARRATIVE_AFTER_WORDS = (
+    r"附在|位于|放在|置于|另见|参见|详见|见附|正文|如下|供参考|"
+    r"可以看到|可见|报告末尾|报告正文|报告中"
+)
 _NARRATIVE_BEFORE_RE = re.compile(rf"(?:{_NARRATIVE_BEFORE_WORDS})\s*$")
 _NARRATIVE_AFTER_RE = re.compile(
     rf"^\s*(?:[（(][^）)]*[）)])?\s*(?:{_NARRATIVE_AFTER_WORDS})"
@@ -266,10 +271,10 @@ def _is_photo_narrative(text: str) -> bool:
     """True for a prose sentence that merely mentions photos.
 
     Length alone is not evidence: a standard caption can be long because it
-    carries a description.  A prose word counts only when it touches 照片N
-    (immediately before, or immediately after except the stative 拍摄于), so a
-    series named ``显示面板`` and a caption ``外包装照片0拍摄于试验前。`` both
-    stay captions.
+    carries a description.  A verb before 照片N is narrative (``拍摄照片1``);
+    a verb after it describes the photo and stays part of the caption
+    (``外包装照片0拍摄于试验前。``).  Only pointer words immediately after
+    照片N (可见/如下/详见正文/附在…) mark prose.
     """
     stripped = (text or "").strip()
     if not stripped:
