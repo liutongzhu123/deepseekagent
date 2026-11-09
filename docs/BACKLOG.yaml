@@ -361,7 +361,7 @@ tasks:
 
   - id: RA_RAWVER
     title: 原始记录版本有效性检查
-    pr: 189
+    pr: 217
     status: todo
     size: S
     covers: [RA-4.7]
