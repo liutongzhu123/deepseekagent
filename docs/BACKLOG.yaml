@@ -348,6 +348,7 @@ tasks:
 
   - id: RA_VALUE_RANGE
     title: 数值合理性、单位正确性、小数位数检查
+    pr: 186
     status: todo
     size: M
     covers: [RA-2.4, RA-2.5]
@@ -356,7 +357,7 @@ tasks:
 
   - id: RA_RAWVER
     title: 原始记录版本有效性检查
-    pr: 187
+    pr: 189
     status: done
     size: S
     covers: [RA-4.7]
@@ -374,7 +375,7 @@ tasks:
 
   - id: RA_CUSTOMRULE
     title: 支持自建逻辑条件（如检测日期距生产日期不超过 N 天）
-    pr: 190
+    pr: 192
     status: done
     size: M
     covers: [RA-5.1]
@@ -383,7 +384,7 @@ tasks:
 
   - id: RA_PRODNAME
     title: 产品名称异常识别（与产品不符或无法判定种类）
-    pr: 191
+    pr: 193
     status: done
     size: S
     covers: [RA-5.2]
@@ -401,7 +402,7 @@ tasks:
 
   - id: SP_REVIEWSAVE
     title: 检测项目人工复核确认后入库
-    pr: 196
+    pr: 198
     status: done
     size: M
     covers: [SP-2.2]
@@ -410,7 +411,7 @@ tasks:
 
   - id: SP_FORMULAVAR
     title: 提取公式变量定义与计算逻辑
-    pr: 199
+    pr: 205
     status: done
     size: M
     covers: [SP-6.2]
@@ -419,7 +420,7 @@ tasks:
 
   - id: SP_SAMPLEGUIDE
     title: 样品制备指引生成与委托单联动校验
-    pr: 200
+    pr: 206
     status: done
     size: M
     covers: [SP-8.2]
@@ -429,7 +430,7 @@ tasks:
   - id: RA_PHOTO_SEQ
     title: 附录照片序号与试验前中后完整性
     status: done
-    pr: 201
+    pr: 207
     size: M
     deps: [VIS]
     covers: [RA-4.16, RA-4.17]
@@ -450,7 +451,7 @@ tasks:
   - id: RA_SAMPLENO
     title: 样品编号连续性与重复性
     status: done
-    pr: 173
+    pr: 176
     size: S
     covers: [RA-5.4, RA-1.8]
     acceptance: ["编号断号/重复能报出"]
