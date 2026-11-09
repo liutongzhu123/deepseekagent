@@ -622,6 +622,22 @@ def test_f48_reconcile_prefers_task_pr(monkeypatch):
     assert ng["tasks"][0]["status"] == "done"
 
 
+def test_f61_dispatch_includes_reject_reason(monkeypatch):
+    """F61：返工派单要带上上次验证的拒绝理由，别让 agent 重新猜。"""
+    monkeypatch.setattr(sup, "last_reject_reason", lambda pr: "- 验证 #186 判拒绝：95 bar 未换算成 MPa")
+    task = {"id": "RA_VALUE_RANGE", "title": "数值合理性", "covers": ["RA-2.4"],
+            "pr": 186, "acceptance": ["能报出"]}
+    text = sup.dispatch_message(task, 1)
+    assert "上次验证拒绝的理由" in text
+    assert "95 bar" in text
+
+
+def test_f61_no_reason_when_passed(monkeypatch):
+    monkeypatch.setattr(sup, "last_reject_reason", lambda pr: "")
+    task = {"id": "X", "title": "t", "covers": [], "pr": 1}
+    assert "上次验证拒绝" not in sup.dispatch_message(task, 1)
+
+
 def test_f60_sync_uses_pr_titles(monkeypatch):
     """F60：关联要用 GitHub PR 标题，不能用 git 提交标题（合并提交里没标记）。"""
     monkeypatch.setattr(sup, "merged_task_prs", lambda limit=60: {"RA_VALUE_RANGE": 186})
