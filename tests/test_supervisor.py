@@ -622,6 +622,16 @@ def test_f48_reconcile_prefers_task_pr(monkeypatch):
     assert ng["tasks"][0]["status"] == "done"
 
 
+def test_f63_dispatch_includes_skip_scope():
+    """F63：派单要写清"不判什么"，否则实现会去猜语义。"""
+    task = {"id": "SP_SAMPLEGUIDE", "title": "样品指引", "covers": ["SP-8.2"],
+            "acceptance": ["样品数量可机械比对时判"],
+            "skip_scope": ["尺寸规格的或/且语义 → skip"]}
+    text = sup.dispatch_message(task, 1)
+    assert "明确不判" in text and "skip" in text
+    assert "尺寸规格" in text
+
+
 def test_f61_dispatch_includes_reject_reason(monkeypatch):
     """F61：返工派单要带上上次验证的拒绝理由，别让 agent 重新猜。"""
     monkeypatch.setattr(sup, "last_reject_reason", lambda pr: "- 验证 #186 判拒绝：95 bar 未换算成 MPa")
