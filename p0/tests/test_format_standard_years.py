@@ -93,6 +93,21 @@ def test_colon_only_joins_a_following_number():
     assert tokens("Q/BYDQ-A1901.404-2025：气味等级≤3.3") == ["Q/BYDQ-A1901.404-2025"]
 
 
+@pytest.mark.parametrize("gap", [" ", "  ", "\u3000", "\u00a0", "\t"])
+def test_space_after_standard_prefix_is_recognised(gap):
+    finding = _r22(f"Q/{gap}BYDQ-A1901.404—2018")
+
+    assert finding["status"] == "pass"
+    assert "1 个标准号" in finding["message"]
+
+
+def test_enterprise_standard_colon_year_passes():
+    finding = _r22("Q/BYDQ-A1901.404:2018")
+
+    assert finding["status"] == "pass"
+    assert "1 个标准号" in finding["message"]
+
+
 @pytest.mark.parametrize(
     ("basis", "needle"),
     [
