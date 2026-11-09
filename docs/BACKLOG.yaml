@@ -349,7 +349,7 @@ tasks:
 
   - id: RA_VALUE_RANGE
     title: 数值合理性、单位正确性、小数位数检查
-    pr: 186
+    pr: 211
     status: todo
     size: M
     covers: [RA-2.4, RA-2.5]
