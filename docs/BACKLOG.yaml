@@ -423,6 +423,7 @@ tasks:
     acceptance: ["人工确认后入库、未确认不入库、取消确认后下架"]
     skip_scope: ["并发/权限冲突等场景不判"]
     files: [p0/app/standard_store.py, p0/app/main.py, p0/tests/test_review_save.py]
+    note: 验证 #198 通过（端到端：未确认 409 / 部分确认点名 / 全确认 200 / 取消确认自动下架）
 
   - id: SP_FORMULAVAR
     title: 提取公式变量定义与计算逻辑
