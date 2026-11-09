@@ -231,14 +231,19 @@ _NARRATIVE_SUFFIX_RE = re.compile(r"照片\s*\d+\s*(?:张|幅|页|组|所示|为
 # immediately after it (optionally after an annotation).  A description after
 # punctuation (``外包装照片2，试验前可见划痕。``) and a series name that merely
 # contains such a word (``显示面板照片1``) stay captions.
-_NARRATIVE_WORDS = (
-    r"(?:随报告|随附|附上?|共附|合计|详见|参见|另见|见附|拍摄了?|记录了?|"
+# After 照片N a bare 拍摄 is the stative attribute 拍摄于试验前 (a caption), not
+# the narrative verb 拍摄了; keeping the two apart is what stops
+# ``外包装照片0拍摄于试验前。`` from being dropped (F16).
+_NARRATIVE_COMMON_WORDS = (
+    r"随报告|随附|附上?|共附|合计|详见|参见|另见|见附|记录了?|"
     r"显示了?|展示了?|说明了?|引用了?|采集了?|附在|位于|放在|置于|可见|如下|"
-    r"正文|报告末尾|报告正文|报告中|供参考|可以看到|我们|本文|本报告)"
+    r"正文|报告末尾|报告正文|报告中|供参考|可以看到|我们|本文|本报告"
 )
-_NARRATIVE_BEFORE_RE = re.compile(rf"{_NARRATIVE_WORDS}\s*$")
+_NARRATIVE_BEFORE_WORDS = _NARRATIVE_COMMON_WORDS + r"|拍摄了?"
+_NARRATIVE_AFTER_WORDS = _NARRATIVE_COMMON_WORDS + r"|拍摄(?!于)"
+_NARRATIVE_BEFORE_RE = re.compile(rf"(?:{_NARRATIVE_BEFORE_WORDS})\s*$")
 _NARRATIVE_AFTER_RE = re.compile(
-    rf"^\s*(?:[（(][^）)]*[）)])?\s*{_NARRATIVE_WORDS}"
+    rf"^\s*(?:[（(][^）)]*[）)])?\s*(?:{_NARRATIVE_AFTER_WORDS})"
 )
 _PRONOUN_PREFIX_RE = re.compile(r"^(?:该|这|那|其|此|上述|本次)")
 _SENTENCE_END = "。！？；;"
@@ -262,8 +267,9 @@ def _is_photo_narrative(text: str) -> bool:
 
     Length alone is not evidence: a standard caption can be long because it
     carries a description.  A prose word counts only when it touches 照片N
-    (immediately before or after), so a series named ``显示面板`` and a
-    description ``…，试验前可见划痕。`` are still captions.
+    (immediately before, or immediately after except the stative 拍摄于), so a
+    series named ``显示面板`` and a caption ``外包装照片0拍摄于试验前。`` both
+    stay captions.
     """
     stripped = (text or "").strip()
     if not stripped:

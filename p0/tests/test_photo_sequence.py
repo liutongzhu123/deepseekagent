@@ -425,7 +425,7 @@ def test_long_caption_description_is_not_narrative(middle):
 
 
 @pytest.mark.parametrize("before,after", [
-    ("拍摄照片1", "照片1拍摄于试验前。"),
+    ("拍摄照片1", "照片1拍摄了试验过程。"),
     ("记录照片1", "照片1记录了试验过程。"),
     ("显示照片2", "照片2显示了外包装。"),
     ("可见照片1", "照片1可见破损。"),
@@ -438,6 +438,27 @@ def test_narrative_word_position_is_consistent(before, after):
     assert before_finding["status"] == after_finding["status"] == "skip"
     assert "未识别到附录照片题注" in before_finding["message"]
     assert "未识别到附录照片题注" in after_finding["message"]
+
+
+def test_stative_shoot_caption_keeps_its_number():
+    """照片N拍摄于试验前 is a caption attribute, not the verb 拍摄了 (F16)."""
+    finding = _r23([APPENDIX, "照片1拍摄于试验前", "照片2", "照片3"])
+
+    assert finding["status"] == "pass"
+    assert "标准题注=3" in finding["evidence"]
+    assert "缺" not in finding["message"]
+
+
+def test_photo_zero_with_stative_shoot_still_fails():
+    finding = _r23([
+        APPENDIX,
+        "外包装照片0拍摄于试验前。",
+        "外包装照片1",
+        "外包装照片2",
+    ])
+
+    assert finding["status"] == "fail"
+    assert "外包装 序号从 0 开始" in finding["evidence"]
 
 
 @pytest.mark.parametrize("caption", [
