@@ -226,28 +226,20 @@ def apply_samples(items: list[dict], lines: list[tuple[str, int]]) -> tuple[list
 
 
 # SP-8.2 sample-preparation guide + commission-order (委托单) cross-check.
-# Failure list (tests/test_sample_guide.py): unowned entries stay in
-# ``unassigned`` and are checked against the order total; missing requirements
-# are ``not_extracted``; a total quantity only fits one item; quantity/unit/
-# size/pretreatment contradictions are reported, missing order data never is.
-# Sizes joined by ``或`` are alternatives (one complete match suffices), not a
-# conjunction of every dimension.
+# Narrowed scope (只判数量与编号): compare per-item quantity only, matching order
+# items by clause number (编号) then name; size/pretreatment/unowned -> skipped.
 
 _KIND_ORDER = {"quantity": 0, "size": 1, "pretreatment": 2}
 _COUNT_UNITS = {"件", "个", "只", "支", "根", "片", "块", "份", "台"}
 _SET_UNITS = {"套", "组"}
-# A dimension is either a chain of at least two numbers separated by ×/*/x,
-# or a single number carrying an explicit mm/毫米 unit.  A bare model code such
-# as AX-50 must never be parsed as a dimension.
-_DIM_CHAIN = re.compile(
-    r"(?<![A-Za-z0-9-])\d+(?:\.\d+)?\s*(?:mm|毫米)?"
-    r"(?:\s*[×xX*]\s*\d+(?:\.\d+)?\s*(?:mm|毫米)?)+"
-)
-_DIM_MM = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm|毫米)")
-_NO_PREP = re.compile(
-    r"^(?:无需|无须|不(?:需要|要求|用|作|做)|未(?:进行|做)?|免|无|没有)"
-    r"(?:进行|做|作)?(?:任何|特殊)*(?:预处理|处理|状态调节)?[。；;，, ]*$"
-)
+_SIZE_SKIP_REASON = (
+    "尺寸规格的“或/且”语义无法机械判定（#206：标准 100mmx100mm 或 30mmx30mm，"
+    "委托单 50mm×100mm 曾被误判通过）→ skip")
+_PRETREATMENT_SKIP_REASON = "收窄范围：只判数量与编号，预处理不参与机械比对 → skip"
+_UNASSIGNED_SKIP_REASON = {
+    "quantity": "未归属的数量要求无法确定对应的委托单分项，不能与委托单总量机械比对 → skip",
+    "size": _SIZE_SKIP_REASON + "；且该尺寸要求未归属到具体项目",
+    "pretreatment": "未归属的预处理要求无法确定对应的委托单分项 → skip"}
 
 _kind = lambda entry: _KIND_ORDER.get(entry.get("kind"), 9)
 
@@ -310,18 +302,6 @@ def _unit_ok(left: str, right: str) -> bool:
     return group(left) == group(right)
 
 
-def _dims(text: str) -> list:
-    text = str(text or "")
-    chains = list(_DIM_CHAIN.finditer(text))
-    if chains:
-        return [
-            _num(number)
-            for chain in chains
-            for number in re.findall(r"\d+(?:\.\d+)?", chain.group(0))
-        ]
-    return [_num(match.group(1)) for match in _DIM_MM.finditer(text)]
-
-
 def _norm(value) -> str:
     return re.sub(r"[\s（）()、，,。.;；:：\-—_]+", "", str(value or "")).lower()
 
@@ -344,70 +324,24 @@ def _order_qty(order: dict, item: dict | None, item_count: int) -> tuple[float |
     return None, ""
 
 
-def _order_total(order: dict) -> tuple[float | int | None, str]:
-    """Total order quantity, falling back to the sum of per-item quantities."""
-    if order.get("quantity") is not None:
-        value, unit = _qty(order["quantity"])
-        return value, unit or str(order.get("unit") or "")
-    values: list[float | int] = []
-    unit = ""
-    for item in order.get("items") or []:
-        if not isinstance(item, dict) or item.get("quantity") is None:
-            continue
-        value, item_unit = _qty(item["quantity"])
-        if value is None:
-            return None, ""
-        item_unit = item_unit or str(item.get("unit") or "")
-        if unit and item_unit and not _unit_ok(unit, item_unit):
-            return None, ""
-        values.append(value)
-        unit = unit or item_unit
-    return (sum(values), unit) if values else (None, "")
-
-
-def _order_size(order: dict, item: dict | None) -> tuple[str, list]:
-    for source in (item or {}, order):
-        for key in ("size", "model"):
-            text = str(source.get(key) or "").strip()
-            if _dims(text):
-                return text, _dims(text)
-    return "", []
-
-
-def _size_groups(sizes: list[dict]) -> list[list[set]]:
-    """ANDed groups of ORed dimension alternatives.
-
-    ``100mm×50mm 或 80mm×40mm`` is one group with two alternatives.  An entry
-    without an ``alternative`` marker is its own single-alternative group.
-    """
-    grouped: dict[str, list[set]] = {}
-    groups: list[list[set]] = []
-    for entry in sizes:
-        dims = set(_dims(entry.get("text") or entry.get("raw") or ""))
-        key = str(entry.get("alternative") or "")
-        if not key:
-            groups.append([dims])
-            continue
-        if key not in grouped:
-            grouped[key] = []
-            groups.append(grouped[key])
-        grouped[key].append(dims)
-    return groups
-
-
 def _bad(code: str, item: dict, message: str) -> dict:
     return {"code": code, "item_clause": item.get("item_clause", ""), "item_name": item.get("item_name", ""), "message": message}
+
+
+def _skip(scope: str, code: str, item: dict, reason: str, raw) -> dict:
+    return {"scope": scope, "code": code, "item_clause": item.get("item_clause", ""),
+            "item_name": item.get("item_name", ""), "reason": reason,
+            "raw": str(raw or "")}
 
 
 def _check_requirements(
     item: dict,
     requirements: list[dict],
-    order: dict,
-    order_item: dict | None,
     actual: float | int | None,
     actual_unit: str,
     checked: dict,
     mismatches: list[dict],
+    skipped: list[dict],
 ) -> None:
     quantity = next((
         entry for entry in requirements
@@ -433,73 +367,52 @@ def _check_requirements(
                     "quantity_short", item,
                     f"委托单样品数量 {actual}{actual_unit} 少于标准要求 {expected}",
                 ))
-    sizes = [entry for entry in requirements if entry.get("kind") == "size"]
-    if sizes:
-        text, actual_dims = _order_size(order, order_item)
-        expected_dims = {
-            dim for entry in sizes
-            for dim in _dims(entry.get("text") or entry.get("raw") or "")
-        }
-        if text and expected_dims:
-            actual = set(actual_dims)
-            # "A 或 B" is an alternative, not a conjunction: the order must
-            # match one complete alternative, never every listed dimension.
-            unmet = [
-                group for group in _size_groups(sizes)
-                if not any(alternative <= actual for alternative in group)
-            ]
-            checked["size"] += 1
-            if unmet:
-                expected = "、".join(
-                    str(entry.get("text") or entry.get("raw") or "")
-                    for entry in sizes
-                )
-                mismatches.append(_bad(
-                    "size_mismatch", item,
-                    f"委托单规格 {text} 缺少标准尺寸 {expected}",
-                ))
-    pretreatment = next((
-        entry for entry in requirements if entry.get("kind") == "pretreatment"
-    ), None)
-    text = str(order.get("pretreatment") or "").strip()
-    if pretreatment is not None and text and _NO_PREP.match(text):
-        checked["pretreatment"] += 1
-        expected = str(pretreatment.get("text") or pretreatment.get("raw") or "")
-        mismatches.append(_bad(
-            "pretreatment_missing", item,
-            f"委托单声明无需预处理，但标准要求：{expected}",
-        ))
+    for entry in requirements:
+        if entry.get("kind") == "size":
+            skipped.append(_skip(
+                "size", "size_not_judged", item, _SIZE_SKIP_REASON,
+                entry.get("text") or entry.get("raw"),
+            ))
+        elif entry.get("kind") == "pretreatment":
+            skipped.append(_skip(
+                "pretreatment", "pretreatment_not_judged", item,
+                _PRETREATMENT_SKIP_REASON,
+                entry.get("text") or entry.get("raw"),
+            ))
 
 
 def check_sample_order(guide: dict, order: dict | None) -> dict:
-    """Report contradictions between the guide and commission-order samples.
+    """Compare mechanically comparable commission-order fields with the guide.
 
-    Missing order fields are not mismatches; ``checked`` distinguishes a real
-    comparison from "not comparable because the order did not supply it".
-    Unassigned requirements are checked against the order total so a real
-    standard's global "5 套样品" statement is not silently ignored.
+    Only per-item quantity is judged: order items are matched to standard items
+    by clause number (编号) first, then by item name.  Size, pretreatment and
+    requirements without an owning item are always skipped (their semantics are
+    not mechanically decidable here).  ``skipped`` carries the reason for every
+    such decision.
     """
     order = order or {}
     orders = [item for item in (order.get("items") or []) if isinstance(item, dict)]
     items = [item for item in guide.get("items", []) if item.get("requirements")]
     mismatches: list[dict] = []
+    skipped: list[dict] = []
     checked = {"quantity": 0, "size": 0, "pretreatment": 0}
     for item in items:
         order_item = _match(orders, item["item_clause"], item["item_name"])
         actual, actual_unit = _order_qty(order, order_item, len(items))
         _check_requirements(
-            item, item["requirements"], order, order_item,
-            actual, actual_unit, checked, mismatches,
+            item, item["requirements"], actual, actual_unit,
+            checked, mismatches, skipped,
         )
-    unassigned = [
-        entry for entry in (guide.get("unassigned") or {}).get("requirements", [])
-        if isinstance(entry, dict)
-    ]
-    if unassigned:
-        actual, actual_unit = _order_total(order)
-        _check_requirements(
-            {"item_clause": "", "item_name": "未归属要求"},
-            unassigned, order, None,
-            actual, actual_unit, checked, mismatches,
-        )
-    return {"ok": not mismatches, "mismatches": mismatches, "checked": checked}
+    unassigned_item = {"item_clause": "", "item_name": "未归属要求"}
+    for entry in (guide.get("unassigned") or {}).get("requirements", []):
+        if isinstance(entry, dict):
+            reason = _UNASSIGNED_SKIP_REASON.get(
+                entry.get("kind"), _UNASSIGNED_SKIP_REASON["pretreatment"])
+            skipped.append(_skip(
+                "unassigned", "unassigned_not_judged", unassigned_item,
+                reason, entry.get("raw") or entry.get("text"),
+            ))
+    sample_nos = [v for v in [order.get("sample_no")] + [i.get("sample_no") for i in orders] if str(v or "").strip()]
+    if sample_nos: skipped.append(_skip("numbering", "sample_no_not_judged", {"item_clause": "", "item_name": "样品编号"}, "标准未声明样品编号，委托单编号没有对照值 → skip", "、".join(map(str, sample_nos))))
+    return {"ok": not mismatches, "mismatches": mismatches,
+            "checked": checked, "skipped": skipped}
