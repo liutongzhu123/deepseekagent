@@ -18,7 +18,9 @@ F6 reference-only, F7 Greek/subscripts, F8 eval error, F9 unsafe AST, F10 series
 F11 equation without 式中, F12 trailing comma, F13 eval KeyError, F14 argument comma,
 F15 note (注/备注/附注) is not a formula, F16 each 式中 defines its own group so a
 second equation in the same clause keeps its variables, F17 incomplete expression is
-skipped instead of kept as a half expression.
+skipped instead of kept as a half expression, F18 an equation only inherits a 式中
+group's definitions when it references one of them, so an unrelated annotation such
+as ``PRR=217Hz`` between two groups is not a formula.
 """
 from __future__ import annotations
 
@@ -111,15 +113,6 @@ def _shi_zhong(text: str) -> list[tuple[int, int, list[dict]]]:
         sections.append((match.start(), end,
                          _variable_section(text[match.end():end])))
     return sections
-
-
-def _variables_for(sections: list[tuple[int, int, list[dict]]],
-                   start: int) -> list[dict]:
-    """Definitions of the first 式中 section that ends after ``start``."""
-    for _section_start, end, variables in sections:
-        if start < end:
-            return variables
-    return []
 
 
 def _top_level_cut(text: str) -> str:
@@ -348,11 +341,76 @@ def _classify(sentence, variables, clause, item_clause) -> dict | None:
     return None
 
 
+def _expression_like(rhs: str) -> bool:
+    """True for a formula expression, false for a quantity such as ``217Hz``.
+
+    A constant assignment (``PRR=217``) is not a formula either: a formula
+    must reference at least one symbol, otherwise the definitions it borrows
+    could not be used.
+    """
+    python = _python(rhs)
+    return bool(python) and _safe(python) and bool(_names(python))
+
+
+def _assign_group(group: list[tuple[int, str]], variables: list[dict]
+                  ) -> dict[int, list[dict]]:
+    """Attach one 式中 group's definitions to the sentences that own them."""
+    assigned: dict[int, list[dict]] = {}
+    defined = [variable["symbol"] for variable in variables]
+    equations: list[tuple[int, bool]] = []  # (start, expression-like)
+    for start, sentence in group:
+        expression = (None if _broken_equation(sentence)
+                      else _expression(sentence))
+        if expression is None:
+            # A type sentence ("按算术平均值计算") still needs the definitions
+            # to build its mean template.
+            assigned[start] = variables
+            continue
+        rhs = expression[1]
+        used = _used(rhs, variables)
+        formula_like = _expression_like(rhs)
+        if formula_like:
+            used = list(dict.fromkeys(used + _names(_python(rhs))))
+        if any(_covers(symbol, defined) for symbol in used):
+            assigned[start] = variables
+        equations.append((start, formula_like))
+    if not any(start in assigned for start, _ in equations):
+        # No equation consumes this group's definitions: keep the nearest
+        # parseable equation so its undefined symbols are still reported.  A
+        # quantity such as ``PRR=217Hz`` is not parseable and stays out (F11).
+        for start, formula_like in reversed(equations):
+            if formula_like:
+                assigned[start] = variables
+                break
+    return assigned
+
+
+def _group_variables(text: str, sections: list[tuple[int, int, list[dict]]]
+                     ) -> dict[int, list[dict]]:
+    """Definitions owned by each non-definition sentence (F18).
+
+    A section owns the sentences after the previous section's end and before
+    its own keyword.  An earlier equation that references none of the group's
+    symbols must not borrow them: an unprefixed ``PRR=217Hz`` between two
+    groups is an annotation, not a formula (F11/F15/F18).
+    """
+    assigned: dict[int, list[dict]] = {}
+    sentences = _sentences(text)
+    boundary = 0
+    for section_start, section_end, variables in sections:
+        group = [(start, sentence) for start, _end, sentence in sentences
+                 if boundary <= start < section_start]
+        assigned.update(_assign_group(group, variables))
+        boundary = section_end
+    return assigned
+
+
 def extract_text_formulas(
     text: str, clause: str = "", item_clause: str = ""
 ) -> list[dict]:
     """Classify formula sentences from one clause's text (no document scan)."""
     sections = _shi_zhong(text)
+    variables_at = _group_variables(text, sections)
     entries: list[dict] = []
     for start, _end, sentence in _sentences(text):
         if _NOTE.match(sentence):
@@ -363,7 +421,7 @@ def extract_text_formulas(
         if any(section_start <= start < section_end
                for section_start, section_end, _ in sections):
             continue
-        entry = _classify(sentence, _variables_for(sections, start),
+        entry = _classify(sentence, variables_at.get(start, []),
                           clause, item_clause)
         if entry:
             entries.append(entry)

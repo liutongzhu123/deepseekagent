@@ -158,6 +158,50 @@ def test_equation_without_its_own_shi_zhong_after_a_group_is_skipped():
     assert [entry["target"] for entry in _e(text)] == ["x"]
 
 
+def test_annotation_between_groups_does_not_borrow_next_definitions():
+    """F18: an unprefixed PRR=217Hz between two 式中 groups is not a formula."""
+    text = ("x=(a+b)/n。式中：x—平均值；a—测量值；b—测量值；n—次数。"
+            "PRR=217Hz，PD=577usec。"
+            "z=(e+f)/g。式中：z—平均值；e—测量值；f—测量值；g—测量值。")
+    entries = _e(text)
+    assert [(entry["target"], entry["expression"]) for entry in entries] == [
+        ("x", "(a+b)/n"), ("z", "(e+f)/g")]
+    second = entries[1]
+    assert [item["symbol"] for item in second["variables"]] == [
+        "z", "e", "f", "g"]
+    assert (second["missing_variables"], second["rule"]["status"]) == (
+        [], "executable")
+    assert evaluate_formula(second, {"e": 1, "f": 2, "g": 3})["value"] == 1.0
+
+
+def test_annotation_after_the_group_equation_is_not_a_formula():
+    """F18: the annotation position inside the group does not change the result."""
+    text = ("x=(a+b)/n。式中：x—平均值；a—测量值；b—测量值；n—次数。"
+            "z=(e+f)/g。PRR=217Hz，PD=577usec。"
+            "式中：z—平均值；e—测量值；f—测量值；g—测量值。")
+    assert [entry["target"] for entry in _e(text)] == ["x", "z"]
+
+
+def test_constant_annotation_does_not_borrow_definitions():
+    """F18: a bare number (PRR=217) is not a formula even before a 式中."""
+    text = ("x=(a+b)/n。式中：x—平均值；a—测量值；b—测量值；n—次数。"
+            "PRR=217。式中：z—平均值；e—测量值。")
+    assert [entry["target"] for entry in _e(text)] == ["x"]
+
+
+def test_equations_sharing_one_shi_zhong_use_their_common_definitions():
+    """F18: equations that reference the group's symbols keep sharing it."""
+    text = ("x=(a+b)/n。y=(c+d)/m。"
+            "式中：a—测量值；b—测量值；c—测量值；d—测量值；n—次数；m—次数。")
+    entries = _e(text)
+    assert [(entry["target"], entry["rule"]["status"]) for entry in entries] == [
+        ("x", "executable"), ("y", "executable")]
+    assert all([item["symbol"] for item in entry["variables"]] == [
+        "a", "b", "c", "d", "n", "m"] for entry in entries)
+    assert evaluate_formula(entries[0], {"a": 1, "b": 2, "n": 3})["value"] == 1.0
+    assert evaluate_formula(entries[1], {"c": 3, "d": 5, "m": 2})["value"] == 4.0
+
+
 def test_one_shi_zhong_still_defines_several_preceding_sentences():
     text = ("试验结果按加权平均值计算；变化率按式（2）计算，"
             "变化率=（A-B）/B×100%。式中：A——实测值；B——基准值。")
