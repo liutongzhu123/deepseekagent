@@ -180,6 +180,34 @@ def api(path: str):
         return None
 
 
+def close_task_tickets(task_id: str) -> int:
+    """F66：任务销账后，关掉它名下还开着的工单。
+
+    工单和台账是两套状态：台账标 done 只代表 PR 合并+验证通过，
+    工单还会一直停在 open，占着"在途"名额，也让巡检反复报"工单卡住"。
+    """
+    closed = 0
+    for ticket in api_tickets():
+        state = str(ticket.get("state") or "")
+        if state not in ("open", "running", "queued"):
+            continue
+        title = str(ticket.get("title") or "")
+        if task_id not in title:
+            continue
+        tid = str(ticket.get("id") or "")
+        if not tid:
+            continue
+        try:
+            subprocess.run(["curl", "-s", "-m", "10", "-X", "POST",
+                            "-H", "x-orchestrator-request: 1",
+                            f"{ORCH}/tickets/{tid}/stop"],
+                           capture_output=True, text=True, timeout=20)
+            closed += 1
+        except Exception:
+            continue
+    return closed
+
+
 def api_state() -> dict:
     return api("state") or {}
 
@@ -1071,6 +1099,10 @@ def run(dry_run: bool) -> int:
             log(f"[dry-run] 将更新台账：{', '.join(changed)}")
         elif written and commit_backlog(f"chore(backlog): 自动标记完成 {', '.join(written)}"):
             log(f"台账自动更新：{', '.join(written)} 标为 done")
+            for tid in written:                      # F66：销账后清工单
+                stopped = close_task_tickets(tid)
+                if stopped:
+                    log(f"已关闭 {tid} 的 {stopped} 个残留工单")
         else:
             log(f"台账写回/提交失败：{', '.join(changed)}")
 
