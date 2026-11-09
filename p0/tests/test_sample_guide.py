@@ -24,6 +24,10 @@ def _codes(result):
     return [mismatch["code"] for mismatch in result["mismatches"]]
 
 
+def _skips(result, code=None):
+    return [entry for entry in result["skipped"] if code is None or entry["code"] == code]
+
+
 def test_guide_groups_requirements_and_keeps_unowned_entries():
     samples = _samples() + [
         _entry("quantity", clause="", item_clause="", value=5, unit="套", raw="5套样品"),
@@ -56,7 +60,7 @@ def test_per_item_quantity_and_multi_item_total():
     samples = _samples() + [_entry("quantity", clause="5.1", value=2, unit="件", raw="2 件样品")]
     guide = build_sample_guide(samples, _ITEMS)
     matched = {"items": [{"clause": "5.1", "quantity": 2, "unit": "件"},
-                         {"name": "密封性能", "quantity": 3, "unit": "件"}]}
+                         {"clause": "5.2", "quantity": 3, "unit": "件"}]}
     assert check_sample_order(guide, matched)["mismatches"] == []
     matched["items"][1]["quantity"] = 1
     bad = check_sample_order(guide, matched)
@@ -66,80 +70,43 @@ def test_per_item_quantity_and_multi_item_total():
     assert total["mismatches"] == [] and total["checked"]["quantity"] == 0
 
 
-def test_size_check_skips_non_dimension_model():
-    guide = build_sample_guide(_samples(), _ITEMS)
-    assert _codes(check_sample_order(guide, {"model": "100×50×3mm"})) == ["size_mismatch"]
-    assert check_sample_order(guide, {"model": "50×100×2mm"})["mismatches"] == []
-    # Missing thickness is a real inconsistency, not a partial pass.
-    assert _codes(check_sample_order(guide, {"model": "100×50mm"})) == ["size_mismatch"]
-    skipped = check_sample_order(guide, {"model": "JLY-2026-001"})
-    assert skipped["mismatches"] == [] and skipped["checked"]["size"] == 0
+def test_size_requirements_are_skipped_with_reason():
+    """收窄：尺寸的或/且语义不判；含 #206 的四个曾误判输入。"""
+    guide = build_sample_guide(_samples() + [_entry("size", text="200mm×100mm×3mm")], _ITEMS)
+    for model in ("100×50×3mm", "50×100×2mm", "100×50mm"):
+        result = check_sample_order(guide, {"model": model})
+        assert result["mismatches"] == [] and result["checked"]["size"] == 0, model
+        assert [e["raw"] for e in _skips(result, "size_not_judged")] == ["100mm×50mm×2mm", "200mm×100mm×3mm"]
+    text = "5.2 DUT 所有待测表面应划分为 100mmx100mm 或 30mmx30mm 的方格。"
+    guide = build_sample_guide(extract_samples([(text, 1)], []), [{"clause": "5.2", "name": "外观"}])
+    for model in ("50mm×100mm", "100mm×200mm", "30mm×999mm", "100mm"):
+        result = check_sample_order(guide, {"model": model})
+        assert result["ok"] is True and result["mismatches"] == [], model
+        skips = _skips(result, "unassigned_not_judged")
+        assert [e["raw"] for e in skips] == ["100mmx100mm", "30mmx30mm"]
+        assert all("#206" in e["reason"] and "或/且" in e["reason"] for e in skips)
 
 
-def test_pretreatment_and_missing_order_data():
-    guide = build_sample_guide(_samples(), _ITEMS)
-    assert _codes(check_sample_order(guide, {"pretreatment": "无需预处理"})) == ["pretreatment_missing"]
-    assert check_sample_order(guide, {"pretreatment": "23℃下放置 24h"})["mismatches"] == []
-    missing = check_sample_order(guide, {})
-    assert missing["mismatches"] == [] and missing["ok"] is True
-    assert missing["checked"] == {"quantity": 0, "size": 0, "pretreatment": 0}
-    assert check_sample_order({"items": []}, {})["mismatches"] == []
-
-
-def test_unassigned_quantity_is_checked_against_order_total():
-    guide = build_sample_guide(
-        [_entry("quantity", clause="", item_clause="", value=5, unit="套", raw="5套样品")],
-        _ITEMS,
-    )
+def test_unassigned_requirements_are_skipped_with_reason():
+    """收窄：未归属的数量要求不与委托单总量比对。"""
+    guide = build_sample_guide([_entry("quantity", clause="", item_clause="", value=5, unit="套", raw="5套样品")], _ITEMS)
     short = check_sample_order(guide, {"quantity": 1, "unit": "套"})
-    assert _codes(short) == ["quantity_short"]
-    assert short["mismatches"][0]["item_clause"] == ""
-    assert short["mismatches"][0]["item_name"] == "未归属要求"
-    assert check_sample_order(guide, {"quantity": 5, "unit": "套"})["mismatches"] == []
+    assert short["mismatches"] == [] and short["ok"] is True
+    skips = _skips(short, "unassigned_not_judged")
+    assert len(skips) == 1 and skips[0]["raw"] == "5套样品"
+    assert skips[0]["item_name"] == "未归属要求" and "未归属" in skips[0]["reason"]
+    assert [e["code"] for e in _skips(check_sample_order(guide, {"sample_no": "A-01"}), "sample_no_not_judged")] == ["sample_no_not_judged"]
 
 
-def test_pretreatment_synonyms_are_reported():
+def test_pretreatment_is_skipped_and_missing_data_is_not_a_mismatch():
     guide = build_sample_guide(_samples(), _ITEMS)
-    for text in ("无需做预处理", "不需要做预处理", "无需进行预处理", "不用做预处理"):
-        assert _codes(check_sample_order(guide, {"pretreatment": text})) == [
-            "pretreatment_missing"
-        ], text
-    assert check_sample_order(guide, {"pretreatment": "23℃下放置 24h"})["mismatches"] == []
-
-
-def test_model_without_dimensions_is_not_a_size_mismatch():
-    guide = build_sample_guide(_samples(), _ITEMS)
-    for model in ("AX-50", "X100"):
-        result = check_sample_order(guide, {"model": model})
-        assert result["mismatches"] == [], model
-        assert result["checked"]["size"] == 0
-
-
-def test_or_dimensions_are_alternatives_not_requirements():
-    """A real standard: 100mmx100mm 或 30mmx30mm 的方格 — one of them is enough."""
-    samples = extract_samples(
-        [("5.2 DUT 所有待测表面应划分为 100mmx100mm 或 30mmx30mm 的方格。", 1)], [])
-    guide = build_sample_guide(samples, [{"clause": "5.2", "name": "外观"}])
-    for model in ("100mmx100mm", "30mmx30mm", "100mmx100mm、30mmx30mm"):
-        result = check_sample_order(guide, {"model": model})
-        assert result["mismatches"] == [], model
-        assert result["checked"]["size"] == 1
-    for model in ("50mmx50mm", "80mmx40mm"):
-        assert _codes(check_sample_order(guide, {"model": model})) == ["size_mismatch"]
-    # A non-dimension model is still not a comparable order size.
-    assert check_sample_order(guide, {"model": "AX-50"})["checked"]["size"] == 0
-
-
-def test_independent_dimensions_stay_conjunctive():
-    """Only 或 joins alternatives; separate size clauses still require both."""
-    samples = [
-        _entry("size", text="100mm×50mm×2mm"),
-        _entry("size", text="200mm×100mm×3mm"),
-    ]
-    guide = build_sample_guide(samples, _ITEMS)
-    assert _codes(check_sample_order(guide, {"model": "100×50×2mm"})) == ["size_mismatch"]
-    assert check_sample_order(
-        guide, {"model": "100×50×2mm、200×100×3mm"})["mismatches"] == []
+    result = check_sample_order(guide, {"pretreatment": "无需预处理"})
+    assert result["mismatches"] == []
+    assert [e["code"] for e in _skips(result, "pretreatment_not_judged")] == ["pretreatment_not_judged"]
+    missing = check_sample_order(guide, {})
+    assert missing["mismatches"] == [] and missing["checked"] == {"quantity": 0, "size": 0, "pretreatment": 0}
+    assert [e["code"] for e in _skips(missing)] == ["size_not_judged", "pretreatment_not_judged"]
+    assert check_sample_order({"items": []}, {})["mismatches"] == []
 
 
 def test_sample_guide_api(tmp_path, monkeypatch):
@@ -156,6 +123,8 @@ def test_sample_guide_api(tmp_path, monkeypatch):
     response = client.post(f"/api/v1/standards/{record['id']}/sample-guide/validate",
                            json={"order": {"quantity": 2, "unit": "件", "model": "100×50×2mm"}})
     assert response.status_code == 200
-    assert [m["code"] for m in response.json()["mismatches"]] == ["quantity_short"]
-    assert response.json()["guide"]["items"][1]["steps"][0] == "准备 3件样品"
+    body = response.json()
+    assert [m["code"] for m in body["mismatches"]] == ["quantity_short"]
+    assert [e["code"] for e in body["skipped"]] == ["size_not_judged", "pretreatment_not_judged"]
+    assert body["guide"]["items"][1]["steps"][0] == "准备 3件样品"
     assert client.get("/api/v1/standards/std_missing/sample-guide").status_code == 404
