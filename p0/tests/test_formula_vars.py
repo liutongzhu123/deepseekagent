@@ -98,3 +98,32 @@ def test_unlisted_executable_name_reports_missing_instead_of_keyerror():
     result = evaluate_formula(
         {"status": "executable", "expression": "Tmin", "inputs": []}, {})
     assert (result["status"], result["missing"]) == ("missing_values", ["Tmin"])
+
+
+def test_multi_argument_comma_is_not_a_clause_boundary():
+    """F14: max(a,b) keeps its argument comma; the clause comma still cuts."""
+    entry = _e("x=max(a,b)。式中：a——值；b——值。")[0]
+    assert (entry["expression"], entry["uses"]) == ("max(a,b)", ["a", "b"])
+    assert entry["rule"]["status"] == "executable"
+    assert evaluate_formula(entry, {"a": 3, "b": 4})["value"] == 4
+    entry = _e("x=max（a，b）。式中：a——值；b——值。")[0]
+    assert entry["rule"]["status"] == "executable"
+    assert evaluate_formula(entry, {"a": 3, "b": 4})["value"] == 4
+    # A top-level comma still ends the equation, as F12 documented.
+    entry = _e("变化率=（A-B）/B×100%，式中：A——值；B——值。")[0]
+    assert entry["expression"] == "（A-B）/B×100%"
+
+
+def test_annotation_after_shi_zhong_is_not_a_formula():
+    """F15: the 式中 definitions belong to the preceding equation, not to 注."""
+    entries = _e("6.5 按式（1）计算：x=(a+b)/n。"
+                 "式中：x—平均值；a—测量值；b—测量值；n—次数。"
+                 "注：1）脉冲PRR=217Hz，PD=577usec。")
+    assert [(entry["target"], entry["expression"]) for entry in entries] == [
+        ("x", "(a+b)/n")]
+
+
+def test_annotation_before_shi_zhong_is_not_a_formula():
+    entries = _e("注：1）脉冲PRR=217Hz。x=(a+b)/n。"
+                 "式中：x—平均值；a—测量值；b—测量值；n—次数。")
+    assert [entry["target"] for entry in entries] == ["x"]

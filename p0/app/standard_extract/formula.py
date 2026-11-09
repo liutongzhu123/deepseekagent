@@ -15,7 +15,8 @@ with ``status="not_extracted"``; no formula is invented.  Each item gains
 SP_FORMULAVAR (SP-6.2): target/expression, uses/missing_variables (reported) and a
 restricted-AST rule.  F1 no 式中, F2 unused, F3 separators, F4 full-width, F5 ellipsis,
 F6 reference-only, F7 Greek/subscripts, F8 eval error, F9 unsafe AST, F10 series,
-F11 equation without 式中, F12 trailing comma, F13 eval KeyError.
+F11 equation without 式中, F12 trailing comma, F13 eval KeyError, F14 argument comma,
+F15 note (注/备注/附注) is not a formula.
 """
 from __future__ import annotations
 
@@ -43,8 +44,12 @@ _VARIABLE = re.compile(
     r"[A-Za-zα-ωΑ-Ω][\w′̄]{0,5}\s*[—–\-:：]|$)"
 )
 _CLAUSE = re.compile(r"^(\d{1,2}(?:\.\d{1,2}){0,3})\s+\S")
+# A 注/备注/附注 sentence is prose about the standard, never a formula; an
+# optional clause number may precede it.
+_NOTE = re.compile(
+    r"^(?:\d{1,2}(?:\.\d{1,2}){0,3}\s+)?(?:注|备注|附注)\s*\d*\s*[：:）)、]")
 _LHS = r"(?:[A-Za-zα-ωΑ-Ω][A-Za-z0-9_\u0304′̄]{0,5}|[\u4e00-\u9fff]{2,6})"
-_RHS = r"[0-9A-Za-zα-ωΑ-Ω+\-−－＋*/×÷·().%％√²³_′̄\s^…（）]+"
+_RHS = r"[0-9A-Za-zα-ωΑ-Ω+\-−－＋*/×÷·().%％√²³_′̄\s^…（）,，]+"
 _EQUATION = re.compile(rf"(?P<lhs>{_LHS})\s*[=＝]\s*(?P<rhs>{_RHS})")
 _SYMBOL = re.compile(r"[A-Za-zα-ωΑ-Ω][A-Za-z0-9_\u0304′̄]*")
 _SERIES_MEAN = re.compile(
@@ -52,7 +57,7 @@ _SERIES_MEAN = re.compile(
 )
 _TRANS = str.maketrans({
     "（": "(", "）": ")", "×": "*", "÷": "/", "−": "-", "－": "-",
-    "＋": "+", "％": "%", "·": "*", "—": "-", "–": "-",
+    "＋": "+", "％": "%", "·": "*", "—": "-", "–": "-", "，": ",",
 })
 _FUNCTIONS = {
     "sqrt": math.sqrt, "abs": abs, "min": min, "max": max, "sum": sum,
@@ -86,10 +91,29 @@ def _variables(text: str) -> list[dict]:
     return variables[:12]
 
 
+def _top_level_cut(text: str) -> str:
+    """Cut at the first comma outside parentheses.
+
+    ``max(a,b)`` keeps its argument comma; a clause boundary such as
+    ``x=a+b，式中…`` still ends at the comma (F14).
+    """
+    depth = 0
+    for index, char in enumerate(text or ""):
+        if char in "（(":
+            depth += 1
+        elif char in "）)":
+            depth = max(0, depth - 1)
+        elif char in ",，" and depth == 0:
+            return text[:index]
+    return text
+
+
 def _expression(sentence: str) -> tuple[str, str] | None:
     match = _EQUATION.search(sentence or "")
-    return ((match.group("lhs").strip(), match.group("rhs").strip())
-            if match and len(match.group("rhs").strip()) >= 2 else None)
+    if not match:
+        return None
+    rhs = _top_level_cut(match.group("rhs")).strip()
+    return (match.group("lhs").strip(), rhs) if len(rhs) >= 2 else None
 
 
 def _norm(text: str) -> str:
@@ -264,9 +288,21 @@ def extract_text_formulas(
     text: str, clause: str = "", item_clause: str = ""
 ) -> list[dict]:
     """Classify formula sentences from one clause's text (no document scan)."""
+    sentences = [sentence for sentence in _sentences(text)
+                 if not _NOTE.match(sentence)]
     variables = _variables(text)
-    return [entry for sentence in _sentences(text)
-            if (entry := _classify(sentence, variables, clause, item_clause))]
+    # 注/备注/附注 sentences are already gone; a 式中 section also defines the
+    # variables of the equation it follows, and later sentences must not inherit
+    # them (F15).
+    boundary = next(
+        (index for index, sentence in enumerate(sentences) if "式中" in sentence),
+        len(sentences),
+    )
+    return [
+        entry for index, sentence in enumerate(sentences)
+        if (entry := _classify(
+            sentence, variables if index <= boundary else [], clause, item_clause))
+    ]
 
 
 def extract_formulas(lines: list[tuple[str, int]], items: list[dict]) -> list[dict]:
