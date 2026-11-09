@@ -350,13 +350,13 @@ tasks:
   - id: RA_VALUE_RANGE
     title: 数值合理性、单位正确性、小数位数检查
     pr: 215
-    status: todo
-    note: 验证 #211 拒绝：dB/ppm vs MPa 量纲不符时返回 skip（应为 fail），与 N·m vs MPa 的处理不一致；根因是先查换算系数再比量纲
+    status: done
     size: M
     covers: [RA-2.4, RA-2.5]
     acceptance: ["单位相同或可可靠换算（kPa↔MPa）时比数值与限值；小数位一致性可判"]
     skip_scope: ["单位无法识别或不支持换算时 skip，不得用原始数值硬比"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_value_range.py, docs/report-format-checks/README.md]
+    note: 验证 #215 通过（supervisor 独立复核 9 例：量纲不符 fail、可换算 pass、未知单位 skip）
 
   - id: RA_RAWVER
     title: 原始记录版本有效性检查
