@@ -1,0 +1,56 @@
+name: Agent CI
+
+# F67: bin-only changes must run the agent tests; P0 CI only watches p0/**.
+# F68: tests must write state under runner.temp, never the server's /opt/dsh-agent.
+# F69: an invalid backlog or requirement mapping must fail before deployment.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bin/**"
+      - "tests/**"
+      - "scripts/coverage.py"
+      - "docs/BACKLOG.yaml"
+      - "docs/requirements.yaml"
+      - ".github/workflows/agent-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "bin/**"
+      - "tests/**"
+      - "scripts/coverage.py"
+      - "docs/BACKLOG.yaml"
+      - "docs/requirements.yaml"
+      - ".github/workflows/agent-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  agent-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install pytest==9.2.0 PyYAML==6.0.3
+      - name: Check requirement coverage
+        run: python scripts/coverage.py
+      - name: Run agent tests
+        run: python -m pytest -q tests
+        env:
+          SUPERVISOR_ROOT: ${{ runner.temp }}/dsh-agent
+          SUPERVISOR_REPO: ${{ github.workspace }}
+          SUPERVISOR_STATE: ${{ runner.temp }}/dsh-agent/supervisor
+          DEPLOY_ROOT: ${{ runner.temp }}/dsh-agent
+          DEPLOY_REPO: ${{ github.workspace }}
+          DEPLOY_STATE_DIR: ${{ runner.temp }}/dsh-agent/deploy
+          VERIFY_ROOT: ${{ runner.temp }}/dsh-agent
+          VERIFY_REPO: ${{ github.workspace }}
+          VERIFY_STATE_DIR: ${{ runner.temp }}/dsh-agent/verify
+          LIVENESS_ROOT: ${{ runner.temp }}/dsh-agent
+          LIVENESS_STATE_DIR: ${{ runner.temp }}/dsh-agent/liveness
