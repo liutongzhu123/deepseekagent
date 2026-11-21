@@ -27,6 +27,47 @@ except ModuleNotFoundError:  # pragma: no cover
 ROOT = Path(__file__).resolve().parent.parent
 REQUIREMENTS = ROOT / "docs" / "requirements.yaml"
 BACKLOG = ROOT / "docs" / "BACKLOG.yaml"
+VALID_STATUSES = {"done", "partial", "doing", "waiting", "todo", "blocked"}
+
+# F70: a misspelled covers ID must not disappear from the coverage report.
+# F71: an unknown status must not silently become todo or crash during counting.
+# F72: duplicate requirement/task IDs must not make the report ambiguous.
+# F73: a missing dependency must not leave a task permanently undispatchable.
+
+
+def validate_catalog(requirements: dict, backlog: dict) -> list[str]:
+    """Return catalog errors before computing any coverage numbers."""
+    errors: list[str] = []
+    requirement_ids: set[str] = set()
+    for area in requirements["areas"]:
+        for module in area["modules"]:
+            for item in module["items"]:
+                req_id = item["id"]
+                if req_id in requirement_ids:
+                    errors.append(f"重复需求 ID: {req_id}")
+                requirement_ids.add(req_id)
+
+    tasks = backlog.get("tasks") or []
+    task_ids: set[str] = set()
+    for task in tasks:
+        task_id = task["id"]
+        if task_id in task_ids:
+            errors.append(f"重复任务 ID: {task_id}")
+        task_ids.add(task_id)
+
+    for task in tasks:
+        task_id = task["id"]
+        if task.get("status") not in VALID_STATUSES:
+            errors.append(f"{task_id}: 未知状态 {task.get('status')!r}")
+        for req_id in task.get("covers") or []:
+            if req_id not in requirement_ids:
+                errors.append(f"{task_id}: 未知需求 ID {req_id}")
+        for dep_id in task.get("deps") or []:
+            if dep_id not in task_ids:
+                errors.append(f"{task_id}: 未知依赖任务 {dep_id}")
+            elif dep_id == task_id:
+                errors.append(f"{task_id}: 不能依赖自身")
+    return errors
 
 
 def load():
@@ -60,6 +101,11 @@ def main() -> int:
     args = parser.parse_args()
 
     requirements, backlog = load()
+    errors = validate_catalog(requirements, backlog)
+    if errors:
+        for error in errors:
+            print(f"台账校验失败: {error}", file=sys.stderr)
+        return 1
     status = coverage_map(backlog)
 
     totals = {"done": 0, "partial": 0, "doing": 0, "waiting": 0, "todo": 0}
