@@ -31,18 +31,6 @@ jobs:
   agent-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      SUPERVISOR_ROOT: ${{ runner.temp }}/dsh-agent
-      SUPERVISOR_REPO: ${{ github.workspace }}
-      SUPERVISOR_STATE: ${{ runner.temp }}/dsh-agent/supervisor
-      DEPLOY_ROOT: ${{ runner.temp }}/dsh-agent
-      DEPLOY_REPO: ${{ github.workspace }}
-      DEPLOY_STATE_DIR: ${{ runner.temp }}/dsh-agent/deploy
-      VERIFY_ROOT: ${{ runner.temp }}/dsh-agent
-      VERIFY_REPO: ${{ github.workspace }}
-      VERIFY_STATE_DIR: ${{ runner.temp }}/dsh-agent/verify
-      LIVENESS_ROOT: ${{ runner.temp }}/dsh-agent
-      LIVENESS_STATE_DIR: ${{ runner.temp }}/dsh-agent/liveness
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -54,3 +42,15 @@ jobs:
         run: python scripts/coverage.py
       - name: Run agent tests
         run: python -m pytest -q tests
+        env:
+          SUPERVISOR_ROOT: ${{ runner.temp }}/dsh-agent
+          SUPERVISOR_REPO: ${{ github.workspace }}
+          SUPERVISOR_STATE: ${{ runner.temp }}/dsh-agent/supervisor
+          DEPLOY_ROOT: ${{ runner.temp }}/dsh-agent
+          DEPLOY_REPO: ${{ github.workspace }}
+          DEPLOY_STATE_DIR: ${{ runner.temp }}/dsh-agent/deploy
+          VERIFY_ROOT: ${{ runner.temp }}/dsh-agent
+          VERIFY_REPO: ${{ github.workspace }}
+          VERIFY_STATE_DIR: ${{ runner.temp }}/dsh-agent/verify
+          LIVENESS_ROOT: ${{ runner.temp }}/dsh-agent
+          LIVENESS_STATE_DIR: ${{ runner.temp }}/dsh-agent/liveness

@@ -26,8 +26,9 @@ def test_f67_bin_and_root_tests_trigger_ci():
 def test_f68_server_state_is_isolated_and_f69_backlog_is_checked():
     workflow = _workflow()
     job = workflow["jobs"]["agent-tests"]
+    test_step = next(step for step in job["steps"] if step.get("run") == "python -m pytest -q tests")
     for key in ("SUPERVISOR_STATE", "DEPLOY_STATE_DIR", "VERIFY_STATE_DIR", "LIVENESS_STATE_DIR"):
-        assert job["env"][key].startswith("${{ runner.temp }}/")
+        assert test_step["env"][key].startswith("${{ runner.temp }}/")
     commands = [step.get("run", "") for step in job["steps"]]
     assert "python -m pytest -q tests" in commands
     assert "python scripts/coverage.py" in commands
