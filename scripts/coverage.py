@@ -33,6 +33,7 @@ VALID_STATUSES = {"done", "partial", "doing", "waiting", "todo", "blocked"}
 # F71: an unknown status must not silently become todo or crash during counting.
 # F72: duplicate requirement/task IDs must not make the report ambiguous.
 # F73: a missing dependency must not leave a task permanently undispatchable.
+# F74: a multi-task dependency cycle must not leave every task waiting forever.
 
 
 def validate_catalog(requirements: dict, backlog: dict) -> list[str]:
@@ -67,6 +68,28 @@ def validate_catalog(requirements: dict, backlog: dict) -> list[str]:
                 errors.append(f"{task_id}: 未知依赖任务 {dep_id}")
             elif dep_id == task_id:
                 errors.append(f"{task_id}: 不能依赖自身")
+
+    dependencies = {
+        task["id"]: [dep for dep in task.get("deps") or [] if dep in task_ids and dep != task["id"]]
+        for task in tasks
+    }
+    visited: set[str] = set()
+    path: list[str] = []
+
+    def visit(task_id: str) -> None:
+        path.append(task_id)
+        for dep_id in dependencies[task_id]:
+            if dep_id in path:
+                cycle = path[path.index(dep_id):] + [dep_id]
+                errors.append(f"任务依赖成环: {' -> '.join(cycle)}")
+            elif dep_id not in visited:
+                visit(dep_id)
+        path.pop()
+        visited.add(task_id)
+
+    for task in tasks:
+        if task["id"] not in visited:
+            visit(task["id"])
     return errors
 
 
