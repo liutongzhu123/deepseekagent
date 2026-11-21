@@ -1,4 +1,4 @@
-"""Catalog validation guards F70–F73 before coverage numbers are reported."""
+"""Catalog validation guards F70–F74 before coverage numbers are reported."""
 
 from copy import deepcopy
 import sys
@@ -50,6 +50,40 @@ def test_f73_invalid_dependency_is_rejected(dependency, expected):
     requirements, backlog = _catalog()
     backlog["tasks"][0]["deps"] = [dependency]
     assert expected in coverage.validate_catalog(requirements, backlog)
+
+
+@pytest.mark.parametrize("chain", [
+    ("R_BASE", "A1"),
+    ("R_BASE", "A1", "A2"),
+])
+def test_f74_dependency_cycle_reports_full_path(chain):
+    requirements, backlog = _catalog()
+    tasks = {task["id"]: task for task in backlog["tasks"]}
+    for task_id, dep_id in zip(chain, chain[1:] + chain[:1]):
+        tasks[task_id]["deps"] = [dep_id]
+    expected = f"任务依赖成环: {' -> '.join(chain + chain[:1])}"
+    assert expected in coverage.validate_catalog(requirements, backlog)
+
+
+def test_f74_shared_dependency_without_cycle_is_valid():
+    requirements, backlog = _catalog()
+    tasks = {task["id"]: task for task in backlog["tasks"]}
+    tasks["A1"]["deps"] = ["R_BASE"]
+    tasks["A2"]["deps"] = ["R_BASE"]
+    assert coverage.validate_catalog(requirements, backlog) == []
+
+
+def test_f74_cycle_stops_cli_before_coverage(monkeypatch, capsys):
+    requirements, backlog = _catalog()
+    tasks = {task["id"]: task for task in backlog["tasks"]}
+    tasks["R_BASE"]["deps"] = ["A1"]
+    tasks["A1"]["deps"] = ["R_BASE"]
+    monkeypatch.setattr(coverage, "load", lambda: (requirements, backlog))
+    monkeypatch.setattr(sys, "argv", ["coverage.py"])
+    assert coverage.main() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "任务依赖成环: R_BASE -> A1 -> R_BASE" in output.err
 
 
 def test_main_fails_before_printing_coverage(monkeypatch, capsys):
