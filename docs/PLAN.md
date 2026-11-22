@@ -288,9 +288,9 @@
 - **涉及**：`p0/app/docx_parser.py`、`p0/app/format_rules.py`、`p0/tests/test_format_bookmarks.py`、`p0/tests/test_format_fonts.py`、`p0/tests/test_format_empty_cells.py`、`p0/tests/test_format_numbering.py`
 
 ### T509 · format_checks 拆分（方案 2，下一批检查前）
-- **状态**：`doing`  **依赖**：T501–T508 合并  **分支**：`codex/t509-format-checks`
+- **状态**：`done`  **依赖**：T501–T508 合并  **分支**：`codex/t509-format-checks`
 - **做什么**：把 `p0/app/format_rules.py` 拆成 `p0/app/format_checks/<检查>.py` + 注册表；后续新增检查不再改同一个大文件，降低并行 PR 冲突。
-- **进度**：已将 R12–R17 检查分别提取到 `p0/app/format_checks/` 对应模块并加入 `registry.py`；保留 `format_rules.py` 兼容入口，共用单元格规范化与目录识别逻辑放入 `_shared.py`。
+- **进度**：已将 R12–R17 检查分别提取到 `p0/app/format_checks/` 对应模块并加入 `registry.py`；保留 `format_rules.py` 兼容入口，共用单元格规范化与目录识别逻辑放入 `_shared.py`。32 组拆分前后 finding 逐字段一致；全量测试 950 passed、41 skipped，另 3 个 loopback 用例提权重跑通过。
 - **验收标准**：拆分前后 R12–R17 finding 逐条一致；`pytest p0/tests -q` 全绿；单检查文件 ≤150 行。
 - **涉及**：`p0/app/format_checks/`、`p0/app/format_rules.py`、`p0/app/rules.py`
 
