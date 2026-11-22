@@ -2,6 +2,7 @@
 
 from .bookmarks import r13_bookmarks
 from .empty_cells import r14_empty_cells
+from .numbering import r15_numbering
 from .pages import r12_pages
 
-__all__ = ["r12_pages", "r13_bookmarks", "r14_empty_cells"]
+__all__ = ["r12_pages", "r13_bookmarks", "r14_empty_cells", "r15_numbering"]
