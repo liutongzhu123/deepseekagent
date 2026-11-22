@@ -9,7 +9,16 @@ import unicodedata
 from collections import Counter
 
 from .docx_parser import ReportData, _expand_table
-from .format_checks._shared import _NA_VALUES, _TOC_LEADER, _finding, _norm_cell, _toc_like
+from .format_checks._shared import (
+    _NA_VALUES,
+    _TOC_LEADER,
+    _conclusion_text,
+    _finding,
+    _is_judgment_na,
+    _norm_cell,
+    _result_judgments,
+    _toc_like,
+)
 from .format_checks.bookmarks import r13_bookmarks
 from .format_checks.empty_cells import _REQUIRED_LABELS, _TODO_VALUES, _cell_issue, r14_empty_cells
 from .format_checks.pages import (
@@ -515,56 +524,11 @@ def r24_sample_numbers(data: ReportData):
 # F9 结论页无判定、结果表有判定 -> fail（验收：结论页无判定时结果表有判定即报出）。
 # F10 两边都无判定 -> pass（约束成立）。
 # F11 多样本结果表收集所有出现的判定值，去重后写入证据；不要求各行判定相同（R06 管数值一致性）。
-_CONCLUSION_HEADING_RE = re.compile(
-    r"^(?:\d{1,2}(?:\.\d{1,2})*[.、]?\s*)?(检验结论|检测结论)\s*(?:[:：]\s*(.*))?$"
-)
-_JUDGMENT_NA = {"", "/", "／", "—", "——", "-", "－", "–", "无", "不适用", "n/a", "na", "不涉及", "未判定"}
 _JUDGMENT_RE = re.compile(r"不符合|符合(?!性)|不通过|通过(?!率)|不合格|合格(?!证)|不满足|满足")
-
-
-def _is_judgment_na(text: str) -> bool:
-    norm = _norm_cell(text)
-    return not norm or norm.lower() in _JUDGMENT_NA
 
 
 def _has_judgment(text: str) -> bool:
     return bool(text) and not _is_judgment_na(text) and bool(_JUDGMENT_RE.search(text))
-
-
-def _conclusion_text(data: ReportData) -> tuple[str, bool]:
-    """Return (conclusion text, whether the conclusion page was identified)."""
-    text = (data.conclusion or "").strip()
-    if text:
-        return text, True
-    paragraphs = [line.strip() for line in data.paragraphs if line and line.strip()]
-    for index, line in enumerate(paragraphs):
-        match = _CONCLUSION_HEADING_RE.match(line)
-        if not match:
-            continue
-        if match.group(2) and match.group(2).strip():
-            return match.group(2).strip(), True
-        following = paragraphs[index + 1] if index + 1 < len(paragraphs) else ""
-        # F6: 「检验结论」下一行若是另一个字段标签（如“签发日期：”），说明结论内容为空。
-        if following and not re.match(r"^[^：:]{1,12}\s*[:：]", following):
-            return following, True
-        return "", True
-    return "", False
-
-
-def _result_judgments(data: ReportData) -> tuple[list[str], bool]:
-    """Return (judgment cell values, whether the 「符合性判定」 column exists)."""
-    if not data.result_cells:
-        return ([data.judgment.strip()], True) if (data.judgment or "").strip() else ([], False)
-    header = [cell.strip() for cell in data.result_cells[0]]
-    if "符合性判定" not in header:
-        return [], False
-    column = header.index("符合性判定")
-    values = [
-        row[column].strip()
-        for row in data.result_cells[1:]
-        if column < len(row) and row[column].strip()
-    ]
-    return values, True
 
 
 def r25_judge_consistency(data: ReportData):
