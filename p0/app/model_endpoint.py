@@ -33,15 +33,12 @@ def local_only() -> bool:
 def is_local_endpoint(base_url: str) -> bool:
     """Accept local IPs, localhost, or exact operator-approved service names."""
     try:
-        parsed = urlsplit(base_url.strip())
-        host = (parsed.hostname or "").lower().rstrip(".")
-        _ = parsed.port  # Invalid ports raise ValueError.
+        parsed = _parse_endpoint(base_url)
     except (AttributeError, ValueError):
         return False
-    if parsed.scheme not in {"http", "https"} or not host:
+    if parsed is None:
         return False
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        return False
+    host = parsed.hostname.lower().rstrip(".")
     if host == "localhost":
         return True
     try:
@@ -57,8 +54,26 @@ def is_local_endpoint(base_url: str) -> bool:
     return any(address in network for network in _LOCAL_RANGES)
 
 
+def _parse_endpoint(base_url: str):
+    try:
+        parsed = urlsplit(base_url.strip())
+        host = parsed.hostname
+        _ = parsed.port  # Invalid ports raise ValueError.
+    except (AttributeError, ValueError):
+        return None
+    if parsed.scheme not in {"http", "https"} or not host:
+        return None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return None
+    return parsed
+
+
+def is_valid_endpoint(base_url: str) -> bool:
+    return _parse_endpoint(base_url) is not None
+
+
 def endpoint_allowed(base_url: str) -> bool:
-    return not local_only() or is_local_endpoint(base_url)
+    return is_valid_endpoint(base_url) and (not local_only() or is_local_endpoint(base_url))
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

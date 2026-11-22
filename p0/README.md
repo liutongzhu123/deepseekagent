@@ -215,7 +215,7 @@ WeKnora 服务器上 Ollama 只在容器网络内时，可设为容器地址（�
 - `GET  /api/v1/audit/events?user=&event=&status=&date_from=&date_to=&limit=&offset=`（管理员）
 - `GET  /api/v1/audit/export.csv?...`（管理员）
 - `GET  /api/v1/audit/recent`（管理员，最近审计事件）
-- `GET  /api/v1/system/status`（登录后，版本/WeKnora 配置状态）
+- `GET  /api/v1/system/status`（登录后，版本/WeKnora 状态及脱敏模型路由配置状态）
 - `GET  /api/v1/admin/config`（管理员，当前规则配置 + 版本/来源路径）
 - `GET  /api/v1/config/effective`（登录后，模块页只读生效配置；不含内部文件路径）
 - `PUT  /api/v1/admin/config/{report|standard|quote}`（管理员，保存分区配置，先校验后原子写盘）
@@ -432,7 +432,8 @@ OCR 可用 `P0_OCR_ENABLED=0` 关闭，`P0_OCR_DPI`（默认 220）、`P0_OCR_MA
 客户私有化环境可设 `P0_LOCAL_MODEL_ONLY=1`，强制语义审核、查询改写、WeKnora 与 embedding
 只访问 loopback、私网 IP 或 `localhost`；容器单标签服务名需加入 `P0_LOCAL_MODEL_HOSTS`。
 仅显式 `0/false/no/off` 会关闭此保护；公网出口仍需由防火墙限制。详见
-`docs/p1-model-switchability.md`。
+`docs/p1-model-switchability.md`。登录后调用 `/api/v1/system/status` 的 `model_routing` 可查看
+各线路是否启用、配置完整且端点获准；这是配置检查，不代表模型服务已连通（`runtime_verified=false`），接口不会发起网络探测，也不返回 URL 或密钥。
 WeKnora 用 `P0_WEKNORA_BASE_URL`、`P0_WEKNORA_API_KEY`、`P0_WEKNORA_KB_ID`、`P0_WEKNORA_REQUIRED`、
 `P0_WEKNORA_MIN_SCORE`、`P0_WEKNORA_TOP_K`、`P0_WEKNORA_RERANK` 调整。
 
