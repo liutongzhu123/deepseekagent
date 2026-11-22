@@ -278,12 +278,14 @@ tasks:
 
   - id: RA_JUDGE_MATCH
     title: 结论页与结果表判定一致（RA-1.5）
-    status: doing
+    status: done
     size: S
+    pr: 231
     deps: [T302]
     covers: [RA-1.5]
     acceptance: ["正反判定一致时 pass", "相反时 fail 并给出双方证据", "缺字段或表述含糊时 skip"]
     files: [p0/app/format_checks/judgment_consistency.py, p0/app/format_checks/_shared.py, p0/app/format_checks/registry.py, p0/app/format_rules.py, p0/app/admin_config.py, p0/tests/test_judge_result_consistency.py, docs/report-format-checks/README.md]
+    note: PR #231 已合并；合成 DOCX 端到端与 R30/R25 回归通过，客户真实样本待挂载后补测
 
   - id: RA_DOC_ITEMS
     title: 结论项目与目录/结果表项目序号核对（RA-1.7 / RA-1.11）
