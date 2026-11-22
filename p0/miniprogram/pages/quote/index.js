@@ -16,6 +16,18 @@ Page({
         : '检测项目、标准和数量已填写，可提交给业务人员确认（演示）。',
     });
   },
+  handoff() {
+    const context = store.quoteContext(this.data);
+    if (!context) {
+      wx.showToast({ title: '请先填写检测项目', icon: 'none' });
+      return;
+    }
+    if (!store.addMessage(context)) {
+      wx.showToast({ title: '本机存储失败，请重试', icon: 'none' });
+      return;
+    }
+    wx.switchTab({ url: '/pages/service/index' });
+  },
   submit() {
     if (!this.data.project.trim()) {
       wx.showToast({ title: '请填写检测项目', icon: 'none' });
