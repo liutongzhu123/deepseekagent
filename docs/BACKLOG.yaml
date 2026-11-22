@@ -10,7 +10,7 @@
 #   - detail: 详细说明（长任务用，可引用 docs/ 下的设计文档）
 
 meta:
-  updated_at: 2026-11-08
+  updated_at: 2026-11-22
   owner: supervisor
   next_task_hint: B8
 
@@ -266,15 +266,35 @@ tasks:
 
   # ========== 待做：报告审核剩余 ==========
   - id: RA_CONSIST
-    title: 一致性校验（报告 vs 任务单 / 原始记录 / 前后一致性）
+    title: 跨数据源一致性校验（报告 vs 任务单 / 原始记录 / 样品）
     status: waiting
     waiting_on: 客户 D4 数据（任务单 + 原始记录）
     size: L
     deps: [T302]
-    covers: [RA-1.1, RA-1.2, RA-1.3, RA-1.4, RA-1.5, RA-1.7, RA-1.8, RA-1.11, RA-1.12]
-    acceptance: ["提供任务单/原始记录后能逐项比对", "缺数据时明确 skip 而不是假通过"]
-    files: [p0/app/crosscheck.py]
+    covers: [RA-1.1, RA-1.3, RA-1.12]
+    acceptance: ["提供任务单/原始记录/样品数据后能逐项比对", "缺数据时明确 skip 而不是假通过"]
+    files: [p0/app/report_inputs.py, p0/app/rules.py, p0/tests/test_report_crosscheck.py]
     note: 依赖客户 D4 数据（任务单/原始记录）
+
+  - id: RA_JUDGE_MATCH
+    title: 结论页与结果表判定一致（RA-1.5）
+    status: doing
+    size: S
+    deps: [T302]
+    covers: [RA-1.5]
+    acceptance: ["正反判定一致时 pass", "相反时 fail 并给出双方证据", "缺字段或表述含糊时 skip"]
+    files: [p0/app/format_checks/judgment_consistency.py, p0/app/format_checks/_shared.py, p0/app/format_checks/registry.py, p0/app/format_rules.py, p0/app/admin_config.py, p0/tests/test_judge_result_consistency.py, docs/report-format-checks/README.md]
+
+  - id: RA_DOC_ITEMS
+    title: 结论项目与目录/结果表项目序号核对（RA-1.7 / RA-1.11）
+    status: waiting
+    waiting_on: 客户提供至少 2 份脱敏报告，包含结论页项目清单、结果表项目和目录/样品编号布局
+    size: M
+    deps: [T302]
+    covers: [RA-1.7, RA-1.11]
+    acceptance: ["结论页与结果表项目双向核对，报告漏项与多项均可定位", "项目序号/样品编号能与目录对应", "无法识别布局时明确 skip"]
+    files: [p0/app/docx_parser.py, p0/app/format_rules.py, p0/tests/]
+    note: 解析器目前只有单个封面项目字段与目录标题/页码，未提供结论项目清单或目录项目/样品编号映射；不能用封面字段冒充。
 
   - id: RA_TOC
     title: 目录页码与项目序号一致
