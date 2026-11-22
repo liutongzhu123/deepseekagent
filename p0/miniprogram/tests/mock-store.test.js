@@ -38,7 +38,7 @@ test('F3: clear errors are reported instead of pretending data was removed', () 
 
 test('saved quote and message remain local and can be cleared', () => {
   const values = useStorage();
-  const quote = store.addQuote({ project: '虚构检测项目', urgency: '常规' });
+  const quote = store.addQuote({ project: '虚构检测项目', standard: '演示标准 1', quantity: '2件', urgency: '常规' });
   const messages = store.addMessage('本地客服演示');
   store.saveProfile({ companyName: '演示公司', contactName: '演示联系人', region: '演示地区' });
   const order = store.addOrder({ templateName: '演示委托模板 A', project: '虚构检测项目', sampleName: '虚构样品', quantity: '2件' });
@@ -77,4 +77,16 @@ test('registered customer details are copied into a confirmed local demo order',
   assert.equal(order.region, '演示地区');
   assert.equal(order.status, '待模拟业务审核');
   assert.equal(store.listOrders().length, 1);
+});
+
+test('F6: incomplete quote records follow-up fields and complete quote waits for human review', () => {
+  useStorage();
+  const incomplete = store.addQuote({ project: '气味测试', standard: ' ', quantity: '' });
+  assert.deepEqual(incomplete.missingFields, ['检测标准', '样品数量']);
+  assert.equal(incomplete.status, '待补充信息（演示）');
+  assert.match(incomplete.guidance, /检测标准、样品数量/);
+
+  const complete = store.addQuote({ project: '气味测试', standard: '演示标准 1', quantity: '2件' });
+  assert.deepEqual(complete.missingFields, []);
+  assert.equal(complete.status, '待业务人员确认');
 });
