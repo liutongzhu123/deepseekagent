@@ -18,6 +18,7 @@
     <view class="item"><text class="muted">演示编号</text><text> {{item.id}}</text></view>
     <view class="item"><text class="muted">标准 / 数量</text><text> {{item.standard || '未填写'}} / {{item.quantity || '未填写'}}</text></view>
     <view class="item"><text class="muted">时效</text><text> {{item.urgency}}</text></view>
+    <view wx:if="{{item.guidance}}" class="muted" style="margin-top:14rpx">{{item.guidance}}</view>
     <view wx:if="{{item.details}}" class="item"><text class="muted">说明</text><text> {{item.details}}</text></view>
     <view class="muted" style="margin-top:18rpx">本机保存 · {{item.createdAt}}</view>
   </view>

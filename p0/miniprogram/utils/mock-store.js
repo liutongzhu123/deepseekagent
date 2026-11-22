@@ -9,6 +9,7 @@ const ORDERS_KEY = 'demo_orders_v1';
 // F3: clearing storage throws -> return failure; callers reload actual storage state.
 // F4: order submission without a local customer profile -> reject without writing.
 // F5: incomplete customer/order fields -> reject without writing.
+// F6: quote request without standard or quantity -> keep it as a follow-up item, not a confirmed quote.
 
 function read(key, fallback) {
   try {
@@ -37,16 +38,26 @@ function listQuotes() {
   return readArray(QUOTES_KEY, []);
 }
 
+function missingQuoteFields(input) {
+  const missing = [];
+  if (!String(input.standard || '').trim()) missing.push('检测标准');
+  if (!String(input.quantity || '').trim()) missing.push('样品数量');
+  return missing;
+}
+
 function addQuote(input) {
+  const missingFields = missingQuoteFields(input);
   const quotes = listQuotes();
   const quote = {
     id: `DEMO-${Date.now()}`,
-    project: input.project,
-    standard: input.standard,
-    quantity: input.quantity,
+    project: String(input.project || '').trim(),
+    standard: String(input.standard || '').trim(),
+    quantity: String(input.quantity || '').trim(),
     urgency: input.urgency,
     details: input.details,
-    status: '待业务人员确认',
+    missingFields,
+    guidance: missingFields.length ? `请补充：${missingFields.join('、')}。` : '信息已填写齐全，待业务人员确认（演示）。',
+    status: missingFields.length ? '待补充信息（演示）' : '待业务人员确认',
     createdAt: new Date().toLocaleString('zh-CN', { hour12: false }),
   };
   quotes.unshift(quote);
@@ -125,6 +136,6 @@ function clearDemoData() {
 }
 
 module.exports = {
-  listQuotes, addQuote, getProfile, saveProfile, listOrders, addOrder,
+  listQuotes, addQuote, missingQuoteFields, getProfile, saveProfile, listOrders, addOrder,
   listMessages, addMessage, clearDemoData,
 };
