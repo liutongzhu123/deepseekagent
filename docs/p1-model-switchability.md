@@ -1,5 +1,11 @@
 # T402 · 本地模型可切换性验证（2026-11-06）
 
+## 2026-11-21 · 仅本地模型运行保护
+
+设置 `P0_LOCAL_MODEL_ONLY=1` 后，语义审核、查询改写、WeKnora 和本地向量服务会在发送内容前检查其配置的端点；底层 HTTP 请求也会复核最终 URL。默认只接受 loopback、RFC1918 IPv4、IPv6 ULA 地址和 `localhost`。容器内单标签 DNS 服务名需逐个写入 `P0_LOCAL_MODEL_HOSTS`，例如 `weknora,weknora-ollama`；FQDN、后缀和子域名不会放行。此模式还关闭这些客户端的环境代理，并拒绝 HTTP 重定向。未知的开关值按“仅本地”处理；只有未设置或显式 `0/false/no/off` 才关闭保护。
+
+公网测试环境不设置 `P0_LOCAL_MODEL_ONLY`，现有配置行为不变。若仅本地模式下仍保留 DeepSeek 默认地址，语义审核返回 `non_local_model_endpoint`，查询改写保留原问题，WeKnora/embedding 不发出请求。`P0_LOCAL_MODEL_HOSTS` 仍是运维信任名单，必须只填内网单标签服务名；生产环境须用出口防火墙限制公网访问，并用现场模型和真实样例验收。`BLOCK_PROD` 因此仍保持 blocked。
+
 > **2026-11-06 决策更新：`verified-deferred`**。本地 CPU 可跑通，但吞吐不足——约 **5.5 tok/s**、图像约 **62 s/张**；决定暂停本地模型，继续用 DeepSeek 公网 API。客户本地部署需要 GPU 时再评估。下文的“配置级可切换”结论保留，真实模型效果不再作为当前验收项。
 
 > **结论先行**

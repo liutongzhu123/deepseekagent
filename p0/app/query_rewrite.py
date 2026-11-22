@@ -15,6 +15,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
+from . import model_endpoint
+
 DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 SYSTEM_PROMPT = (
@@ -103,7 +105,7 @@ def _http_transport(question: str, cfg: RewriteConfig, model: str) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=cfg.timeout) as response:
+        with model_endpoint.open_model_request(request, timeout=cfg.timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise RewriteError(f"改写模型不可用：{exc}") from exc
@@ -130,6 +132,8 @@ def rewrite(question: str, *, config: RewriteConfig | None = None,
         return RewriteResult("", "", False, reason="empty_question")
     if not cfg.enabled:
         return RewriteResult(original, original, False, reason="disabled")
+    if not model_endpoint.endpoint_allowed(cfg.base_url):
+        return RewriteResult(original, original, False, reason="non_local_model_endpoint")
     if not cfg.api_key:
         return RewriteResult(original, original, False, reason="no_api_key")
 

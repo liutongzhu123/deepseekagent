@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from . import model_endpoint
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "semantic.yaml"
 CHECK_IDS = ("S01", "S02", "S03", "S04")
@@ -88,7 +90,7 @@ def _post_json(url: str, payload: dict, headers: dict, timeout: int) -> dict:
         headers={**headers, "Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with model_endpoint.open_model_request(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -168,6 +170,8 @@ def audit_semantics(
     cfg = config or load_config()
     if not cfg.enabled:
         return {"status": "skipped", "reason": "semantic_disabled", "findings": []}
+    if not model_endpoint.endpoint_allowed(cfg.base_url):
+        return {"status": "error", "reason": "non_local_model_endpoint", "findings": []}
     if not cfg.api_key:
         return {"status": "skipped", "reason": "missing_api_key", "findings": []}
     if not (report_text or "").strip():
@@ -195,4 +199,5 @@ def audit_semantics(
         return {"status": "error", "reason": f"transport: {exc}", "findings": []}
     except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return {"status": "error", "reason": f"schema: {exc}", "findings": []}
-    return {"status": "ok", "provider": "deepseek", "model": cfg.model, "findings": findings}
+    provider = "local" if model_endpoint.is_local_endpoint(cfg.base_url) else "deepseek"
+    return {"status": "ok", "provider": provider, "model": cfg.model, "findings": findings}
