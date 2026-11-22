@@ -290,7 +290,7 @@
 ### T509 · format_checks 拆分（方案 2，下一批检查前）
 - **状态**：`doing`  **依赖**：T501–T508 合并  **分支**：`codex/t509-format-checks`
 - **做什么**：把 `p0/app/format_rules.py` 拆成 `p0/app/format_checks/<检查>.py` + 注册表；后续新增检查不再改同一个大文件，降低并行 PR 冲突。
-- **进度**：已将 R12 页级检查提取到 `p0/app/format_checks/pages.py`；后续按单检查拆分并保留 `format_rules.py` 兼容入口。
+- **进度**：已将 R12 页级检查提取到 `p0/app/format_checks/pages.py`，R13 书签检查提取到 `p0/app/format_checks/bookmarks.py`；保留 `format_rules.py` 兼容入口。
 - **验收标准**：拆分前后 R12–R17 finding 逐条一致；`pytest p0/tests -q` 全绿；单检查文件 ≤150 行。
 - **涉及**：`p0/app/format_checks/`、`p0/app/format_rules.py`、`p0/app/rules.py`
 
