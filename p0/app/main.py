@@ -35,7 +35,7 @@ from . import auth
 from . import quote as quote_service
 from . import report_batch
 from . import crm, monitoring, quote_store, store, task_worker
-from . import feedback_store, oidc, report_store, report_writer, report_inputs, partial_rules, rule_dsl, semantic_audit, standard_parse, standard_qa, standard_store, weknora
+from . import feedback_store, oidc, report_store, report_writer, report_inputs, model_readiness, partial_rules, rule_dsl, semantic_audit, standard_parse, standard_qa, standard_store, weknora
 from . import visual_checks
 from . import xlsx_writer
 from .standard_extract import items_list, samples as samples_extract
@@ -607,6 +607,7 @@ def system_status(request: Request) -> dict:
             "required": weknora.required(),
             "kb_id": (weknora.config_from_env().kb_id if weknora.config_from_env() else ""),
         },
+        "model_routing": model_readiness.snapshot(),
     }
 
 

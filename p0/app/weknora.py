@@ -20,6 +20,7 @@ fall back to matching the retrieved text against the local published chunks.
 from __future__ import annotations
 
 import difflib
+import math
 import os
 import re
 import time
@@ -75,11 +76,17 @@ def config_from_env() -> WeKnoraConfig | None:
     kb_id = os.getenv("P0_WEKNORA_KB_ID", "").strip()
     if not (base_url and api_key and kb_id):
         return None
+    try:
+        timeout = float(os.getenv("P0_WEKNORA_TIMEOUT", "60"))
+        if not math.isfinite(timeout) or timeout <= 0:
+            timeout = 60.0
+    except ValueError:
+        timeout = 60.0
     return WeKnoraConfig(
         base_url=base_url,
         api_key=api_key,
         kb_id=kb_id,
-        timeout=float(os.getenv("P0_WEKNORA_TIMEOUT", "60")),
+        timeout=timeout,
     )
 
 
