@@ -31,6 +31,7 @@ from .format_checks.numbering import (
 )
 from .format_checks.units import _UNIT_CANONICAL, _UNIT_TOKEN, _UNIT_UNITS, _unit_issue, r16_units
 from .format_checks.fonts import _COVER_LABELS, _NOTE_PREFIXES, _body_start, _cover_like, r17_fonts
+from .format_checks.registry import FORMAT_CHECKS
 
 FORMAT_RULES: tuple[tuple[str, str, str], ...] = (
     ("R12", "空白页/窜页/乱码", "页级文本密度+图片覆盖率判空白页；页脚页码断档判窜页；不可打印字符判乱码"),
@@ -1230,4 +1231,13 @@ def evaluate_format_rules(data: ReportData):
     return [rule(data) for rule in _RULE_FUNCTIONS.values()]
 
 
-_RULE_FUNCTIONS = {"R12": r12_pages, "R13": r13_bookmarks, "R14": r14_empty_cells, "R15": r15_numbering, "R16": r16_units, "R17": r17_fonts, "R18": r18_toc_pages, "R22": r22_standard_years, "R24": r24_sample_numbers, "R25": r25_judge_consistency, "R26": r26_value_range, "R27": r27_raw_record_version, "R29": r29_product_name}
+_RULE_FUNCTIONS = {
+    **FORMAT_CHECKS,
+    "R18": r18_toc_pages,
+    "R22": r22_standard_years,
+    "R24": r24_sample_numbers,
+    "R25": r25_judge_consistency,
+    "R26": r26_value_range,
+    "R27": r27_raw_record_version,
+    "R29": r29_product_name,
+}
