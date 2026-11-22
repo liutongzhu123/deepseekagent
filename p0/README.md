@@ -429,6 +429,10 @@ CRM 只读适配用 `P0_CRM_MODE`、`P0_CRM_PATH`、`P0_CRM_REQUIRED`（`api` �
 OCR 可用 `P0_OCR_ENABLED=0` 关闭，`P0_OCR_DPI`（默认 220）、`P0_OCR_MAX_PAGES` 控制速度；
 本地向量检索（仅调试）可用 `P0_EMBEDDING_URL`、`P0_EMBEDDING_MODEL`、`P0_VECTOR_MIN_SCORE`、
 `P0_VECTOR_TOP_K`、`P0_VECTOR_CACHE` 调整。
+客户私有化环境可设 `P0_LOCAL_MODEL_ONLY=1`，强制语义审核、查询改写、WeKnora 与 embedding
+只访问 loopback、私网 IP 或 `localhost`；容器单标签服务名需加入 `P0_LOCAL_MODEL_HOSTS`。
+仅显式 `0/false/no/off` 会关闭此保护；公网出口仍需由防火墙限制。详见
+`docs/p1-model-switchability.md`。
 WeKnora 用 `P0_WEKNORA_BASE_URL`、`P0_WEKNORA_API_KEY`、`P0_WEKNORA_KB_ID`、`P0_WEKNORA_REQUIRED`、
 `P0_WEKNORA_MIN_SCORE`、`P0_WEKNORA_TOP_K`、`P0_WEKNORA_RERANK` 调整。
 

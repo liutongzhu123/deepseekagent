@@ -32,6 +32,8 @@ import urllib.request
 from pathlib import Path
 from typing import Protocol, Sequence
 
+from . import model_endpoint
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STANDARD_DIR = Path(os.getenv("P0_STANDARD_DIR", str(ROOT / "data" / "standards")))
 DEFAULT_CACHE_PATH = Path(
@@ -86,6 +88,8 @@ class OllamaEmbedder:
         self.batch_size = max(1, batch_size if batch_size is not None else _env_int("P0_EMBEDDING_BATCH", 64))
 
     def _post(self, texts: Sequence[str]) -> list[list[float]]:
+        if not model_endpoint.endpoint_allowed(self.base_url):
+            raise EmbeddingUnavailable("embedding 端点不在本地模型允许范围内")
         payload = json.dumps({"model": self.model, "input": list(texts)}).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url}/api/embed",
@@ -96,7 +100,7 @@ class OllamaEmbedder:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with model_endpoint.open_model_request(request, timeout=self.timeout) as response:
                     data = json.loads(response.read().decode("utf-8"))
                 vectors = data.get("embeddings")
                 if vectors is None and "embedding" in data:
@@ -131,8 +135,10 @@ class OllamaEmbedder:
         return vectors
 
     def health(self) -> dict:
+        if not model_endpoint.endpoint_allowed(self.base_url):
+            raise EmbeddingUnavailable("embedding 端点不在本地模型允许范围内")
         try:
-            with urllib.request.urlopen(f"{self.base_url}/api/tags", timeout=10) as response:
+            with model_endpoint.open_model_request(f"{self.base_url}/api/tags", timeout=10) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise EmbeddingUnavailable(f"embedding 服务不可用：{exc}") from exc

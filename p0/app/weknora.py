@@ -28,6 +28,8 @@ from typing import Any
 
 import httpx
 
+from . import model_endpoint
+
 DEFAULT_TOP_K = int(os.getenv("P0_WEKNORA_TOP_K", "6"))
 DEFAULT_MIN_SCORE = float(os.getenv("P0_WEKNORA_MIN_SCORE", "0.35"))
 INDEX_WAIT_SECONDS = float(os.getenv("P0_WEKNORA_INDEX_WAIT", "30"))
@@ -82,11 +84,12 @@ def config_from_env() -> WeKnoraConfig | None:
 
 
 def configured() -> bool:
-    return config_from_env() is not None
+    cfg = config_from_env()
+    return cfg is not None and model_endpoint.endpoint_allowed(cfg.base_url)
 
 
 def required() -> bool:
-    return os.getenv("P0_WEKNORA_REQUIRED", "1" if configured() else "0").lower() not in {
+    return os.getenv("P0_WEKNORA_REQUIRED", "1" if config_from_env() else "0").lower() not in {
         "0",
         "false",
         "off",
@@ -95,10 +98,14 @@ def required() -> bool:
 
 
 def _client(cfg: WeKnoraConfig) -> httpx.Client:
+    if not model_endpoint.endpoint_allowed(cfg.base_url):
+        raise WeKnoraUnavailable("WeKnora 端点不在本地模型允许范围内")
     return httpx.Client(
         base_url=cfg.base_url,
         headers={"X-API-Key": cfg.api_key, "Accept": "application/json"},
         timeout=httpx.Timeout(cfg.timeout),
+        trust_env=not model_endpoint.local_only(),
+        follow_redirects=False,
     )
 
 
