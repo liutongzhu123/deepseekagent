@@ -58,7 +58,7 @@ def snapshot() -> dict:
         bool(knowledge) or weknora_required or any(os.getenv(key, "").strip() for key in (
             "P0_WEKNORA_BASE_URL", "P0_WEKNORA_API_KEY", "P0_WEKNORA_KB_ID",
         )), bool(knowledge),
-        knowledge.base_url if knowledge else os.getenv("P0_WEKNORA_BASE_URL", ""),
+        knowledge.base_url if knowledge else os.getenv("P0_WEKNORA_BASE_URL", "").strip(),
         "missing_configuration", weknora_error,
     )
     weknora_route["required"] = weknora_required
