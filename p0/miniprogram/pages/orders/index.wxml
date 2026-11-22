@@ -1,7 +1,18 @@
 <view class="page">
   <view class="demo-banner">本页只展示当前设备中的模拟需求，没有连接订单系统。</view>
-  <view class="row"><view class="title">业务记录</view><text wx:if="{{quotes.length}}" class="link" bindtap="clear">清空</text></view>
-  <view wx:if="{{!quotes.length}}" class="card empty">还没有模拟需求。<view style="margin-top:22rpx"><button class="secondary" bindtap="goQuote">填写一条需求</button></view></view>
+  <view class="row"><view class="title">业务记录</view><text wx:if="{{quotes.length || orders.length}}" class="link" bindtap="clear">清空</text></view>
+  <view class="card" style="padding:18rpx"><view class="row"><text>委托单</text><button class="secondary" size="mini" bindtap="createOrder">新建模拟委托单</button></view></view>
+  <view wx:if="{{!quotes.length && !orders.length}}" class="card empty">还没有模拟业务记录。<view style="margin-top:22rpx"><button class="secondary" bindtap="goQuote">填写检测需求</button></view></view>
+  <view wx:if="{{orders.length}}" class="section-title">委托单</view>
+  <view wx:for="{{orders}}" wx:key="orderNo" class="card">
+    <view class="row"><text class="title" style="font-size:30rpx">{{item.project}}</text><text class="pill">{{item.status}}</text></view>
+    <view class="item"><text class="muted">演示编号</text><text> {{item.orderNo}}</text></view>
+    <view class="item"><text class="muted">委托单位</text><text> {{item.companyName}}</text></view>
+    <view class="item"><text class="muted">模板 / 样品</text><text> {{item.templateName}} / {{item.sampleName}}</text></view>
+    <view class="item"><text class="muted">数量 / 标准</text><text> {{item.quantity}} / {{item.standard || '未填写'}}</text></view>
+    <view class="muted" style="margin-top:18rpx">本机保存 · {{item.createdAt}}</view>
+  </view>
+  <view wx:if="{{quotes.length}}" class="section-title">询价需求</view>
   <view wx:for="{{quotes}}" wx:key="id" class="card">
     <view class="row"><text class="title" style="font-size:30rpx">{{item.project}}</text><text class="pill">{{item.status}}</text></view>
     <view class="item"><text class="muted">演示编号</text><text> {{item.id}}</text></view>
