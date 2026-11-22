@@ -1,0 +1,14 @@
+<view class="page">
+  <view class="demo-banner">演示环境 · 虚构业务数据，仅用于流程体验。此版本不会提交真实报价或联系真实客服。</view>
+  <view class="card hero">
+    <view class="pill">中汽零部件客户服务</view>
+    <view class="title" style="margin-top:22rpx">检测需求，从这里开始</view>
+    <view class="subtitle">提交检测需求，查看本机保存的模拟业务进展。</view>
+    <button class="primary" style="margin-top:30rpx" bindtap="goQuote">填写检测需求</button>
+  </view>
+  <view class="section-title">常用服务</view>
+  <view class="card row item" bindtap="goQuote"><view><view>需求与询价</view><view class="muted">提交项目、标准和期望周期</view></view><text class="link">›</text></view>
+  <view class="card row item" bindtap="goOrders"><view><view>业务记录</view><view class="muted">本机保存 {{count}} 条模拟需求</view></view><text class="link">›</text></view>
+  <view class="card row item" bindtap="goService"><view><view>客服咨询</view><view class="muted">体验本地对话记录与常见问题入口</view></view><text class="link">›</text></view>
+  <view class="muted" style="line-height:1.7;padding:12rpx 4rpx">接入说明：真实微信登录、客户档案、报价审批、委托单及客服消息服务需由项目后端与客户接口另行配置。</view>
+</view>
