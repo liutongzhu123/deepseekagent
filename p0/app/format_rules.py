@@ -5,6 +5,7 @@ Read-only; return ``skip`` with a reason when data is insufficient.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 
 from .docx_parser import ReportData, _expand_table
