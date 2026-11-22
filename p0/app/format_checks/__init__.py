@@ -2,8 +2,9 @@
 
 from .bookmarks import r13_bookmarks
 from .empty_cells import r14_empty_cells
+from .fonts import r17_fonts
 from .numbering import r15_numbering
 from .pages import r12_pages
 from .units import r16_units
 
-__all__ = ["r12_pages", "r13_bookmarks", "r14_empty_cells", "r15_numbering", "r16_units"]
+__all__ = ["r12_pages", "r13_bookmarks", "r14_empty_cells", "r15_numbering", "r16_units", "r17_fonts"]
