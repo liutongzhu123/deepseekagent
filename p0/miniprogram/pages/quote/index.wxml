@@ -12,5 +12,6 @@
     </view>
     <view class="field"><text class="field-label">补充说明（选填）</text><textarea class="textarea" data-field="details" value="{{details}}" bindinput="onInput" placeholder="描述样品、关注点或其他需求" /></view>
     <button class="primary" style="margin-top:28rpx" bindtap="submit">保存模拟需求</button>
+    <button class="secondary" style="margin-top:14rpx" bindtap="handoff">带上当前需求去客服咨询（本机演示）</button>
   </view>
 </view>

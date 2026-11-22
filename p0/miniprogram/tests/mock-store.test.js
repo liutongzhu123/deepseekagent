@@ -90,3 +90,15 @@ test('F6: incomplete quote records follow-up fields and complete quote waits for
   assert.deepEqual(complete.missingFields, []);
   assert.equal(complete.status, '待业务人员确认');
 });
+
+test('F7: quote handoff requires a project and retains context in the local service thread', () => {
+  useStorage();
+  assert.equal(store.quoteContext({ standard: '标准 1' }), '');
+  const context = store.quoteContext({ project: '气味测试', standard: '', quantity: '2件', urgency: '加急咨询', details: '虚构内饰片' });
+  assert.match(context, /本机演示，未发送/);
+  assert.match(context, /检测标准：待补充/);
+  assert.match(context, /样品数量：2件/);
+  assert.match(context, /建议补充：检测标准/);
+  const messages = store.addMessage(context);
+  assert.equal(messages.at(-1).text, context);
+});
