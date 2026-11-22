@@ -1,10 +1,14 @@
 const QUOTES_KEY = 'demo_quotes_v1';
 const MESSAGES_KEY = 'demo_messages_v1';
+const PROFILE_KEY = 'demo_profile_v1';
+const ORDERS_KEY = 'demo_orders_v1';
 
 // Failure cases covered in tests/mock-store.test.js:
 // F1: storage read throws or contains a non-array value -> return a safe empty/default list.
 // F2: storage write throws (for example, quota reached) -> return failure; never claim saved.
-// F3: clearing storage throws -> return failure and let the page preserve its visible state.
+// F3: clearing storage throws -> return failure; callers reload actual storage state.
+// F4: order submission without a local customer profile -> reject without writing.
+// F5: incomplete customer/order fields -> reject without writing.
 
 function read(key, fallback) {
   try {
@@ -49,6 +53,53 @@ function addQuote(input) {
   return write(QUOTES_KEY, quotes) ? quote : null;
 }
 
+function getProfile() {
+  const profile = read(PROFILE_KEY, null);
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
+  return ['companyName', 'contactName', 'region'].every((key) => String(profile[key] || '').trim())
+    ? profile
+    : null;
+}
+
+function saveProfile(input) {
+  const profile = {
+    companyName: String(input.companyName || '').trim(),
+    contactName: String(input.contactName || '').trim(),
+    region: String(input.region || '').trim(),
+    status: '本机演示资料 · 未提交审核',
+    updatedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+  };
+  if (!profile.companyName || !profile.contactName || !profile.region) return null;
+  return write(PROFILE_KEY, profile) ? profile : null;
+}
+
+function listOrders() {
+  return readArray(ORDERS_KEY, []);
+}
+
+function addOrder(input) {
+  const profile = getProfile();
+  const required = ['templateName', 'project', 'sampleName', 'quantity'];
+  if (!profile || required.some((key) => !String(input[key] || '').trim())) return null;
+  const orders = listOrders();
+  const order = {
+    orderNo: `DEMO-WX-${Date.now()}`,
+    companyName: profile.companyName,
+    contactName: profile.contactName,
+    region: profile.region,
+    templateName: String(input.templateName).trim(),
+    project: String(input.project).trim(),
+    standard: String(input.standard || '').trim(),
+    sampleName: String(input.sampleName).trim(),
+    quantity: String(input.quantity).trim(),
+    notes: String(input.notes || '').trim(),
+    status: '待模拟业务审核',
+    createdAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+  };
+  orders.unshift(order);
+  return write(ORDERS_KEY, orders) ? order : null;
+}
+
 function listMessages() {
   return readArray(MESSAGES_KEY, [
     { id: 'welcome', side: 'agent', text: '您好，这里是客服演示窗口。当前消息仅保存在本机，不会发送给客服人员。' },
@@ -62,13 +113,18 @@ function addMessage(text) {
 }
 
 function clearDemoData() {
-  try {
-    wx.removeStorageSync(QUOTES_KEY);
-    wx.removeStorageSync(MESSAGES_KEY);
-    return true;
-  } catch (error) {
-    return false;
+  let cleared = true;
+  for (const key of [QUOTES_KEY, MESSAGES_KEY, PROFILE_KEY, ORDERS_KEY]) {
+    try {
+      wx.removeStorageSync(key);
+    } catch (error) {
+      cleared = false;
+    }
   }
+  return cleared;
 }
 
-module.exports = { listQuotes, addQuote, listMessages, addMessage, clearDemoData };
+module.exports = {
+  listQuotes, addQuote, getProfile, saveProfile, listOrders, addOrder,
+  listMessages, addMessage, clearDemoData,
+};

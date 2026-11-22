@@ -1,0 +1,20 @@
+<view class="page">
+  <view class="demo-banner">本地委托单演示 · 不会提交检测申请、安排样品或启动真实审核。</view>
+  <view wx:if="{{!profile}}" class="card empty">
+    请先保存本机演示客户资料，系统会将企业和联系人带入委托单。
+    <view style="margin-top:22rpx"><button class="secondary" bindtap="register">登记演示资料</button></view>
+  </view>
+  <view wx:else class="card">
+    <view class="title">确认委托信息</view>
+    <view class="subtitle">委托单位与联系人从“我的”页自动带入。</view>
+    <view class="field"><text class="field-label">委托单位</text><view>{{profile.companyName}}</view></view>
+    <view class="field"><text class="field-label">联系人</text><view>{{profile.contactName}} · {{profile.region}}</view></view>
+    <view class="field"><text class="field-label">* 委托模板</text><view class="quick-row"><text wx:for="{{templates}}" wx:key="*this" class="quick" data-value="{{item}}" bindtap="chooseTemplate">{{templateName === item ? '✓ ' : ''}}{{item}}</text></view></view>
+    <view class="field"><text class="field-label">* 检测项目</text><input class="input" data-field="project" value="{{project}}" bindinput="onInput" placeholder="填写需要检测的项目" /></view>
+    <view class="field"><text class="field-label">检测标准（选填）</text><input class="input" data-field="standard" value="{{standard}}" bindinput="onInput" placeholder="标准号或名称" /></view>
+    <view class="field"><text class="field-label">* 样品名称</text><input class="input" data-field="sampleName" value="{{sampleName}}" bindinput="onInput" placeholder="填写虚构样品名称" /></view>
+    <view class="field"><text class="field-label">* 样品数量</text><input class="input" data-field="quantity" value="{{quantity}}" bindinput="onInput" placeholder="例如：2 件" /></view>
+    <view class="field"><text class="field-label">补充说明（选填）</text><textarea class="textarea" data-field="notes" value="{{notes}}" bindinput="onInput" placeholder="演示用途，请勿填写真实客户敏感资料" /></view>
+    <button class="primary" style="margin-top:24rpx" bindtap="submit">确认并保存演示委托单</button>
+  </view>
+</view>

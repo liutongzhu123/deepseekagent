@@ -1,8 +1,15 @@
 <view class="page">
   <view class="demo-banner">访客演示态 · 未获取微信 OpenID、手机号或客户身份信息。</view>
-  <view class="card"><view class="pill">本地访客</view><view class="title" style="margin-top:20rpx">您好，欢迎体验</view><view class="subtitle">身份认证与客户档案将在正式接入微信登录及 CRM 后开发。</view></view>
+  <view class="card"><view class="pill">本地访客</view><view class="title" style="margin-top:20rpx">客户资料</view><view class="subtitle">登记信息只用于委托单自动带入演示，不会核验或提交至业务系统。</view>
+    <view class="field"><text class="field-label">* 企业名称</text><input class="input" data-field="companyName" value="{{companyName}}" bindinput="onInput" placeholder="请输入虚构演示企业名称" /></view>
+    <view class="field"><text class="field-label">* 联系人</text><input class="input" data-field="contactName" value="{{contactName}}" bindinput="onInput" placeholder="请输入演示联系人" /></view>
+    <view class="field"><text class="field-label">* 所在地区</text><input class="input" data-field="region" value="{{region}}" bindinput="onInput" placeholder="例如：上海市·浦东新区" /></view>
+    <button class="secondary" style="margin-top:22rpx" bindtap="saveProfile">保存本机演示资料</button>
+    <view wx:if="{{profile}}" class="muted" style="margin-top:18rpx">{{profile.status}} · {{profile.updatedAt}}</view>
+  </view>
   <view class="card">
     <view class="row item"><text>本机模拟需求</text><text>{{quoteCount}}</text></view>
+    <view class="row item"><text>本机模拟委托单</text><text>{{orderCount}}</text></view>
     <view class="row item"><text>本机演示消息</text><text>{{messageCount}}</text></view>
     <view class="row item" bindtap="clear"><text>清除本机演示数据</text><text class="link">清除</text></view>
   </view>

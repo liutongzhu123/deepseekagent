@@ -3,6 +3,7 @@
     "pages/home/index",
     "pages/quote/index",
     "pages/orders/index",
+    "pages/orders/create",
     "pages/service/index",
     "pages/profile/index"
   ],
