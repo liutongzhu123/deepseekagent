@@ -1,0 +1,29 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/quote/index",
+    "pages/orders/index",
+    "pages/service/index",
+    "pages/profile/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "中汽零部件服务",
+    "navigationBarBackgroundColor": "#ffffff",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f7fa"
+  },
+  "tabBar": {
+    "color": "#7b8494",
+    "selectedColor": "#1769e0",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      { "pagePath": "pages/home/index", "text": "首页" },
+      { "pagePath": "pages/orders/index", "text": "业务记录" },
+      { "pagePath": "pages/service/index", "text": "客服" },
+      { "pagePath": "pages/profile/index", "text": "我的" }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

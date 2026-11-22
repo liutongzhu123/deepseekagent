@@ -1,0 +1,4 @@
+{
+  "desc": "Local demo sitemap",
+  "rules": [{ "action": "allow", "page": "*" }]
+}

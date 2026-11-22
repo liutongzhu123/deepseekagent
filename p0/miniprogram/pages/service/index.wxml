@@ -1,0 +1,11 @@
+<view class="page">
+  <view class="demo-banner">离线客服演示 · 对话只存于本机，不会发送、存档或通知任何客服人员。</view>
+  <view class="card"><view class="title">客服咨询</view><view class="subtitle">可体验输入和本机记录。以下快捷问题不会触发自动答复。</view></view>
+  <view class="quick-row">
+    <text class="quick" data-question="我想咨询检测项目和能力范围" bindtap="chooseQuestion">检测能力</text>
+    <text class="quick" data-question="我想咨询检测周期" bindtap="chooseQuestion">检测周期</text>
+    <text class="quick" data-question="我想咨询委托流程" bindtap="chooseQuestion">委托流程</text>
+  </view>
+  <view class="chat-list"><view wx:for="{{messages}}" wx:key="id" class="bubble {{item.side === 'user' ? 'mine' : ''}}">{{item.text}}</view></view>
+  <view class="card"><textarea class="textarea" style="min-height:96rpx" value="{{draft}}" bindinput="onInput" placeholder="输入一条本地演示消息" /><button class="primary" style="margin-top:16rpx" bindtap="send">保存到本机</button></view>
+</view>
