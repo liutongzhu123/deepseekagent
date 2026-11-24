@@ -1,5 +1,5 @@
 <view class="page">
-  <view class="demo-banner">模拟询价 · 不生成价格或正式报价单，提交内容仅保存在当前设备。</view>
+  <view class="demo-banner">{{apiEnabled ? '本地客服演示 · 提交后进入管理员会话队列，可由接手人员回复；不生成价格、正式报价或外部通知。' : '离线模拟询价 · 不生成价格或正式报价单，提交内容仅保存在当前设备。'}}</view>
   <view class="card">
     <view class="title">填写检测需求</view>
     <view class="subtitle">带 * 项目为必填。标准和数量暂不确定可留空，小程序会提示补充项。</view>
@@ -11,7 +11,8 @@
       <view class="quick-row"><text class="quick" data-value="常规" bindtap="chooseUrgency">{{urgency === '常规' ? '✓ ' : ''}}常规</text><text class="quick" data-value="加急咨询" bindtap="chooseUrgency">{{urgency === '加急咨询' ? '✓ ' : ''}}加急咨询</text></view>
     </view>
     <view class="field"><text class="field-label">补充说明（选填）</text><textarea class="textarea" data-field="details" value="{{details}}" bindinput="onInput" placeholder="描述样品、关注点或其他需求" /></view>
-    <button class="primary" style="margin-top:28rpx" bindtap="submit">保存模拟需求</button>
-    <button class="secondary" style="margin-top:14rpx" bindtap="handoff">带上当前需求去客服咨询（本机演示）</button>
+    <view wx:if="{{submitError}}" class="card empty" style="margin-top:16rpx">{{submitError}}；未伪报提交成功。</view>
+    <button class="primary" style="margin-top:28rpx" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{apiEnabled ? '提交给客服演示队列' : '保存模拟需求'}}</button>
+    <button class="secondary" style="margin-top:14rpx" loading="{{handoffBusy}}" disabled="{{handoffBusy}}" bindtap="handoff">{{apiEnabled ? '提交需求并转客服' : '带上当前需求去客服咨询（本机演示）'}}</button>
   </view>
 </view>

@@ -15,13 +15,23 @@ Each section has its own ``config:manage:<section>`` permission, so the owning
 department can maintain it without full administrator rights.
 ``config:read`` / ``config:manage`` remain the administrator-wide equivalents.
 Every change bumps ``revision`` and is written to the audit log by the API.
+
+Failure paths: F1 invalid sections/payloads fail before mutation; F2 stale
+expected revisions conflict after reading the current persisted version under
+the local process lock; F3 corrupt configuration refuses CAS writes; F4 lock or
+disk write errors fail closed; F5 a successful write invalidates process cache.
+POSIX flock only coordinates workers sharing the same local filesystem, not
+multiple hosts or network filesystems.
 """
 from __future__ import annotations
 
 import copy
 import json
 import os
+import re
 import threading
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -158,7 +168,12 @@ DEFAULT_BUSINESS = {
     "rush": {"enabled": False, "fee_rate": 0.0, "lead_days": 0},
     "intermediary": {"enabled": False, "block": False, "keywords": []},
     "blacklist": {"companies": []},
-    "whitelist": {"companies": []},
+    "whitelist": {"companies": [], "keywords": []},
+    "region_routing": {
+        "enabled": False,
+        "region_managers": [],
+        "backup_manager_id": "",
+    },
 }
 
 QUOTE_HEADER_KEYS = ("item", "price", "quantity", "unit", "sample")
@@ -197,8 +212,34 @@ _LOCK = threading.RLock()
 _CACHE: dict[str, Any] = {"key": None, "config": None, "warning": ""}
 
 
+@contextmanager
+def _locked():
+    """Serialize persisted configuration transactions across local workers."""
+    with _LOCK:
+        path = Path(CONFIG_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        lock_path = path.with_name(path.name + ".lock")
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+
+def _invalidate_cache() -> None:
+    _CACHE.update({"key": None, "config": None, "warning": ""})
+
+
 class ConfigError(ValueError):
     """Raised when a configuration section is invalid."""
+
+
+class ConfigRevisionConflict(ConfigError):
+    """A targeted configuration mutation was based on a stale revision."""
 
 
 def default_config() -> dict[str, Any]:
@@ -497,11 +538,43 @@ def _validate_business(section: dict[str, Any]) -> dict[str, Any]:
         lists[key] = {"companies": _string_list(
             value.get("companies", []), f"{label}企业",
             limit=500, item_limit=100, allow_empty=True)}
+        if key == "whitelist":
+            lists[key]["keywords"] = _string_list(
+                value.get("keywords", []), "重点客户关键词",
+                limit=100, item_limit=100, allow_empty=True)
+    routing = _obj(section.get("region_routing", DEFAULT_BUSINESS["region_routing"]), "business.region_routing")
+    region_managers = routing.get("region_managers", [])
+    if not isinstance(region_managers, list) or len(region_managers) > 500:
+        raise ConfigError("地区经理映射必须是列表且最多 500 条")
+    clean_region_managers = []
+    seen_regions: set[str] = set()
+    for item in region_managers:
+        item = _obj(item, "地区经理映射")
+        region = _text(item.get("region"), "映射地区", limit=100)
+        normalized = re.sub(r"\s+", "", region).casefold()
+        if normalized in seen_regions:
+            raise ConfigError(f"地区经理映射重复：{region}")
+        seen_regions.add(normalized)
+        clean_region_managers.append({
+            "region": region,
+            "manager_id": _text(item.get("manager_id"), "业务经理账号", limit=120),
+        })
+    backup_manager_id = _text(
+        routing.get("backup_manager_id", ""), "备用经理账号", limit=120, allow_empty=True
+    )
+    routing_enabled = _bool(routing.get("enabled", False), "地区经理路由启用状态")
+    if routing_enabled and not backup_manager_id:
+        raise ConfigError("启用地区经理路由前必须配置备用经理账号")
     return {"discount_tiers": clean_tiers,
             "rush": {"enabled": _bool(rush.get("enabled", False), "加急规则启用状态"),
                      "fee_rate": _number(rush.get("fee_rate", 0), "加急费率", low=0, high=200),
                      "lead_days": _int(rush.get("lead_days", 0), "加急提前天数", low=0, high=365)},
-            "intermediary": clean_intermediary, **lists}
+            "intermediary": clean_intermediary, **lists,
+            "region_routing": {
+                "enabled": routing_enabled,
+                "region_managers": clean_region_managers,
+                "backup_manager_id": backup_manager_id,
+            }}
 
 
 _VALIDATORS = {
@@ -534,12 +607,12 @@ def validate_config(document: dict[str, Any]) -> dict[str, Any]:
     return output
 
 
-def _cache_key(path: Path) -> tuple[str, int, int]:
+def _cache_key(path: Path) -> tuple[str, int, int, int]:
     try:
         stat = path.stat()
-        return (str(path), stat.st_mtime_ns, stat.st_size)
+        return (str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size)
     except FileNotFoundError:
-        return (str(path), 0, 0)
+        return (str(path), 0, 0, 0)
 
 
 def _load_cached() -> tuple[dict[str, Any], str]:
@@ -603,18 +676,27 @@ def _write(document: dict[str, Any]) -> None:
         pass
     tmp.replace(path)
     with _LOCK:
-        _CACHE.update({"key": None, "config": None, "warning": ""})
+        _invalidate_cache()
 
 
 def update_section(
-    section: str, payload: dict[str, Any], updated_by: str = ""
+    section: str, payload: dict[str, Any], updated_by: str = "",
+    expected_revision: int | None = None,
 ) -> dict[str, Any]:
     if section not in SECTIONS:
         raise ConfigError(f"未知配置分区：{section}")
     if not isinstance(payload, dict):
         raise ConfigError("配置分区必须是对象")
-    with _LOCK:
-        current = load()
+    with _locked():
+        _invalidate_cache()
+        current, warning = _load_cached()
+        if expected_revision is not None:
+            if warning:
+                raise ConfigError("配置文件无效，已停止修改")
+            if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+                raise ConfigError("配置版本必须是整数")
+            if current.get("revision", 0) != expected_revision:
+                raise ConfigRevisionConflict("业务配置已变化，请刷新后重试")
         # Merge onto the saved section (not the defaults) so a client that only
         # sends the fields it renders — e.g. the report form, which does not
         # render custom_rules — cannot silently drop admin-defined rules.
@@ -628,12 +710,52 @@ def update_section(
         return copy.deepcopy(current)
 
 
-def reset_section(section: str, updated_by: str = "") -> dict[str, Any]:
+def update_blacklist(companies: list[str], expected_revision: int, updated_by: str = "") -> dict[str, Any]:
+    """Atomically merge a blacklist change only if its source revision is current."""
+    if isinstance(expected_revision, bool) or not isinstance(expected_revision, int) or expected_revision < 0:
+        raise ConfigError("配置版本必须是非负整数")
+    clean_companies = _string_list(
+        companies, "黑名单企业", limit=500, item_limit=100, allow_empty=True
+    )
+    with _locked():
+        _invalidate_cache()
+        current, warning = _load_cached()
+        if warning:
+            raise ConfigError("配置文件无效，已停止修改")
+        if current.get("revision", 0) != expected_revision:
+            raise ConfigRevisionConflict("业务配置已变化，请刷新后重试")
+        business = copy.deepcopy(current["business"])
+        business["blacklist"] = {"companies": clean_companies}
+        current["business"] = validate_section("business", business)
+        current["revision"] = int(current.get("revision", 0)) + 1
+        current["updated_at"] = _now()
+        current["updated_by"] = updated_by
+        _write(current)
+        return copy.deepcopy(current)
+
+
+def reset_section(
+    section: str, updated_by: str = "", preserve_fields: tuple[str, ...] = (),
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
     if section not in SECTIONS:
         raise ConfigError(f"未知配置分区：{section}")
-    with _LOCK:
-        current = load()
+    with _locked():
+        _invalidate_cache()
+        current, warning = _load_cached()
+        if expected_revision is not None:
+            if warning:
+                raise ConfigError("配置文件无效，已停止重置")
+            if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+                raise ConfigError("配置版本必须是整数")
+            if current.get("revision", 0) != expected_revision:
+                raise ConfigRevisionConflict("业务配置已变化，请刷新后重试")
+        preserved = {
+            key: copy.deepcopy(current.get(section, {}).get(key))
+            for key in preserve_fields if key in current.get(section, {})
+        }
         current[section] = copy.deepcopy(DEFAULT_CONFIG[section])
+        current[section].update(preserved)
         current["revision"] = int(current.get("revision", 0)) + 1
         current["updated_at"] = _now()
         current["updated_by"] = updated_by

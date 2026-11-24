@@ -1,0 +1,139 @@
+{
+  "dataset": {
+    "id": "SYN-CS-CATALOG-001",
+    "kind": "synthetic",
+    "version": 1,
+    "label": "合成数据，仅供开发演示",
+    "generated_at": "2026-11-22T00:00:00Z",
+    "demo_only": true,
+    "production_usable": false
+  },
+  "prices": [
+    {
+      "record_id": "SYN-PRICE-001",
+      "project_id": "SYN-PROJECT-ODOR",
+      "project_name": "合成内饰气味试验",
+      "sample_name": "合成内饰材料样品",
+      "item_name": "合成气味测试",
+      "standard": "SYN-STD-ODOR-001",
+      "unit": "件",
+      "minimum_quantity": 1,
+      "unit_price": 1200.0,
+      "currency": "CNY",
+      "tax_inclusive": true,
+      "valid_from": "2000-01-01",
+      "valid_until": "2999-12-31",
+      "source": {
+        "system": "synthetic-fixture",
+        "record_id": "SYN-PRICE-001",
+        "revision": "fixture-v1"
+      }
+    },
+    {
+      "record_id": "SYN-PRICE-002",
+      "project_id": "SYN-PROJECT-FLAME",
+      "project_name": "合成材料燃烧试验",
+      "sample_name": "合成聚合物样品",
+      "item_name": "合成水平燃烧测试",
+      "standard": "SYN-STD-FLAME-001",
+      "unit": "件",
+      "minimum_quantity": 1,
+      "unit_price": 11500.0,
+      "currency": "CNY",
+      "tax_inclusive": true,
+      "valid_from": "2000-01-01",
+      "valid_until": "2999-12-31",
+      "source": {
+        "system": "synthetic-fixture",
+        "record_id": "SYN-PRICE-002",
+        "revision": "fixture-v1"
+      }
+    },
+    {
+      "record_id": "SYN-PRICE-003",
+      "project_id": "SYN-PROJECT-ODOR",
+      "project_name": "合成内饰气味试验",
+      "sample_name": "合成旧版材料样品",
+      "item_name": "合成旧版挥发测试",
+      "standard": "SYN-STD-OLD-001",
+      "unit": "件",
+      "minimum_quantity": 1,
+      "unit_price": 800.0,
+      "currency": "CNY",
+      "tax_inclusive": true,
+      "valid_from": "2000-01-01",
+      "valid_until": "2020-12-31",
+      "source": {
+        "system": "synthetic-fixture",
+        "record_id": "SYN-PRICE-003",
+        "revision": "fixture-v1"
+      }
+    }
+  ],
+  "schedules": [
+    {
+      "record_id": "SYN-SCHEDULE-001",
+      "project_id": "SYN-PROJECT-ODOR",
+      "project_name": "合成内饰气味试验",
+      "start_date": "2099-02-01",
+      "end_date": "2099-02-15",
+      "status": "synthetic-planned",
+      "updated_at": "2026-11-22T00:00:00Z",
+      "source": {
+        "system": "synthetic-fixture",
+        "record_id": "SYN-SCHEDULE-001",
+        "revision": "fixture-v1"
+      }
+    }
+  ],
+  "qualifications": [
+    {
+      "record_id": "SYN-QUAL-001",
+      "certificate_no": "SYN-CERT-001",
+      "name": "合成气味项目认可",
+      "scope_level": "project",
+      "project_id": "SYN-PROJECT-ODOR",
+      "project_name": "合成内饰气味试验",
+      "standard": "",
+      "valid_from": "2000-01-01",
+      "valid_until": "2999-12-31",
+      "status": "synthetic-active",
+      "source": {
+        "system": "synthetic-fixture",
+        "record_id": "SYN-QUAL-001",
+        "revision": "fixture-v1"
+      }
+    },
+    {
+      "record_id": "SYN-QUAL-002",
+      "certificate_no": "SYN-CERT-002",
+      "name": "合成燃烧标准认可",
+      "scope_level": "standard",
+      "project_id": "SYN-PROJECT-FLAME",
+      "project_name": "合成材料燃烧试验",
+      "standard": "SYN-STD-FLAME-001",
+      "valid_from": "2000-01-01",
+      "valid_until": "2999-12-31",
+      "status": "synthetic-active",
+      "source": {
+        "system": "synthetic-fixture",
+        "record_id": "SYN-QUAL-002",
+        "revision": "fixture-v1"
+      }
+    }
+  ],
+  "name_mappings": [
+    {
+      "record_id": "SYN-MAP-001",
+      "alias": "合成水平燃烧",
+      "canonical": "合成水平燃烧测试",
+      "match_type": "synthetic-exact-alias",
+      "review_status": "demo-approved",
+      "source": {
+        "system": "synthetic-fixture",
+        "record_id": "SYN-MAP-001",
+        "revision": "fixture-v1"
+      }
+    }
+  ]
+}

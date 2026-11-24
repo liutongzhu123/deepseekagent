@@ -1,0 +1,57 @@
+{
+  "baseline_commit": "f17ee8a8da901bd658a4cb25f40b5fd41adbfdd7",
+  "baseline_archive_sha256": "4d5f8f93298a049ea9a35163d8317af7c918e62411a0a2573dce8ddbb2d6f831",
+  "upstream_file_count": 5870,
+  "identical": 5868,
+  "changed": 2,
+  "missing": 0,
+  "symlinks_not_followed": [],
+  "changed_by_root": {
+    "config": 1,
+    "docker-compose.yml": 1
+  },
+  "missing_by_root": {},
+  "added_code_count": 1,
+  "added_code_by_root": {
+    "internal": 1
+  },
+  "changed_files": [
+    "config/builtin_agents.yaml",
+    "docker-compose.yml"
+  ],
+  "missing_files": [],
+  "added_code_files": [
+    "internal/application/service/image_action_loop.go"
+  ],
+  "working_tree_head": "3e22822c1d2397be730c458c7539d0eb8c113a24",
+  "scope": "Official manifest paths plus selected added code only; not an image-to-source attestation",
+  "backend_layer_lineage": {
+    "official_layers": 18,
+    "deployed_layers": 22,
+    "official_prefix_identical": true
+  },
+  "image_ids": {
+    "yunan/kb-app:cn-prompt-5": "sha256:958eded08b6bf44d8f8650462e2f732ba4db3920eadb584b45c00c8239289636",
+    "wechatopenai/weknora-app:v0.9.0": "sha256:25b20959b7456f7842ef55ed4feff3694dbd0c6f8af4117c1fb3c5dec6bdf14d",
+    "yunan/kb-ui:deepknow-26": "sha256:dfe962147c644e325e2212f0f1ddf83c44f72f5201693dfa48809ee4ef9d01d4"
+  },
+  "backend_executable_sha256": "cfe6e40a8f3113f4615a8a7210de6bdf7b8604ec37d9ae7c456cf20eb5ad8619",
+  "runtime_prompt_hashes": {
+    "config/prompt_templates/system_prompt.yaml": "3922bf52089cc8c83db8a7a97d2620f84835add4e4a55ad69238863dafbb2436",
+    "config/prompt_templates/agent_system_prompt.yaml": "389031805df5a24236d96d623d52b10ae50dcf9e005a45f30cf7766200189a5b",
+    "config/builtin_agents.yaml": "a98cda35b97dde0f4871c2cf3aac0412f797fd1ab152f0a5637c38227e131316"
+  },
+  "backend_custom_history": [
+    "COPY builtin_agents.yaml /app/config/builtin_agents.yaml # buildkit",
+    "COPY config/builtin_agents.yaml /app/config/builtin_agents.yaml # buildkit",
+    "COPY config/prompt_templates/agent_system_prompt.yaml /app/config/prompt_templates/agent_system_prompt.yaml # buildkit",
+    "COPY config/prompt_templates/system_prompt.yaml /app/config/prompt_templates/system_prompt.yaml # buildkit"
+  ],
+  "frontend_overlay_readback": {
+    "build_recipe": "/tmp/kbui-build26/Dockerfile",
+    "copied_files": 214,
+    "matches": 214,
+    "mismatches": [],
+    "source_level_changes_reconstructed": false
+  }
+}

@@ -46,12 +46,14 @@ function missingQuoteFields(input) {
   return missing;
 }
 
-function quoteContext(input) {
+function quoteContext(input, destination = 'local') {
   const project = String(input.project || '').trim();
   if (!project) return '';
   const missing = missingQuoteFields(input);
   return [
-    '【报价需求上下文·本机演示，未发送】',
+    destination === 'service'
+      ? '【报价需求·已提交至本地客服演示队列；不含报价承诺】'
+      : '【报价需求上下文·本机演示，未发送】',
     `检测项目：${project}`,
     `检测标准：${String(input.standard || '').trim() || '待补充'}`,
     `样品数量：${String(input.quantity || '').trim() || '待补充'}`,
@@ -139,6 +141,19 @@ function addMessage(text) {
   return write(MESSAGES_KEY, messages) ? messages : null;
 }
 
+function addGuidedExchange(question, answer) {
+  const userText = String(question || '').trim();
+  const agentText = String(answer || '').trim();
+  if (!userText || !agentText) return null;
+  const messages = listMessages();
+  const timestamp = Date.now();
+  messages.push(
+    { id: `DEMO-MSG-${timestamp}-${messages.length}`, side: 'user', text: userText },
+    { id: `DEMO-MSG-${timestamp}-${messages.length + 1}`, side: 'agent', text: agentText },
+  );
+  return write(MESSAGES_KEY, messages) ? messages : null;
+}
+
 function clearDemoData() {
   let cleared = true;
   for (const key of [QUOTES_KEY, MESSAGES_KEY, PROFILE_KEY, ORDERS_KEY]) {
@@ -153,5 +168,5 @@ function clearDemoData() {
 
 module.exports = {
   listQuotes, addQuote, missingQuoteFields, quoteContext, getProfile, saveProfile, listOrders, addOrder,
-  listMessages, addMessage, clearDemoData,
+  listMessages, addMessage, addGuidedExchange, clearDemoData,
 };

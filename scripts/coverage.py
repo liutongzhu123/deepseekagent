@@ -2,8 +2,8 @@
 """需求覆盖率：从 BACKLOG 反推，不靠人工统计。
 
 口径（刻意保守）：
-  done    — 至少一个 done 任务覆盖（功能完整、真实验证过）
-  partial — 骨架/模拟实现：结构在、接口预留，但没有真实数据或接口验证
+  done    — 至少一个覆盖状态为 done 的任务（需求完整且有对应验收证据）
+  partial — 本地模拟/部分实现；即使开发任务 status=done，也不代表完整需求验收
   doing   — 只有 doing 任务覆盖（在做，但还没完成）
   waiting — 卡在客户数据/外部依赖上，不是我们能推进的
   todo    — 只有 todo/blocked 任务覆盖，或无人覆盖
@@ -34,6 +34,42 @@ VALID_STATUSES = {"done", "partial", "doing", "waiting", "todo", "blocked"}
 # F72: duplicate requirement/task IDs must not make the report ambiguous.
 # F73: a missing dependency must not leave a task permanently undispatchable.
 # F74: a multi-task dependency cycle must not leave every task waiting forever.
+# F75: local-simulation task completion must not overstate full requirement readiness.
+# F76: duplicate YAML mapping keys must not silently overwrite catalog values.
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate keys instead of keeping the last."""
+
+
+def _construct_unique_mapping(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                "found an unhashable mapping key", key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                f"found duplicate key {key!r}", key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+)
+
+
+def load_yaml(text: str):
+    """Load a YAML catalog with safe types and duplicate-key rejection."""
+    return yaml.load(text, Loader=UniqueKeyLoader)
 
 
 def validate_catalog(requirements: dict, backlog: dict) -> list[str]:
@@ -60,6 +96,8 @@ def validate_catalog(requirements: dict, backlog: dict) -> list[str]:
         task_id = task["id"]
         if task.get("status") not in VALID_STATUSES:
             errors.append(f"{task_id}: 未知状态 {task.get('status')!r}")
+        if task.get("coverage_status") is not None and task.get("coverage_status") not in VALID_STATUSES:
+            errors.append(f"{task_id}: 未知覆盖状态 {task.get('coverage_status')!r}")
         for req_id in task.get("covers") or []:
             if req_id not in requirement_ids:
                 errors.append(f"{task_id}: 未知需求 ID {req_id}")
@@ -94,8 +132,8 @@ def validate_catalog(requirements: dict, backlog: dict) -> list[str]:
 
 
 def load():
-    requirements = yaml.safe_load(REQUIREMENTS.read_text(encoding="utf-8"))
-    backlog = yaml.safe_load(BACKLOG.read_text(encoding="utf-8"))
+    requirements = load_yaml(REQUIREMENTS.read_text(encoding="utf-8"))
+    backlog = load_yaml(BACKLOG.read_text(encoding="utf-8"))
     return requirements, backlog
 
 
@@ -107,7 +145,10 @@ def coverage_map(backlog: dict) -> dict[str, str]:
     rank = {"done": 4, "partial": 3, "doing": 2, "waiting": 1, "todo": 0}
     status: dict[str, str] = {}
     for task in backlog.get("tasks") or []:
-        state = str(task.get("status") or "todo")
+        # `status` tracks task delivery, while `coverage_status` tracks requirement
+        # readiness. This keeps a finished local simulation from counting as a
+        # fully accepted production requirement.
+        state = str(task.get("coverage_status") or task.get("status") or "todo")
         # blocked 视为 todo：阻塞不等于在做；waiting 单独统计（等外部依赖）
         if state == "blocked":
             state = "todo"
@@ -132,7 +173,7 @@ def main() -> int:
     status = coverage_map(backlog)
 
     totals = {"done": 0, "partial": 0, "doing": 0, "waiting": 0, "todo": 0}
-    print(f"{'领域':<18}{'条目':>6}{'完成':>6}{'骨架':>6}{'进行中':>7}{'等外部':>7}{'未开始':>7}{'完成率':>8}")
+    print(f"{'领域':<18}{'条目':>6}{'完成':>6}{'部分':>6}{'进行中':>7}{'等外部':>7}{'未开始':>7}{'完成率':>8}")
     print("-" * 72)
 
     uncovered: list[tuple[str, str, str]] = []

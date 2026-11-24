@@ -3,16 +3,18 @@
 # 规则：
 #   - 一个任务 = 一个工单 = 一个分支 = 一个 PR；禁止堆叠（base 永远 main）
 #   - status: todo | doing | blocked | done
+#   - coverage_status: optional requirement readiness; a completed local simulation can remain partial
 #   - deps: 依赖的任务 id，未完成的依赖会阻止派单
-#   - covers: 覆盖的需求条目（docs/requirements.yaml），覆盖率由此自动计算
+#   - covers: 覆盖的需求条目（docs/requirements.yaml）
+#   - coverage_status: 可选；只调整需求就绪度，不改变任务本身的完成状态
 #   - acceptance: 必须可测量；写不出可测量的验收标准，说明任务还没想清楚
 #   - files: 预计会改的文件/目录，用于并行冲突检查（不重叠才能并行）
 #   - detail: 详细说明（长任务用，可引用 docs/ 下的设计文档）
 
 meta:
-  updated_at: 2026-11-22
+  updated_at: 2026-11-25
   owner: supervisor
-  next_task_hint: B8
+  next_task_hint: KB_IDENTITY_STACK
 
 tasks:
   # ========== 已完成：早期基础规则（R01–R11，早于台账建立） ==========
@@ -351,13 +353,12 @@ tasks:
   - id: RA_STDVER
     title: 检测依据标准年代号检查
     status: done
-    note: 验证#149 拒绝：Q/JLY J7110109C 缺年代号未报出；GB/T 1037-2021：冒号被吞误报（修复见 #164）
+    note: 历史缺陷复核：#149 中 Q/JLY J7110109C 缺年代号未报出，GB/T 1037-2021 冒号被吞误报（均在 #164 修复）；BYD 12 份草稿 R22 实测 12/12 pass、0 误报。当前只查检验依据字段，不校验标准现行版本
     pr: 164
     size: S
     covers: [RA-4.15]
     acceptance: ["无年代号能报出", "标准号格式合法"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_format_standard_years.py, docs/report-format-checks/README.md]
-    note: BYD 12 份草稿 R22 实测 12/12 pass、0 误报；只查检验依据字段，不校验标准现行版本
 
   - id: RA_JUDGE_CONSIST
     title: 结论页无判定时结果表不得出现判定表述
@@ -390,8 +391,7 @@ tasks:
     acceptance: ["能识别到原始记录编号与版本号时判是否最新"]
     skip_scope: ["识别不到版本号时 skip"]
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/tests/test_raw_record_version.py, docs/report-format-checks/README.md]
-    note: 验证 #189 拒绝：Q/ 代号后空格未归一（文档承诺但无测试）
-    note: 验证 #217 通过（Q/ 后单空格/多空格/全角空格均归一，过期仍 fail）
+    note: 历史缺陷复核：#189 发现 Q/ 代号后空格未归一（已由 #217 修复）；#217 验证 Q/ 后单空格/多空格/全角空格均归一，过期仍 fail
 
   - id: RA_FIXEDTEXT
     title: 固定内容校验（中文 8 条 / 英文 7 条注意事项）
@@ -478,8 +478,7 @@ tasks:
     covers: [RA-4.16, RA-4.17]
     acceptance: ["照片序号连续", "缺前/中/后能报出"]
     files: [p0/app/visual_checks.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_photo_sequence.py, docs/report-format-checks/README.md]
-    note: 验证#167 拒绝：修好原问题但引入3个新问题——①「1号样品照片1」误判缺前中后 ②「外包装照片1、内包装照片1」误判序号重复 ③同类写法判定不一致
-    note: 验证 #216 通过（agent 独立验证：该/上述/本次前缀不再导致题注被丢弃）
+    note: 历史缺陷复核：#167 修复曾引入 3 个问题（“1号样品照片1”误判缺前中后、“外包装照片1、内包装照片1”误判序号重复、同类写法判定不一致）；#216 经独立验证修复该/上述/本次前缀导致题注丢弃的问题
 
   - id: RA_TEMPLATE
     title: 主机厂模板正确性（吉利/比亚迪等）
@@ -501,22 +500,302 @@ tasks:
     files: [p0/app/format_rules.py, p0/app/rules.py, p0/app/admin_config.py, p0/tests/test_format_sample_numbers.py, docs/report-format-checks/README.md]
     note: 验证#154 拒绝：全角「－」范围符导致数量与编号对应误判
 
-  # ========== 待做：智能客服（尚未开始） ==========
+  # ========== 智能客服（S1 与 CRM 隔离已完成，基础库治理继续） ==========
+  - id: CS_S1_PREVIEW
+    title: S1 内部报价来源预览与人工消歧
+    status: done
+    coverage_status: partial
+    size: M
+    covers: [CS-1.1, CS-3.2, CS-3.4, CS-4.1, CS-4.2]
+    acceptance:
+      - 合成与 CRM 来源严格隔离；数据源关闭/异常时不回退到合成数据
+      - 样品名参与匹配；CRM 数量只作为来源字段，不被推断为最低起订量
+      - 多条有效价格候选可查看并记录人工意见；数据版本变化或候选失效时拒绝记录
+      - CRM 预览与人工复核均要求项目名称或编号，且受限账号只能访问已授权项目
+      - 受限账号的项目编号/名称必须唯一映射到 CRM 项目清单；重名、交叉冲突或缺少项目清单时拒绝预览
+      - 受限账号只读取唯一项目的价格/排期；隐藏项目、全局资质和全局映射的变更不影响返回的版本号或候选编号
+      - 同快照候选记录编号唯一；受限预览的资质结果不泄露全库有无或数量；合成样例当前可命中且保留过期分支
+      - 受限账号的 S1 预览和复核不消费无项目范围的全局名称映射
+      - 每条结果含来源版本与编号；不计算客户总价、折扣或阈值，不写回 CRM
+    files: [p0/app/main.py, p0/app/auth.py, p0/app/customer_service_preview.py, p0/static/index.html, p0/static/ui.js, p0/demo-data/customer-service/, p0/tests/test_customer_service_preview.py, p0/docs/customer-service-v3-plan.md]
+    note: 本地 S1 切片；24 项专用 TestClient 用例通过，PostgreSQL 适配器未启用，测试启动时仅使用导入 shim；不能据此宣称 CRM API 或客户 UAT 完成
+
+  - id: CS_CRM_SCOPE
+    title: CRM 只读接口项目级数据隔离
+    status: done
+    coverage_status: partial
+    deps: [CS_S1_PREVIEW]
+    size: M
+    covers: [CS-1.1]
+    acceptance:
+      - 受限用户的项目、价格、排期、任务单、样品和本地基础库读取只返回已授权项目数据；项目编号与名称冲突或无法归属时默认拒绝
+      - 列表总数与计数仅基于可见数据；无项目归属的资质及全局名称映射对受限用户默认不可见
+      - 按任务单号/样品编号查询越权资源时不泄露存在性或内容
+      - 受限用户生成报价时 CRM 对账只使用所选授权项目，响应不包含全库计数或本机路径
+      - admin、无项目限制用户保持现有可见范围；CRM 写操作继续要求 crm:write
+    files: [p0/app/main.py, p0/app/crm.py, p0/app/auth.py, p0/tests/test_crm.py, p0/tests/test_customer_service_preview.py, p0/tests/test_quote_history.py]
+    note: CRM读取端点与报价生成对账已按唯一项目ID/名称隔离；CRM和S1相关44项测试通过（测试启动时使用SQLAlchemy导入shim，未启用Postgres）
+
   - id: CS_BASE
     title: 基础数据管理（价格库/排期/资质/名称映射）
     status: partial
     partial_reason: 四类库结构与维护 API 已就绪；真实 CRM API、认可清单解析、排期 AI 识别未接
+    waiting_on: CRM API/字段、客户认可清单与映射规则、排期状态语义及客户 AI/OCR 数据授权
+    external_owner: 客户 CRM 管理员/供应商提供 API 与字段映射、测试账号及同步权限；客户质量/资质负责人提供已批准认可清单样例和标准匹配口径；客户项目/实验室负责人确认排期字段和状态语义
+    resume_when: 收到 CRM 版本化契约和脱敏样例、认可清单及标准映射签署、排期语义和 AI/OCR 数据使用授权后，按各自脱敏 fixture 增量适配；任一输入未确认时继续保持文件导入、人工复核和合成候选边界
     pr: 155
     size: L
-    covers: [CS-1.1, CS-1.2, CS-1.3, CS-1.4]
+    covers: [CS-1.1, CS-1.2, CS-1.3, CS-1.4, CS-7.2]
     acceptance: ["四类库可维护", "与 CRM 可对接"]
     files: [p0/app/crm.py]
     note: 四类库本地维护+名称映射+Excel/CSV 同步骨架完成；真实 CRM API、认可清单解析、AI 排期识别待客户接口/清单
 
+  - id: CS_BASE_GOV
+    title: CRM本地基础库冲突校验、版本记录与回滚
+    status: done
+    coverage_status: partial
+    deps: [CS_CRM_SCOPE]
+    size: M
+    covers: [CS-1.1, CS-1.2, CS-1.3, CS-1.4]
+    acceptance:
+      - Excel/CSV 同步逐行返回无效行和主键冲突；冲突默认跳过，只有显式 force_replace 才能覆盖
+      - 每次本地基础库变更原子保存操作者、时间、前后版本、来源与状态快照；历史可查并能按指定版本回滚
+      - 名称映射默认为待审；只有管理员批准的映射参与项目匹配，保留审核人、时间和来源
+      - 日期格式和排期区间经校验；已过期价格/资质不参与当前查询
+    files: [p0/app/crm.py, p0/app/main.py, p0/tests/test_crm.py, docs/customer-service-development-roadmap.md]
+    note: 本地文件适配器治理已完成；CRUD、审批、回滚读改写由本机 POSIX flock 串行化，同机多 worker 并发追加回归覆盖版本与历史；多主机仍需事务数据库。真实 CRM API、客户认可清单及字段/审批口径仍属外部输入，不宣称已接入或完成客户验收
+
+  - id: CS_SCHEDULE_EXTRACT_SIM
+    title: 合成排期文本确定性候选解析与人工确认
+    status: done
+    coverage_status: partial
+    deps: [CS_BASE_GOV]
+    size: S
+    covers: [CS-1.2]
+    acceptance:
+      - 仅接受明示字段文本，不调用模型、外网或供应商接口；明确标记为非 AI 合成演示
+      - 每条候选保留原文和行号；未知/重复/格式错误字段、缺少项目名、无效日期、逆序日期和超长输入均不可采用
+      - 多候选按空行或分隔线隔离，不跨记录补字段；解析异常时不输出可保存候选
+      - 采纳后原文按多行备注保留；若来源文本变化，旧候选草稿须锁定，直到重新采纳或显式转为人工录入
+      - 清空表单时同步清除采纳/锁定状态及候选列表，不影响随后人工录入
+      - 只有管理员显式采用候选并手动提交后才写入本地库；保存要求来源、原因并走既有审计/冲突流程
+      - 排期状态只保留原文，不能据此改变预览命中、报价或交期承诺
+    files: [p0/static/schedule-candidate.js, p0/static/tests/schedule-candidate.test.js, p0/static/index.html, p0/static/ui.js, docs/customer-service-acceptance-matrix.md, docs/customer-service-development-roadmap.md]
+    note: 管理员排期页在真实 Chromium + 本机隔离 mock 中完成新增、列表读回和删除；失败读取提示由同一 mock 返回 503 验证。浏览器 mock 不证明服务端持久化或权限策略；字段提取是确定性合成演示，客户排期样本、AI/OCR 模型与金标准仍待客户提供，不代表 AI 识别能力或真实排期验收
+
+  - id: CS_QUAL_UI
+    title: 管理端本地资质库维护工作台
+    status: done
+    coverage_status: partial
+    deps: [CS_BASE_GOV]
+    size: M
+    covers: [CS-1.3, CS-7.2]
+    acceptance:
+      - 仅具备 crm:write 的管理员能打开资质维护页；读取、增加、冲突确认覆盖、删除均复用受审计的本地基础库 API
+      - 名称、证书编号、范围、有效期、状态按来源原文保存；变更要求来源与原因，重复证书号/名称默认不覆盖
+      - 页面明确说明本地记录不是客户认可、标准级能力或证书真实性的结论；不推断标准映射
+      - 页面所有业务数据经 HTML 转义；日期约束依赖服务端校验并对错误作可见反馈
+    files: [p0/static/index.html, p0/static/ui.js, p0/app/crm.py, p0/tests/test_crm.py, docs/customer-service-acceptance-matrix.md, docs/customer-service-development-roadmap.md]
+    note: 本地资质维护 UI 使用现有 CRUD/版本审计与日期校验；真实 Chromium + 隔离 mock 验证新增、列表读回、删除、HTML 转义及管理员/销售角色可见边界；此前管理员冲突确认覆盖也经 mock 浏览器验证。Python CRM/API 专项已执行，包含管理员写入、权限拒绝和读回路径；客户认可清单格式、标准匹配口径和真实性核验仍待客户输入
+
+  - id: CS_PRICE_UI
+    title: 管理端本地价格库维护工作台
+    status: done
+    coverage_status: partial
+    deps: [CS_BASE_GOV, CS_CRM_SCOPE]
+    size: M
+    covers: [CS-1.1, CS-7.2]
+    acceptance:
+      - 仅具备 crm:write 的管理员能打开价格维护页；读写/删除复用受审计的本地基础库 API
+      - 项目、样品、试验项目、标准、部门、单位、数量、单价、折扣和有效期具备输入字段；数量/单价/折扣均有前后端约束
+      - 重复业务主键默认拒绝，仅管理员确认后发送 force_replace=true；变更/删除需来源与原因
+      - 服务端数值字段严格解析有限数值并规范化存储；夹杂字符、布尔、NaN/Infinity、浮点下溢/溢出及无法无损往返的精度均拒绝
+      - 价格维护 HTTP API 的数量、单价、折扣仅接受十进制字符串，拒绝 JSON number，防止 JSON 解码阶段的精度损失；CRM 文件同步沿独立导入路径处理
+      - 明确本地价格条目不计算对客报价，不推断币种、税率或正式有效口径；列表字段转义后显示
+    files: [p0/static/index.html, p0/static/crm-price-input.js, p0/static/tests/crm-price-input.test.js, p0/static/ui.js, p0/app/crm.py, p0/app/main.py, p0/tests/test_crm.py, docs/customer-service-acceptance-matrix.md, docs/customer-service-development-roadmap.md]
+    note: 真实 Chromium + 隔离 mock 验证管理员新增/读回、重复主键确认并以 force_replace 更新、删除后读回为空、读取 503 可见错误及销售角色隐藏入口/不请求基础库。价格输入精度、JSON number 拒绝由 JS、服务层及 CRM HTTP API 回归覆盖；CRM 专项 API 用例通过。真实 CRM/财税口径仍待客户资料
+
+  - id: CS_NAME_MAPPING_UI
+    title: 管理端项目名称映射维护与审批入口
+    status: done
+    coverage_status: partial
+    deps: [CS_BASE_GOV, CS_CRM_SCOPE]
+    size: M
+    covers: [CS-1.4, CS-7.2]
+    acceptance:
+      - 仅具备 crm:write 的管理员能打开映射维护页；新建与替换使用现有基础库 API 并要求来源/原因
+      - 新建和更改的映射默认待审批；批准前不可参与名称匹配；批准操作单独确认并要求依据/原因
+      - 映射业务字段/来源改变后清除批准状态；审批请求绑定操作者看到的待审批记录快照，在写锁内校验并对过期内容返回 409
+      - 审批 API 强制要求来源和原因，缺失或超长内容拒绝且不写入审批状态/历史
+      - 重复别名默认拒绝，显式替换后恢复待审批；删除需确认并记录来源/原因
+      - 显示字段经 HTML 转义；用户只能看见审批状态，不将相似名称当作已确认映射
+    files: [p0/static/index.html, p0/static/ui.js, p0/app/crm.py, p0/app/main.py, p0/tests/test_crm.py, docs/customer-service-acceptance-matrix.md, docs/customer-service-development-roadmap.md]
+    note: UI 使用带记录快照 CAS 与必填审核依据的映射审批 API；任何业务字段/来源改动都会回到 pending。真实 Chromium + 隔离 mock 验证管理员新增后 pending、显式批准后 approved、删除后读回为空；CRM HTTP API 专项回归通过，覆盖管理权限、审批依据和快照校验。别名、项目归属和业务有效范围仍需客户确认
+
+  - id: CS_REG_SIM
+    title: 客户注册本地模拟 API 与审核闭环
+    status: done
+    coverage_status: partial
+    deps: [CS_BASE_GOV]
+    size: M
+    acceptance:
+      - 本地演示注册有独立记录与 draft/submitted/needs_info/approved/rejected 状态，不把客户资料写入员工账号表
+      - 注册提交、审核决定、补件和状态查询均有操作者、时间及审计记录；审核不会创建或放行真实客户账号/报价/委托
+      - 登记创建要求 Idempotency-Key；相同 key/规范化内容重试返回同一登记和凭证，不同内容返回冲突；小程序先保存待确认 key/原表单，创建响应丢失时可安全恢复
+      - 小程序不能读取本机登记凭证/待办或发现待办载荷/操作号损坏时，必须在请求发出前 fail closed，不得生成新 key 覆盖原操作
+      - 登记凭证键存在但字段结构无效时不可视为首次登记；待办清理前写入持久化核对标记，API 写入口检查该标记，只有核对服务器状态并显式确认后才解锁，离页/重启不能绕过
+      - 登记资料 PATCH 要求稳定 Idempotency-Key；同键同资料只更新一次，同键异文冲突；多次管理员审核状态变化后旧操作仍只回读当前登记；小程序保留原资料与操作号并隐藏其他登记账号的待处理资料
+      - 管理员审核要求 Idempotency-Key；同键同决定/原因/版本回放当前登记而不重复追加历史，同键异文冲突；审核后状态再次变化时旧审核重试不得覆盖当前状态；小程序在响应不确定时可恢复原审核
+      - 管理审核接口要求管理员权限；演示 API 默认关闭，开启后明确标示模拟且不触发企查查/微信/邮件等外部服务
+      - 地区经理路由默认关闭；仅管理员可读写精确地区与备用账号，销售常规业务配置与草稿接口不泄露/覆盖映射；审核队列只展示人工复核候选并绑定配置版本，不自动指派或通知
+    covers: [CS-2.1, CS-2.6]
+    files: [p0/app/customer_registration.py, p0/app/customer_region_routing.py, p0/app/business_rule_versions.py, p0/app/main.py, p0/app/admin_config.py, p0/static/index.html, p0/static/ui.js, p0/tests/test_customer_registration.py, p0/tests/test_customer_region_routing.py, p0/tests/test_admin_config.py, p0/tests/test_business_rule_versions.py]
+    note: 注册演示默认关闭；登记创建幂等凭证不明文落盘，待确认操作保存在小程序本机，遇到网络不确定时沿用原 key/内容。审核请求按管理员、登记、操作号和完整载荷摘要幂等；旧审核操作只回读当前状态，不重复写历史或覆盖后续变化。管理员审核队列可按管理员维护的地区映射显示精确经理/备用经理候选，绑定规则版本并入审计历史。候选不是指派，不发送通知；真实身份、经理名单和客户口径仍需资料
+
+  - id: CS_REG_RISK_SIM
+    title: 注册审核台规则候选提示
+    status: done
+    coverage_status: partial
+    deps: [CS_REG_SIM, CS_RULECFG]
+    size: S
+    covers: [CS-2.2, CS-2.3, CS-2.4, CS-2.5]
+    acceptance:
+      - 仅管理员审核队列可读取精确黑/白名单与中介关键词候选及其规则版本
+      - 黑白名单冲突、匹配和无命中均固定显示为人工复核候选，不自动批准或拒绝
+      - 规则配置无效时显示 unavailable/人工复核，不默认为未命中
+      - 审核提交携带界面所见规则版本；规则已更新时拒绝陈旧提交并要求刷新
+      - 审核提交携带界面所见登记资料修订号；资料重提后拒绝陈旧队列操作
+      - 写入时再次核对企业名称，规则候选快照不得错绑到更新后的登记
+      - 仅接受精确整数规则版本；缺失、null、小数和过期版本不得被截断或放行
+      - 管理员可维护黑名单，并使用绑定配置版本的单列 CSV 合并/替换导入与导出；文件/列/名单上限及公式前缀均校验，非管理员不能读取或改写黑白名单
+      - 通过审核的内部事件保存过滤后的规则候选/版本快照，客户可读历史不包含该快照
+      - 候选提示不写入客户注册数据，本人状态查询不返回内部命中信息
+      - 非管理员在读取注册与规则配置前被拒绝
+    files: [p0/app/main.py, p0/app/customer_registration.py, p0/static/index.html, p0/static/ui.js, p0/tests/test_customer_registration.py]
+    note: 仅消费本地规则配置做员工侧候选提示，不调用企查查、不代表真实身份/企业核验，风险判断未获客户签字；黑名单增删、CSV 导入导出和管理员审计已接入本地规则配置，真实名单来源与命中处置仍待客户确认
+
+  - id: CS_REG_CLIENT
+    title: 小程序连接注册演示 API 与状态查询
+    status: done
+    coverage_status: partial
+    deps: [CS_REG_SIM]
+    size: M
+    covers: [CS-2.1, CS-2.4]
+    acceptance:
+      - 小程序仅在明确的演示 API 地址配置后连接，并持续显示本地演示标识
+      - 本机访客注册资料可创建草稿、提交、补件修改和查看审核状态；一次性凭证不写日志且仅保存在本机
+      - API 不可用或演示关闭时明确报错，不回退写入旧本地注册存储或伪报提交成功
+    files: [p0/miniprogram/app.js, p0/miniprogram/pages/profile/index.js, p0/miniprogram/pages/profile/index.wxml, p0/miniprogram/utils/registration-api.js, p0/miniprogram/tests/registration-api.test.js, p0/docs/miniprogram-demo.md]
+    note: opt-in 本地演示 API 已接通，9 项小程序 Node 回归通过；真实微信登录、AppID、客户身份认证、账号生命周期需客户授权/资料后另做
+
+  - id: CS_REG_ADMIN_UI
+    title: 客户注册演示审核管理页面
+    status: done
+    coverage_status: partial
+    deps: [CS_REG_SIM]
+    size: M
+    covers: [CS-2.1, CS-2.2, CS-2.3, CS-2.4, CS-2.5]
+    acceptance:
+      - 管理员可在工作台查看和筛选本地演示注册，补件/批准/拒绝时必须填写原因
+      - 非管理员不可读取名单或提交审核；界面清楚标识演示数据，不显示访问凭证
+      - 审核后列表和状态重新读取服务端结果，不只改动浏览器本地状态
+      - 提交前持久化审核操作号和原载荷；网络结果不确定后可恢复原审核；筛选变化仍展示待恢复记录
+    files: [p0/static/index.html, p0/static/ui.js, p0/static/operation-id.js, p0/static/review-queue.js, p0/static/tests/review-queue.test.js, p0/tests/test_customer_registration.py]
+    note: 复用现有管理员会话和审核 API；非管理员不可见/不可调用，相关 50 项后端组合回归通过；不代替客户正式注册后台
+
+  - id: CS_QUOTE_FLOW_SIM
+    title: 客户询价到人工接手的本地报价流程
+    status: done
+    coverage_status: partial
+    deps: [CS_BASE_GOV, CS_REG_ADMIN_UI]
+    size: L
+    covers: [CS-3.1, CS-3.2, CS-3.3, CS-3.4, CS-3.5, CS-3.6]
+    acceptance:
+      - 内部询价记录有 draft/submitted/need_info/preview/needs_human/resolved 状态、申请人和状态审计
+      - 预览只展示已授权 CRM 项目的价格/排期/资质来源，不计算未确认折扣/税费/总价，不生成对客正式报价
+      - 缺字段、歧义候选、价格失效/冲突、CRM 不可用均转人工并保留原始上下文
+      - 管理员演示队列可查看、筛选、接单/转交/关闭工单；项目权限和操作原因有审计，真实经理角色映射另待客户确认
+      - 询价创建要求稳定 Idempotency-Key；响应丢失后同键同内容回放原工单，同键异文冲突；工单状态变化后仍回读当前记录且不重复建单
+      - 管理员接单/转交/关闭要求稳定 Idempotency-Key；同键同内容重试回读当前工单且不重复追加历史，同键异文冲突；转派账号检查在原子重放判断之后执行；摘要最多 100 条，损坏元数据拒绝写入
+      - 管理台将待恢复动作及原载荷存入当前会话；响应不确定时提供恢复入口，状态筛选不得隐藏待恢复工单；408/425/429 与服务端失败保留原 key，确定业务拒绝才清理
+      - 客服回复与询价创建使用浏览器安全随机数；无法取得安全随机数时拒绝发请求；提交重试先回读服务端当前状态，已确认的本机重试记录可清理后创建新工单，未确认记录必须先回放
+      - 来源行号为 1 到 1000000 的整数，置信度为 0 到 1 的有限数值；并发同键同载荷至多创建一条记录
+      - 数值数量为有限正数且小于 10^40，NaN/Infinity/非正数/超大整数不得污染 JSON 存储或后续列表读取
+    files: [p0/app/customer_quote_flow.py, p0/app/main.py, p0/tests/test_customer_quote_flow.py, p0/static/index.html, p0/static/ui.js, p0/static/operation-id.js, p0/static/review-queue.js, p0/static/tests/operation-id.test.js, p0/static/tests/review-queue.test.js]
+    note: 本地内部流程已实现；合成/本地 CRM 来源均只读，不生成客户正式报价、不写 CRM。创建及管理员动作摘要仅保存在服务端工单私有字段且不返回 API。仅管理员可操作队列；角色映射、金额规则、持久化部署和微信客服/通知等待客户确认或环境条件
+
+  - id: CS_ORDER_SIM
+    title: 自助委托演示 API 与审核状态流
+    status: done
+    coverage_status: partial
+    deps: [CS_REG_ADMIN_UI, CS_QUOTE_FLOW_SIM]
+    size: L
+    covers: [CS-5.1, CS-5.2, CS-5.3]
+    acceptance:
+      - opt-in 小程序提交时服务端校验登记凭证已批准和必填字段，客户只能读取自己的委托记录
+      - 创建请求强制要求 Idempotency-Key；同一登记凭证、同键、同内容的超时重试返回原委托；同键不同内容冲突；小程序持久化待确认操作并恢复原内容
+      - 小程序不能读取创建/补件待办或发现载荷/操作号损坏时，必须在请求发出前停止，不得新建操作号或回退本机假提交
+      - 清理待办前写入持久化核对标记，API 层阻断创建、补件和确认；用户核对服务器状态并显式确认后才解锁，离页/重启不能绕过
+      - 客户补件重提也要求稳定 Idempotency-Key；服务端保留已用操作号/载荷摘要历史（最多 100 次）以支持多轮后旧键回放当前委托、不重复追加历史；同键异文冲突；响应丢失后小程序恢复原表单和操作号，重审后旧重试不得改变当前状态
+      - 有效提交生成不可变的演示模板版本快照并进入待审核；缺少必填字段时拒绝且不创建工单
+      - 管理员可带必填原因补件、批准或拒绝；客户补充信息后可重提；非法状态转换和重复终态操作返回冲突
+      - 管理员审核要求 Idempotency-Key；同键同内容回放当前委托、同键异文冲突；旧审核请求在后续补件/重审后不得回退状态；工作台保留原操作号用于响应不确定后的恢复
+      - 委托每次提交、补件、审核或客户确认更新修订号；管理员必须提交队列所见修订号，若客户在其后补件则旧审核返回冲突且不审批新内容
+      - 所有状态变化记录操作者、时间、原因和前后状态；接口关闭/失败时小程序明确报错，不伪报成功
+      - 管理员批准后仅委托所有者可明确接受/暂不接受，确认结果写入审计；重复、未批准、跨客户确认均拒绝
+      - 同一客户终态确认在响应丢失后允许同决定安全回放，即使登记状态此后变化；新确认仍需已批准登记
+      - 正式委托模板、邮件确认和下游系统写入不启用，均标记为等待客户资料
+    files: [p0/app/customer_order_flow.py, p0/app/main.py, p0/miniprogram/utils/order-api.js, p0/miniprogram/pages/orders/create.js, p0/miniprogram/pages/orders/index.js, p0/static/index.html, p0/static/ui.js, p0/static/review-queue.js, p0/static/tests/review-queue.test.js, p0/tests/test_customer_order_flow.py, p0/miniprogram/tests/order-api.test.js]
+    note: opt-in 本地委托提交、本人查询、待补件重提、管理员审核和批准后客户确认/暂不接受闭环已实现；提交与管理员审核均以稳定幂等键绑定载荷，同机多 worker 由 POSIX flock 串行化；每次状态/内容变更递增修订号，管理员审核按队列修订号执行 CAS，客户并发补件后旧审批拒绝；旧审核/确认操作只回读当前状态，不覆盖后续变化；客户确认不发邮件、不创建真实任务，必须由委托所有者在批准后操作；仅使用已批准登记记录的一次性演示凭证，不代表生产身份认证。模板为合成模板；不连接邮件、CRM 或任务系统
+
+  - id: CS_DESK_SIM
+    title: 客服会话与人工工作台演示 API
+    status: done
+    coverage_status: partial
+    deps: [CS_REG_ADMIN_UI, CS_QUOTE_FLOW_SIM]
+    size: L
+    covers: [CS-6.1, CS-6.2]
+    acceptance:
+      - 客服小程序在显式配置本地 API 后可提交会话消息并查询本人会话；服务端失败不回退伪装为已发送
+      - 清理客服待办前写入持久化核对标记，API 层阻断发送；刷新核对服务端会话并显式确认后才解锁，离页/重启不能绕过
+      - 管理员演示工作台可按会话状态、企业名称、重点客户候选、未读状态组合筛选；可接单/转交、归档并查看状态历史；每次操作含原因和操作者
+      - 一次性演示登记凭证与会话绑定，客户只能读写自己的会话；管理员会话队列受员工角色鉴权
+      - 管理队列按当前管理员单独计算客户消息未读数；标记已读绑定可见消息数量，新到消息仍保持未读；客户 API 不返回员工未读状态
+      - 管理员接单/转交/归档要求稳定 Idempotency-Key；响应不确定后同 key 同载荷回放当前会话，不重复写历史；异文冲突；账号校验在转派写锁内的重放检查之后执行
+      - 管理台在请求前保存原动作和载荷；408/425/429 与服务端失败保留待恢复入口，状态筛选不得隐藏待恢复会话
+      - 小程序发送必须带稳定幂等编号；提交响应丢失后同键同内容重试只返回原会话，不重复新增消息；同键异内容冲突
+      - 小程序不能读取客服消息待办或发现待办载荷/操作号损坏时，必须在请求发出前停止，提供明确的本机恢复/清理状态
+      - 幂等记录与访问凭证范围绑定；切换登记账号时不恢复另一账号的待确认消息，跨进程并发写入也不重复存档
+      - 仅当前接手管理员可对未归档会话回复；客户可凭登记凭证回读客服回复，响应不暴露员工用户名，回复不增加该处理人的未读数
+      - 消息、附件、通知能力明确显示未接生产渠道；本地 API 默认关闭并在 production 强制关闭
+      - 网络/存储失败、无效凭证、重复/非法状态变更和未授权队列访问均有可复现拒绝用例
+    files: [p0/app/customer_service_desk.py, p0/app/main.py, p0/miniprogram/pages/service/index.js, p0/miniprogram/pages/service/index.wxml, p0/miniprogram/utils/service-api.js, p0/miniprogram/tests/service-api.test.js, p0/miniprogram/tests/service-page.test.js, p0/static/index.html, p0/static/ui.js, p0/static/review-queue.js, p0/static/tests/review-queue.test.js, p0/tests/test_customer_service_desk.py]
+    note: opt-in 服务端演示会话、小程序消息存档、客户凭证隔离和管理员队列/接单/转交/归档已实现；队列支持状态/企业/重点候选/未读组合筛选；当前接手管理员可回复，客户凭证可回读且不暴露员工用户名，回复不增加处理人未读数；管理员个人未读计数与快照式标记已读在员工端隔离，客户 API 不暴露阅读账号/进度/时间；客服 API 已具备同键同载荷幂等重放、异载荷冲突、跨进程本地文件锁和账号隔离的待重试消息；服务端会话列表失败时小程序仍恢复待确认消息，确保可以按原幂等编号重试；存储仅限 POSIX 单机演示，不能替代生产数据库事务/唯一约束。重点客户关键词仅为内部人工候选，消息不发送至外部。企微/小程序客服消息、附件存档、真实业务经理授权与推送通知依赖客户账号和合规确认
+
+  - id: CS_AIQUOTE_SIM
+    title: 询价文件解析结果复核与来源证据闭环
+    status: done
+    coverage_status: partial
+    deps: [CS_QUOTE_FLOW_SIM]
+    size: L
+    covers: [CS-3.2, CS-4.1, CS-4.2]
+    acceptance:
+      - Word 表格、Excel、PDF 文本表格及图片/OCR 解析结果进入统一逐行人工复核；来源行、置信度/警告可见
+      - 内部人员可编辑未确认的项目、标准、样品、数量和单位；任何修改保留修改前后值和操作者
+      - 首次解析签发的短时令牌绑定操作者、项目、规范化文件名、文件 SHA-256 和报价配置；复核只接受该令牌对应文件
+      - 价格预览/价格候选复核必须匹配当前操作者、项目、复核编号、来源行、置信度和已复核字段
+      - 未复核字段不作为已确认 CRM 写入值；输出只允许 CRM 草稿或内部复核材料，不覆盖来源价格、不自动生成客户报价
+      - 解析失败、OCR 不可用、文件损坏或字段缺失时保留错误上下文并引导人工处理，不伪报解析完成
+      - Word/Excel/PDF/图片解析与损坏输入均有可复现样例回归；不以合成样例宣称客户识别准确率
+    files: [p0/app/main.py, p0/app/quote.py, p0/app/quote_import.py, p0/app/customer_service_export.py, p0/static/index.html, p0/static/ui.js, p0/tests/test_customer_quote_parse_review.py, p0/tests/test_customer_service_preview.py, p0/tests/test_customer_service_export.py, p0/tests/test_quote_multiformat.py]
+    note: 已实现 DOCX 表格解析、解压体积与行数上限、多询价表拒绝、首次解析 HMAC 短时令牌（绑定操作者/项目/规范化文件名/SHA-256/报价配置）、人工逐行修改前后审计、迟到响应/编辑竞态保护；服务端只允许同一操作者和项目用完全匹配的已复核行进入价格预览和价格候选复核；可基于当前 CRM 只读重匹配下载带明确限制的内部复核 Excel，并记录导出审计，不写回 CRM、不生成总价或客户报价。错误文件/证据/数量/审计失败均闭锁。客户样本、CRM 字段映射/正式模板和正式识别准确率仍待客户确认
+
   - id: CS_REG
     title: 客户注册与身份识别
     status: waiting
-    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
+    waiting_on: 客户批准注册字段/必填策略、企查查采购字段与匹配口径、微信身份授权契约、黑白名单/竞业处置规则及地区经理映射
+    external_owner: 客户业务负责人确认注册与风险规则；客户 IT/供应商提供企查查、微信、CRM 契约和测试凭据；客户销售运营负责人提供经理/备用人员与地区映射并批准通知渠道
+    resume_when: 收到经业务与安全负责人确认的字段/处置规则、脱敏测试样例和可用测试账号后，先把确认内容写入版本化规则契约，再实现真实登录/核验适配并逐条验收 CS-2.1 至 CS-2.6；未提供的子系统继续隔离为模拟
     size: L
     covers: [CS-2.1, CS-2.2, CS-2.3, CS-2.4, CS-2.5, CS-2.6]
     acceptance: ["注册审批可配置", "黑名单/白名单/竞业规则生效"]
@@ -525,7 +804,9 @@ tasks:
   - id: CS_QUOTE
     title: 报价管理（流程/规则/转人工）
     status: waiting
-    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
+    waiting_on: 正式金额阈值、币种/税、折扣与加急顺序、审批/转人工矩阵，及 CRM 项目和价格字段语义
+    external_owner: 客户报价业务负责人和财务负责人共同签署计价/审批规则；客户 CRM 管理员提供脱敏项目与价格样例及只读接口/测试环境；客服负责人确认转人工责任人和服务时限
+    resume_when: 规则、边界案例和 CRM 价格字段经业务/财务签字，测试环境与授权可用后，按签署版本实现规则消费、报价计算/审批和 CRM 只读对账；未签署的规则保持候选预览和人工接手
     size: L
     covers: [CS-3.1, CS-3.2, CS-3.3, CS-3.4, CS-3.5, CS-3.6]
     acceptance: ["小额全自动、大额拦截", "三类规则可配置", "转人工带上下文"]
@@ -534,7 +815,9 @@ tasks:
   - id: CS_AIQUOTE
     title: AI 辅助报价（大纲解析→报价 Excel）
     status: waiting
-    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
+    waiting_on: 脱敏询价大纲与专家金标准、字段映射/标准 Excel 模板、AI/OCR 本地部署及数据使用批准
+    external_owner: 客户报价专家提供代表性输入与逐字段期望结果；客户 CRM/信息化负责人提供导出模板/字段字典；客户安全负责人审批模型、OCR 组件及测试数据处理范围
+    resume_when: 获得经授权的脱敏样本、专家标注、模板版本和本地模型/数据处理批准后，建立可追溯测试集，评估解析遗漏/误报并适配输出模板；金标准未齐时只保留本地合成演示，不报告客户准确率
     size: L
     covers: [CS-4.1, CS-4.2]
     acceptance: ["大纲能解析出标准/项目", "输出 CRM 格式 Excel"]
@@ -543,7 +826,9 @@ tasks:
   - id: CS_ORDER
     title: 自助下单与委托审核
     status: waiting
-    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
+    waiting_on: 各主机厂正式委托模板、必填/条件字段、审核角色与状态定义、客户确认/撤回规则及下游提交契约
+    external_owner: 客户业务负责人/各主机厂接口人提供并签署模板和字段规则；客服管理负责人批准审核/补件/拒绝角色矩阵；客户 IT 提供身份、委托编号和下游接口测试环境
+    resume_when: 获得签署的模板/字段/状态机与客户确认规则、批准的角色映射和脱敏端到端样例后，按版本配置真实委托并对接获批下游；邮件/微信确认仅在相应渠道契约到位后启用
     size: M
     covers: [CS-5.1, CS-5.2, CS-5.3]
     acceptance: ["委托单可配置", "注册信息自动带入"]
@@ -552,7 +837,9 @@ tasks:
   - id: CS_DESK
     title: 委托处置与对话管理
     status: waiting
-    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
+    waiting_on: 客户/经理归属规则、真实经理账号角色、企微/微信会话与通知契约、存档/附件合规要求和服务时限
+    external_owner: 客服运营负责人签署归属、接单、转派、SLA 和提醒规则；客户 IT/微信服务商提供账号、回调/消息接口和测试环境；客户安全/法务负责人批准会话、附件的留存与访问策略
+    resume_when: 获得经理角色/归属表、签署的队列与时限规则、消息/回执测试账号、合规留存批准和脱敏演练样例后，逐项接入收发、存档、未读/通知和转交；此前只运行本地管理员模拟队列
     size: M
     covers: [CS-6.1, CS-6.2]
     acceptance: ["咨询记录可查可筛", "对话可存档转交"]
@@ -561,6 +848,7 @@ tasks:
   - id: CS_RULECFG
     title: 规则配置中心
     status: done
+    coverage_status: partial
     pr: 158
     size: M
     covers: [CS-7.1, CS-7.2]
@@ -568,24 +856,137 @@ tasks:
     files: [p0/app/admin_config.py, p0/app/auth.py, p0/app/main.py, p0/static/index.html, p0/static/ui.js]
     note: 业务规则（梯度折扣/加急/中介/黑白名单）配置、校验与分区分权完成；认可清单与基础报价库沿用 CS_BASE 接口，规则消费待客户接口
 
+  - id: CS_RULE_PREVIEW
+    title: 客服规则只读候选预览
+    status: done
+    coverage_status: partial
+    deps: [CS_RULECFG]
+    size: S
+    covers: [CS-7.1, CS-7.2]
+    acceptance:
+      - 规则预览仅允许有报价解析权限且有项目访问权的员工调用
+      - 返回当前配置版本下的折扣档、加急、名单和中介规则候选；企业名单仅精确匹配
+      - 每个结果固定为需人工复核，不自动计算报价金额、拦截客户或放行身份
+      - 无效规则配置或审计写入失败时拒绝返回结果；审计记录不存企业明文名称
+      - 重复输入与同一配置版本给出相同候选结果
+    files: [p0/app/customer_business_rules.py, p0/app/main.py, p0/tests/test_customer_business_rules.py]
+    note: 本地只读预览切片；配置发布/停用/回滚、生效期、部门作用域及客户签署口径仍未完成，不代表生产规则已生效
+
+  - id: CS_RULE_DRAFT
+    title: 业务规则草稿版本与差异预览
+    status: done
+    coverage_status: partial
+    deps: [CS_RULECFG]
+    size: S
+    covers: [CS-7.1, CS-7.2]
+    acceptance:
+      - 有业务规则维护权限的员工可创建、列出和读取经过现行规则校验的草稿版本
+      - 草稿记录创建人、时间、基于的现行配置版本及有差异的字段
+      - 可对比草稿与现行规则；现行版本变化后标记草稿过期
+      - 可对固定输入重放草稿候选结果；重放固定要求人工复核且不改变现行配置
+      - 创建草稿不更改现行配置且无发布接口；草稿库损坏时拒绝读取或写入
+      - 错误角色无权访问草稿，审计写入失败时不创建草稿
+    files: [p0/app/business_rule_versions.py, p0/app/customer_business_rules.py, p0/app/main.py, p0/tests/test_business_rule_versions.py]
+    note: 已实现草稿存储、差异对比和可重放候选结果；草稿读写使用本机 POSIX flock 串行化本地 workers，锁初始化失败按不可用关闭；未实现发布、停用或回滚，不影响现行在线配置。跨主机写入仍需事务数据库
+
+  - id: CS_RULE_PUBLISH
+    title: 业务规则审批发布与回滚
+    status: waiting
+    deps: [CS_RULE_DRAFT, CS_RULE_PREVIEW]
+    waiting_on: 客户签署折扣/加急/名单语义、审批人、部门范围、生效期、停用/回滚和规则冲突优先级
+    external_owner: 客户业务规则所有人签署规则定义与冲突处理；各部门负责人确认可见/适用范围；客户内控/授权审批人确认发布、停用和回滚权限及审批凭证
+    resume_when: 每条将发布的规则都有签署版本、审批角色/范围/生效时间与回滚策略，且规则所有者确认固定输入的预期结果后，才实现受权限控制的发布门禁并执行版本重放；未满足时发布端点继续关闭
+    size: M
+    covers: [CS-7.1, CS-7.2]
+    acceptance:
+      - 未批准或过期草稿不可进入在线报价与身份决策
+      - 经授权审批人发布、停用或回滚规则，并记录理由、生效期及前后版本
+      - 生效规则具有部门范围；无权部门不能查看或发布
+      - 指定规则版本可确定性重放，且规则语义未签署前发布端点保持关闭
+    files: [p0/app/business_rule_versions.py, p0/app/main.py, p0/tests/test_business_rule_versions.py]
+    note: 当前仅能等待客户规则语义和审批矩阵确认后制定正式发布门禁；本地草稿和候选预览不能替代客户批准
+
+  - id: CS_INTEG_CONTRACT
+    title: 外部集成契约边界与故障验收矩阵
+    status: done
+    deps: [CS_REG_SIM, CS_QUOTE_FLOW_SIM, CS_ORDER_SIM, CS_DESK_SIM, CS_RULE_DRAFT]
+    size: S
+    covers: []
+    acceptance:
+      - CRM、企查查、微信/企微、邮件分别列出当前代码事实和缺失的客户契约
+      - 明确成功、超时、认证失败、限流、重复请求、字段变化和远端成功本地超时的统一验收行为
+      - 区分已验证的本地模拟、待供应商契约验证和生产集成，不臆造供应商字段或连接成功
+      - 给出恢复所需的具体资料和顺序
+    files: [docs/customer-service-integration-contract.md, docs/customer-service-development-roadmap.md]
+    note: 只完成集成边界/故障矩阵设计，不表示任何生产 API、凭据或消息通道已连接；真实集成仍由 CS_INTEG 等待外部资料
+
+  - id: CS_INTEG_SIM
+    title: 外部集成规范化结果与故障模拟器
+    status: done
+    coverage_status: partial
+    deps: [CS_INTEG_CONTRACT]
+    size: M
+    covers: [CS-8.1, CS-8.2, CS-8.3, CS-8.4]
+    acceptance:
+      - 只在进程内模拟 CRM、企查查、微信/企微、邮件五类适配场景，不执行网络/子进程/供应商 SDK 调用
+      - 覆盖成功、超时、认证失败、限流、幂等重放/冲突、字段契约变化及超时后显式回读
+      - 模拟响应只返回规范化字段；固定动作白名单，审计不保留 payload、原幂等键、凭据或 PII，摘要使用进程密钥 HMAC
+      - 模拟器内部幂等索引也只保留系统/动作/HMAC，不在实例生命周期内保留原始调用 key
+      - 模拟器隔离于生产业务路由，不把模拟回执当成真实外部成功
+    files: [p0/app/integration_simulator.py, p0/tests/test_integration_simulator.py, docs/customer-service-integration-contract.md]
+    note: 本地故障契约工具只用于开发验收；12 项模拟器 pytest 回归通过。索引以进程密钥 HMAC 代替原始调用 key，测试覆盖低熵 key 不驻留实例索引；不能替代四类供应商真实契约、配置开关、回执对账或 CS_INTEG 生产验收
+
+  - id: CS_ACCEPT_MATRIX
+    title: CS 29 项需求本地实现与生产门禁逐项验收矩阵
+    status: done
+    deps: [CS_S1_PREVIEW, CS_REG_RISK_SIM, CS_QUOTE_FLOW_SIM, CS_ORDER_SIM, CS_DESK_SIM, CS_AIQUOTE_SIM, CS_RULE_DRAFT, CS_INTEG_SIM]
+    size: S
+    covers: []
+    acceptance:
+      - 从 requirements.yaml 列全 29 项 CS 需求，每项区分本地实现证据与客户/生产剩余门槛
+      - 合成数据、故障模拟、客户 UAT 和生产连接不混为一类状态
+      - 逐项矩阵测试保证需求清单新增/删除时矩阵可被检查
+      - 记录阻塞所需资料及对应责任方
+    files: [docs/customer-service-acceptance-matrix.md, tests/test_coverage_validation.py, docs/customer-service-development-roadmap.md]
+    note: 当前矩阵列示本地部分实现与外部验收门，不代表客户签字或生产完成
+
   - id: CS_INTEG
     title: 系统对接（企查查/CRM/微信/邮箱）
     status: waiting
-    waiting_on: 客户接口清单与字段定义（CRM / 企查查 / 微信 / 认可清单）
+    waiting_on: 四类系统各自的接口/字段契约、测试账号与环境、调用权限、网络策略和数据/隐私授权
+    external_owner: 客户 IT/各供应商管理员提供接口文档、测试凭据和沙箱；客户安全负责人批准网络、凭据保管、数据处理/留存；业务系统负责人分别签署每类读写/消息发送权限
+    resume_when: 对每个系统单独取得可验证的沙箱账号、版本化字段契约、限流/超时/幂等/回读规范、网络连通和数据授权后，按 CRM 只读优先顺序实现并完成 F1-F7 故障验收与客户 UAT；某系统资料未齐时不启用该系统
     size: L
     covers: [CS-8.1, CS-8.2, CS-8.3, CS-8.4]
     acceptance: ["四个对接可用", "失败可降级"]
     files: [p0/app/]
-    note: 需客户提供各系统接口凭据
+    note: 生产集成仍需客户提供各系统接口凭据、字段契约、测试环境及安全授权；本地契约设计见 docs/customer-service-integration-contract.md
 
   # ========== 基础设施：目标模式 ==========
+  - id: KB_IDENTITY_STACK
+    title: 中汽专属 WeKnora v0.9.1 身份适配与 testkb 隔离部署
+    status: doing
+    size: L
+    covers: []
+    acceptance:
+      - 6,441 个官方源文件按锁定 SHA-256 清单验证，应用中汽补丁后可从干净目录复现
+      - OIDC 仅按已验证 issuer/sub 查找管理员显式绑定的账号；邮箱不作身份匹配，不自动建号
+      - 绑定/解绑仅系统管理员可执行且生成审计事件；未绑定账号、userinfo subject 不符和无有效 ID Token 全部拒绝
+      - 中汽 WeKnora Compose project、容器、数据库、Redis、原文卷、网络和 loopback 端口与 yunan-persist 完全隔离
+      - 有 Go 测试、镜像构建、健康检查、合成知识样例检索/引用、OIDC 账号绑定与权限拒绝、备份恢复和回滚验收证据
+      - 四角色名称保持新客户/小微客户、业务经理、系统管理员、技术部门；reviewer 的历史权限逐账号确认前不自动映射
+    files: [weknora/, ci/upstream-v0.9.1.json, scripts/prepare_weknora_source.py, .github/workflows/p0-ci.yml, docs/weknora-source-baseline-and-web-unification-2026-11-24.md]
+    note: 源码补丁、锁定清单、流式校验准备脚本和 Compose 隔离模板已本地完成；Go 模块代理超时、GitHub CLI token 无效、本机无 Docker daemon，尚未创建 PR、构建或部署；testkb yunan-persist 未改动
+
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）
     status: done
     pr: 131
     size: S
     covers: []
-    acceptance: ["覆盖率脚本能算出各领域百分比"]
+    acceptance:
+      - 覆盖率脚本能算出各领域百分比
+      - 需求清单和任务台账中的重复字段键会在输出覆盖数字前被拒绝
     files: [docs/requirements.yaml, docs/BACKLOG.yaml, scripts/coverage.py]
 
   - id: INFRA_DECISION
@@ -634,11 +1035,28 @@ tasks:
     files: [bin/supervisor.py]
 
   # ========== 阻塞项 ==========
+  - id: INFRA_LOCAL_MODEL_GUARD
+    title: 生产环境模型路由强制仅本地
+    status: done
+    size: S
+    covers: []
+    acceptance:
+      - P0_ENV=production 时所有模型/embedding 路由强制只允许本地或批准的内网单标签 endpoint
+      - P0_LOCAL_MODEL_ONLY=0 不能在 production 环境关闭本地路由保护
+      - 语义审核、查询改写、WeKnora 和 embedding 的公网地址均在发送前拒绝
+      - 非 production 的公网测试兼容行为由独立测试保留
+    files: [p0/app/model_endpoint.py, p0/tests/test_local_model_routes.py, docs/p1-model-switchability.md]
+    note: 仅完成应用层地址策略与阻断回归；实际本地模型吞吐、WeKnora 现场拓扑和网络出口仍待部署验证
+
   - id: BLOCK_PROD
     title: 【硬阻塞】客户真实数据进入前，本地模型路由必须就位
     status: blocked
+    deps: [INFRA_LOCAL_MODEL_GUARD]
+    waiting_on: 开发机可启动的本地推理服务/容器运行时，以及客户现场批准的 WeKnora 出口、DNS/代理/防火墙策略与真实模型验收
+    external_owner: 项目开发/运维负责人准备 Ollama 或批准的本地推理运行时并验证容器环境；客户 IT/安全负责人批准并验证部署网络和数据不出域；客户业务验收人确认模型效果门槛
+    resume_when: 本机本地推理服务和所需容器环境可用后先完成本地 E2E；真实客户数据启用前还必须取得客户现场网络检查、出网规则批准和模型效果签字，且该硬门禁不得被本地测试结果替代
     size: M
     covers: []
     acceptance: ["本地模型可路由", "客户数据不出内网"]
     files: []
-    note: 当前测试数据客户确认可走公网（过期数据），但真实环境必须本地模型
+    note: 应用层生产强制本地路由及 F75–F81 回归已完成；当前开发机无 Ollama，127.0.0.1:11434 不可达，Docker daemon 未运行，故本地推理 E2E 仍未验收。客户部署还需确认 WeKnora 下游出网、代理/DNS/防火墙规则和真实模型效果；任何真实客户数据进入生产前必须完成客户现场网络与本地推理验收。早期测试数据可走公网的客户确认已过期，不适用于真实客户数据

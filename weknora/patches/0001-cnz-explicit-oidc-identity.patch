@@ -1,0 +1,620 @@
+diff --git a/internal/application/repository/user.go b/internal/application/repository/user.go
+index 49f6a2f..2731a02 100644
+--- a/internal/application/repository/user.go
++++ b/internal/application/repository/user.go
+@@ -98,6 +98,37 @@ func (r *userRepository) GetUserByEmail(ctx context.Context, email string) (*typ
+ 	return &user, nil
+ }
+ 
++// GetUserByOIDCIdentity resolves only explicitly bound identities. It does
++// not fall back to email, because email is mutable profile data.
++func (r *userRepository) GetUserByOIDCIdentity(ctx context.Context, issuer, subject string) (*types.User, error) {
++	var user types.User
++	err := r.db.WithContext(ctx).Where("oidc_issuer = ? AND oidc_subject = ?", issuer, subject).First(&user).Error
++	if errors.Is(err, gorm.ErrRecordNotFound) {
++		return nil, ErrUserNotFound
++	}
++	if err != nil {
++		return nil, err
++	}
++	return &user, nil
++}
++
++// SetOIDCIdentity assigns or removes an OIDC identity on an existing account.
++// A database unique constraint prevents concurrent binding to two accounts.
++func (r *userRepository) SetOIDCIdentity(ctx context.Context, userID string, issuer, subject *string) error {
++	if (issuer == nil) != (subject == nil) {
++		return errors.New("issuer and subject must both be set or both be cleared")
++	}
++	updates := map[string]interface{}{"oidc_issuer": issuer, "oidc_subject": subject}
++	result := r.db.WithContext(ctx).Model(&types.User{}).Where("id = ?", userID).Updates(updates)
++	if result.Error != nil {
++		return result.Error
++	}
++	if result.RowsAffected == 0 {
++		return ErrUserNotFound
++	}
++	return nil
++}
++
+ // GetUserByUsername gets a user by username
+ func (r *userRepository) GetUserByUsername(ctx context.Context, username string) (*types.User, error) {
+ 	var user types.User
+diff --git a/internal/application/repository/user_oidc_identity_test.go b/internal/application/repository/user_oidc_identity_test.go
+new file mode 100644
+index 0000000..cef179a
+--- /dev/null
++++ b/internal/application/repository/user_oidc_identity_test.go
+@@ -0,0 +1,40 @@
++package repository
++
++import (
++	"context"
++	"path/filepath"
++	"testing"
++
++	"github.com/Tencent/WeKnora/internal/types"
++	"github.com/stretchr/testify/require"
++	"gorm.io/driver/sqlite"
++	"gorm.io/gorm"
++)
++
++func TestOIDCIdentityRequiresExplicitUniqueBinding(t *testing.T) {
++	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "users.db")), &gorm.Config{})
++	require.NoError(t, err)
++	require.NoError(t, db.AutoMigrate(&types.User{}))
++	repo := NewUserRepository(db).(*userRepository)
++	ctx := context.Background()
++	for _, id := range []string{"user-a", "user-b"} {
++		require.NoError(t, repo.CreateUser(ctx, &types.User{
++			ID: id, Username: id, Email: id + "@example.com", PasswordHash: "hash",
++		}))
++	}
++	if _, err := repo.GetUserByOIDCIdentity(ctx, "https://idp.example", "subject-1"); err != ErrUserNotFound {
++		t.Fatalf("unbound identity lookup error = %v, want ErrUserNotFound", err)
++	}
++	issuer, subject := "https://idp.example", "subject-1"
++	require.NoError(t, repo.SetOIDCIdentity(ctx, "user-a", &issuer, &subject))
++	got, err := repo.GetUserByOIDCIdentity(ctx, issuer, subject)
++	require.NoError(t, err)
++	require.Equal(t, "user-a", got.ID)
++	if err := repo.SetOIDCIdentity(ctx, "user-b", &issuer, &subject); err == nil {
++		t.Fatal("duplicate OIDC identity was assigned to a second account")
++	}
++	require.NoError(t, repo.SetOIDCIdentity(ctx, "user-a", nil, nil))
++	if _, err := repo.GetUserByOIDCIdentity(ctx, issuer, subject); err != ErrUserNotFound {
++		t.Fatalf("unbound identity lookup error = %v, want ErrUserNotFound", err)
++	}
++}
+diff --git a/internal/application/service/user.go b/internal/application/service/user.go
+index eaa86a7..e54d8b5 100644
+--- a/internal/application/service/user.go
++++ b/internal/application/service/user.go
+@@ -540,10 +540,9 @@ func (s *userService) GetOIDCAuthorizationURL(ctx context.Context, redirectURI s
+ 	}, nil
+ }
+ 
+-// LoginWithOIDC exchanges code for tokens, loads user info, provisions user if
+-// needed, and returns local login tokens. provisioning is the default tenant
+-// mode applied only when a brand-new local user is auto-created; it is resolved
+-// by the caller from the shared auth.default_tenant_mode policy.
++// LoginWithOIDC exchanges code for tokens and resolves only an explicitly
++// bound, verified (issuer, subject) identity. The provisioning parameter is
++// retained for interface compatibility and intentionally ignored.
+ func (s *userService) LoginWithOIDC(
+ 	ctx context.Context,
+ 	code, redirectURI string,
+@@ -571,22 +570,27 @@ func (s *userService) LoginWithOIDC(
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if strings.TrimSpace(userInfo.Email) == "" {
+-		return nil, errors.New("OIDC provider did not return email")
++	issuer := claimString(userInfo.Claims, "iss")
++	if issuer == "" || userInfo.Subject == "" {
++		return nil, errors.New("verified OIDC issuer and subject are required")
+ 	}
+-
+-	user, err := s.userRepo.GetUserByEmail(ctx, userInfo.Email)
+-	if err != nil && !isUserLookupNotFound(err) {
+-		return nil, fmt.Errorf("failed to query user by email: %w", err)
++	identityRepo, ok := s.userRepo.(interface {
++		GetUserByOIDCIdentity(context.Context, string, string) (*types.User, error)
++	})
++	if !ok {
++		return nil, errors.New("explicit OIDC identity bindings are not available")
+ 	}
+-	isNewUser := false
+-	if isUserLookupNotFound(err) || user == nil {
+-		user, err = s.provisionOIDCUser(ctx, userInfo, provisioning)
+-		if err != nil {
+-			return nil, err
++	user, err := identityRepo.GetUserByOIDCIdentity(ctx, issuer, userInfo.Subject)
++	if err != nil {
++		if isUserLookupNotFound(err) {
++			return nil, errors.New("OIDC identity is not bound to an account; contact an administrator")
+ 		}
+-		isNewUser = true
++		return nil, fmt.Errorf("failed to query OIDC identity binding: %w", err)
++	}
++	if user == nil {
++		return nil, errors.New("OIDC identity is not bound to an account; contact an administrator")
+ 	}
++	isNewUser := false
+ 
+ 	if !user.IsActive {
+ 		return &types.OIDCCallbackResponse{Success: false, Message: "Account is disabled"}, nil
+@@ -641,6 +645,37 @@ func (s *userService) GetUserByEmail(ctx context.Context, email string) (*types.
+ 	return s.userRepo.GetUserByEmail(ctx, email)
+ }
+ 
++// SetOIDCIdentity binds or unbinds an existing local user. Callers must be
++// protected by the SystemAdmin route group; the issuer always comes from the
++// configured provider, never from a client-supplied host.
++func (s *userService) SetOIDCIdentity(ctx context.Context, userID string, subject *string) error {
++	cfg, err := s.getOIDCConfig(ctx)
++	if err != nil {
++		return err
++	}
++	issuer := strings.TrimSpace(cfg.IssuerURL)
++	if issuer == "" {
++		return errors.New("OIDC issuer is not configured")
++	}
++	if subject != nil {
++		*subject = strings.TrimSpace(*subject)
++		if *subject == "" || len(*subject) > 255 {
++			return errors.New("OIDC subject must contain 1-255 characters")
++		}
++	}
++	repo, ok := s.userRepo.(interface {
++		SetOIDCIdentity(context.Context, string, *string, *string) error
++	})
++	if !ok {
++		return errors.New("explicit OIDC identity bindings are not available")
++	}
++	var issuerValue *string
++	if subject != nil {
++		issuerValue = &issuer
++	}
++	return repo.SetOIDCIdentity(ctx, userID, issuerValue, subject)
++}
++
+ // GetUserByUsername gets a user by username
+ func (s *userService) GetUserByUsername(ctx context.Context, username string) (*types.User, error) {
+ 	return s.userRepo.GetUserByUsername(ctx, username)
+@@ -1823,6 +1858,7 @@ func (s *userService) exchangeOIDCCode(
+ func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCAuthConfig, tokenResp *oidcTokenResponse) (*types.OIDCUserInfo, error) {
+ 	claims := map[string]interface{}{}
+ 	verifiedFromIDToken := false
++	verifiedSubject := ""
+ 
+ 	if idToken := strings.TrimSpace(tokenResp.IDToken); idToken != "" {
+ 		if strings.TrimSpace(cfg.JwksURI) == "" {
+@@ -1838,6 +1874,10 @@ func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCA
+ 			for k, v := range idTokenClaims {
+ 				claims[k] = v
+ 			}
++			verifiedSubject = claimString(idTokenClaims, "sub")
++			if verifiedSubject == "" || claimString(idTokenClaims, "iss") == "" {
++				return nil, errors.New("verified OIDC id_token is missing issuer or subject")
++			}
+ 			verifiedFromIDToken = true
+ 		}
+ 	}
+@@ -1850,11 +1890,22 @@ func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCA
+ 			}
+ 			logger.Warnf(ctx, "Failed to fetch OIDC userinfo, using verified id_token claims: %v", err)
+ 		} else {
++			if !verifiedFromIDToken {
++				return nil, errors.New("verified OIDC id_token is required for account lookup")
++			}
++			if sub := claimString(userInfoClaims, "sub"); sub == "" || sub != verifiedSubject {
++				return nil, errors.New("OIDC userinfo subject does not match verified id_token subject")
++			}
+ 			for k, v := range userInfoClaims {
+-				claims[k] = v
++				if k != "sub" && k != "iss" {
++					claims[k] = v
++				}
+ 			}
+ 		}
+ 	}
++	if !verifiedFromIDToken {
++		return nil, errors.New("verified OIDC id_token is required for account lookup")
++	}
+ 
+ 	if len(claims) == 0 {
+ 		return nil, errors.New("OIDC provider returned no user claims")
+@@ -1878,6 +1929,11 @@ func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCA
+ 	return info, nil
+ }
+ 
++func claimString(claims map[string]interface{}, name string) string {
++	value, _ := claims[name].(string)
++	return strings.TrimSpace(value)
++}
++
+ func (s *userService) fetchOIDCUserInfo(ctx context.Context, endpoint, accessToken string) (map[string]interface{}, error) {
+ 	if err := validateOIDCEndpoint("userinfo", endpoint, true); err != nil {
+ 		return nil, err
+@@ -1907,65 +1963,6 @@ func (s *userService) fetchOIDCUserInfo(ctx context.Context, endpoint, accessTok
+ 	return claims, nil
+ }
+ 
+-// provisionOIDCUser auto-creates a local account for a first-time OIDC
+-// login. The provisioning mode is decided by the caller (the OIDC callback
+-// handler resolves it from the same auth.default_tenant_mode system-setting
+-// that governs public password registration) so both entry points share a
+-// single deployment policy. An empty mode falls back to create_personal via
+-// Register's own defaulting.
+-func (s *userService) provisionOIDCUser(
+-	ctx context.Context,
+-	info *types.OIDCUserInfo,
+-	provisioning types.TenantProvisioningMode,
+-) (*types.User, error) {
+-	username := s.generateOIDCUsername(ctx, info)
+-	randomPassword, err := generateRandomString(32)
+-	if err != nil {
+-		return nil, fmt.Errorf("failed to generate password for OIDC user: %w", err)
+-	}
+-
+-	user, err := s.Register(ctx, &types.RegisterRequest{
+-		Username:           username,
+-		Email:              info.Email,
+-		Password:           randomPassword,
+-		TenantProvisioning: provisioning,
+-	})
+-	if err != nil {
+-		return nil, fmt.Errorf("failed to auto-provision OIDC user: %w", err)
+-	}
+-
+-	oidcOnly := true
+-	user.Preferences.OidcOnlyLogin = &oidcOnly
+-	user.UpdatedAt = time.Now()
+-	if err := s.userRepo.UpdateUser(ctx, user); err != nil {
+-		return nil, fmt.Errorf("failed to mark OIDC-only login preference: %w", err)
+-	}
+-	return user, nil
+-}
+-
+-func (s *userService) generateOIDCUsername(ctx context.Context, info *types.OIDCUserInfo) string {
+-	base := sanitizeUsernameCandidate(info.Username)
+-	if base == "" {
+-		base = sanitizeUsernameCandidate(strings.Split(info.Email, "@")[0])
+-	}
+-	if base == "" {
+-		base = "oidc-user"
+-	}
+-
+-	candidate := base
+-	for i := 0; i < 20; i++ {
+-		existing, err := s.userRepo.GetUserByUsername(ctx, candidate)
+-		if isUserLookupNotFound(err) || (err == nil && existing == nil) {
+-			return candidate
+-		}
+-		if err != nil && !isUserLookupNotFound(err) {
+-			logger.Warnf(ctx, "Failed to check existing OIDC username %q: %v", candidate, err)
+-		}
+-		candidate = fmt.Sprintf("%s-%d", base, i+1)
+-	}
+-	return fmt.Sprintf("%s-%d", base, time.Now().Unix())
+-}
+-
+ func generateRandomString(length int) (string, error) {
+ 	buffer := make([]byte, length)
+ 	if _, err := rand.Read(buffer); err != nil {
+@@ -2240,31 +2237,6 @@ func extractClaimAsString(claims map[string]interface{}, key string) string {
+ 	}
+ }
+ 
+-func sanitizeUsernameCandidate(value string) string {
+-	value = strings.TrimSpace(strings.ToLower(value))
+-	if value == "" {
+-		return ""
+-	}
+-	var b strings.Builder
+-	lastDash := false
+-	for _, r := range value {
+-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '.' {
+-			b.WriteRune(r)
+-			lastDash = false
+-			continue
+-		}
+-		if !lastDash {
+-			b.WriteByte('-')
+-			lastDash = true
+-		}
+-	}
+-	result := strings.Trim(b.String(), "-._")
+-	if len(result) > 50 {
+-		result = strings.Trim(result[:50], "-._")
+-	}
+-	return result
+-}
+-
+ func isUserLookupNotFound(err error) bool {
+ 	if err == nil {
+ 		return false
+diff --git a/internal/application/service/user_oidc_verify_test.go b/internal/application/service/user_oidc_verify_test.go
+index 4ca0819..a0e6df3 100644
+--- a/internal/application/service/user_oidc_verify_test.go
++++ b/internal/application/service/user_oidc_verify_test.go
+@@ -312,7 +312,7 @@ func TestVerifyOIDCIDToken_MultipleKeysRequireKid(t *testing.T) {
+ 	}
+ }
+ 
+-func TestResolveOIDCUserInfo_NoJwksDoesNotTrustUnsignedIDToken(t *testing.T) {
++func TestResolveOIDCUserInfo_RequiresVerifiedIDToken(t *testing.T) {
+ 	withOIDCSSRFWhitelist(t, "127.0.0.1")
+ 
+ 	userinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+@@ -338,14 +338,31 @@ func TestResolveOIDCUserInfo_NoJwksDoesNotTrustUnsignedIDToken(t *testing.T) {
+ 		IDToken:     forged,
+ 		AccessToken: "access-token",
+ 	})
+-	if err != nil {
+-		t.Fatalf("resolveOIDCUserInfo: %v", err)
++	if err == nil {
++		t.Fatal("userinfo-only login accepted without a verified id_token")
+ 	}
+-	if info.Email != "real@example.com" {
+-		t.Fatalf("email = %q, want userinfo email (not unsigned id_token)", info.Email)
++}
++
++func TestResolveOIDCUserInfo_RejectsMismatchedUserinfoSubject(t *testing.T) {
++	withOIDCSSRFWhitelist(t, "127.0.0.1")
++	key, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		t.Fatal(err)
+ 	}
+-	if info.Subject != "real-user" {
+-		t.Fatalf("subject = %q, want userinfo sub", info.Subject)
++	jwks := jwksServer(t, key, "kid-1")
++	defer jwks.Close()
++	userinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		_ = json.NewEncoder(w).Encode(map[string]string{"sub": "different-user", "email": "user@example.com"})
++	}))
++	defer userinfo.Close()
++	cfg := oidcVerifyCfg(jwks.URL)
++	cfg.UserInfoEndpoint = userinfo.URL
++	idToken := signedIDToken(t, key, "kid-1", baseClaims("https://idp.example", "weknora-client"))
++	_, err = (&userService{}).resolveOIDCUserInfo(context.Background(), cfg, &oidcTokenResponse{
++		IDToken: idToken, AccessToken: "access-token",
++	})
++	if err == nil {
++		t.Fatal("userinfo with a different subject was accepted")
+ 	}
+ }
+ 
+diff --git a/internal/handler/system.go b/internal/handler/system.go
+index e2d7368..236da00 100644
+--- a/internal/handler/system.go
++++ b/internal/handler/system.go
+@@ -1826,6 +1826,66 @@ func (h *SystemHandler) CreateSystemUser(c *gin.Context) {
+ 	})
+ }
+ 
++type oidcIdentityBindingService interface {
++	SetOIDCIdentity(ctx context.Context, userID string, subject *string) error
++}
++
++type oidcIdentityBindingRequest struct {
++	UserID  string `json:"user_id" binding:"required"`
++	Subject string `json:"subject" binding:"required"`
++}
++
++// BindOIDCIdentity explicitly links one existing local account to the
++// configured OIDC provider's stable subject. Email is not accepted here.
++func (h *SystemHandler) BindOIDCIdentity(c *gin.Context) {
++	var req oidcIdentityBindingRequest
++	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.Subject) == "" {
++		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id and subject are required"})
++		return
++	}
++	binder, ok := h.userSvc.(oidcIdentityBindingService)
++	if !ok {
++		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "OIDC identity binding is unavailable"})
++		return
++	}
++	subject := strings.TrimSpace(req.Subject)
++	if err := binder.SetOIDCIdentity(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID), &subject); err != nil {
++		logger.Errorf(c.Request.Context(), "Failed to bind OIDC identity for user %s: %v", secutils.SanitizeForLog(req.UserID), err)
++		c.JSON(http.StatusConflict, gin.H{"error": "Failed to bind OIDC identity"})
++		return
++	}
++	if target, err := h.userSvc.GetUserByID(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID)); err == nil {
++		h.emitAdminAudit(logger.CloneContext(c.Request.Context()), types.AuditActionSystemUserOIDCIdentityBound, target, map[string]any{"provider": "configured_oidc"})
++	}
++	c.JSON(http.StatusOK, gin.H{"success": true, "user_id": strings.TrimSpace(req.UserID)})
++}
++
++// UnbindOIDCIdentity removes the configured provider identity from an
++// existing account. Password login and all local roles remain unchanged.
++func (h *SystemHandler) UnbindOIDCIdentity(c *gin.Context) {
++	var req struct {
++		UserID string `json:"user_id" binding:"required"`
++	}
++	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.UserID) == "" {
++		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id is required"})
++		return
++	}
++	binder, ok := h.userSvc.(oidcIdentityBindingService)
++	if !ok {
++		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "OIDC identity binding is unavailable"})
++		return
++	}
++	if err := binder.SetOIDCIdentity(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID), nil); err != nil {
++		logger.Errorf(c.Request.Context(), "Failed to unbind OIDC identity for user %s: %v", secutils.SanitizeForLog(req.UserID), err)
++		c.JSON(http.StatusConflict, gin.H{"error": "Failed to unbind OIDC identity"})
++		return
++	}
++	if target, err := h.userSvc.GetUserByID(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID)); err == nil {
++		h.emitAdminAudit(logger.CloneContext(c.Request.Context()), types.AuditActionSystemUserOIDCIdentityUnbound, target, map[string]any{"provider": "configured_oidc"})
++	}
++	c.JSON(http.StatusOK, gin.H{"success": true, "user_id": strings.TrimSpace(req.UserID)})
++}
++
+ // ============================================================================
+ // System Settings (P1)
+ // ----------------------------------------------------------------------------
+diff --git a/internal/router/model_catalog_test.go b/internal/router/model_catalog_test.go
+index 9af605c..645da6d 100644
+--- a/internal/router/model_catalog_test.go
++++ b/internal/router/model_catalog_test.go
+@@ -20,6 +20,8 @@ func TestModelCatalogRequiresSystemAdmin(t *testing.T) {
+ 		{http.MethodGet, "/api/v1/system/admin/model-catalog"},
+ 		{http.MethodPost, "/api/v1/system/admin/model-catalog/preview"},
+ 		{http.MethodPut, "/api/v1/system/admin/model-catalog"},
++		{http.MethodPut, "/api/v1/system/admin/users/oidc-binding"},
++		{http.MethodDelete, "/api/v1/system/admin/users/oidc-binding"},
+ 	} {
+ 		t.Run(tc.method+tc.path, func(t *testing.T) {
+ 			w := httptest.NewRecorder()
+diff --git a/internal/router/routes_auth_tenant.go b/internal/router/routes_auth_tenant.go
+index 204ce74..7635af5 100644
+--- a/internal/router/routes_auth_tenant.go
++++ b/internal/router/routes_auth_tenant.go
+@@ -326,6 +326,8 @@ func RegisterSystemAdminRoutes(
+ 		adminRoutes.POST("/users/status", handler.SetUserStatus)
+ 		adminRoutes.POST("/users/reset-password", handler.ResetUserPassword)
+ 		adminRoutes.POST("/users/create", handler.CreateSystemUser)
++		adminRoutes.PUT("/users/oidc-binding", handler.BindOIDCIdentity)
++		adminRoutes.DELETE("/users/oidc-binding", handler.UnbindOIDCIdentity)
+ 		adminRoutes.GET("/api-keys", handler.ListPlatformAPIKeys)
+ 		adminRoutes.POST("/api-keys", handler.CreatePlatformAPIKey)
+ 		adminRoutes.DELETE("/api-keys/:key_id", handler.DeletePlatformAPIKey)
+diff --git a/internal/types/audit_log.go b/internal/types/audit_log.go
+index 5dc7f25..46d4f4d 100644
+--- a/internal/types/audit_log.go
++++ b/internal/types/audit_log.go
+@@ -141,9 +141,13 @@ const (
+ 	// password_generated=true only on the create path, idempotent=true
+ 	// marks a no-op hit on an already-existing identity.
+ 	// TenantID=0 (system-scope).
+-	AuditActionSystemUserCreated   AuditAction = "system.user_created"
+-	AuditActionSystemAPIKeyCreated AuditAction = "system.api_key_created"
+-	AuditActionSystemAPIKeyRevoked AuditAction = "system.api_key_revoked"
++	AuditActionSystemUserCreated AuditAction = "system.user_created"
++	// OIDC identity binding changes are recorded without copying the provider
++	// subject into audit details. TenantID=0 (system-scope).
++	AuditActionSystemUserOIDCIdentityBound   AuditAction = "system.user_oidc_identity_bound"
++	AuditActionSystemUserOIDCIdentityUnbound AuditAction = "system.user_oidc_identity_unbound"
++	AuditActionSystemAPIKeyCreated           AuditAction = "system.api_key_created"
++	AuditActionSystemAPIKeyRevoked           AuditAction = "system.api_key_revoked"
+ 
+ 	// Runtime queue mutations are privileged SystemAdmin actions. Retrying an
+ 	// archived task can repeat its original side effects; deleting one removes
+diff --git a/internal/types/audit_log_test.go b/internal/types/audit_log_test.go
+index d4a38cd..2895370 100644
+--- a/internal/types/audit_log_test.go
++++ b/internal/types/audit_log_test.go
+@@ -38,6 +38,8 @@ func TestAuditAction_DotNamespaceConvention(t *testing.T) {
+ 		AuditActionSystemAdminPromoted,
+ 		AuditActionSystemAdminRevoked,
+ 		AuditActionSystemUserPasswordReset,
++		AuditActionSystemUserOIDCIdentityBound,
++		AuditActionSystemUserOIDCIdentityUnbound,
+ 		AuditActionSystemQueueTaskRetried,
+ 		AuditActionSystemQueueTaskDeleted,
+ 		AuditActionSystemQueueTaskRunNow,
+@@ -125,6 +127,8 @@ func TestAuditAction_NoCollisionsAcrossNamespaces(t *testing.T) {
+ 	register("AuditActionSystemAdminPromoted", AuditActionSystemAdminPromoted)
+ 	register("AuditActionSystemAdminRevoked", AuditActionSystemAdminRevoked)
+ 	register("AuditActionSystemUserPasswordReset", AuditActionSystemUserPasswordReset)
++	register("AuditActionSystemUserOIDCIdentityBound", AuditActionSystemUserOIDCIdentityBound)
++	register("AuditActionSystemUserOIDCIdentityUnbound", AuditActionSystemUserOIDCIdentityUnbound)
+ 	register("AuditActionSystemUserCreated", AuditActionSystemUserCreated)
+ 	register("AuditActionSystemQueueTaskRetried", AuditActionSystemQueueTaskRetried)
+ 	register("AuditActionSystemQueueTaskDeleted", AuditActionSystemQueueTaskDeleted)
+@@ -145,6 +149,8 @@ func TestAuditAction_SystemNamespacePrefix(t *testing.T) {
+ 		AuditActionSystemAdminPromoted,
+ 		AuditActionSystemAdminRevoked,
+ 		AuditActionSystemUserPasswordReset,
++		AuditActionSystemUserOIDCIdentityBound,
++		AuditActionSystemUserOIDCIdentityUnbound,
+ 		AuditActionSystemUserCreated,
+ 		AuditActionSystemQueueTaskRetried,
+ 		AuditActionSystemQueueTaskDeleted,
+@@ -173,6 +179,8 @@ func TestAuditAction_SystemWireValues(t *testing.T) {
+ 		{AuditActionSystemAdminPromoted, "system.admin_promoted"},
+ 		{AuditActionSystemAdminRevoked, "system.admin_revoked"},
+ 		{AuditActionSystemUserPasswordReset, "system.user_password_reset"},
++		{AuditActionSystemUserOIDCIdentityBound, "system.user_oidc_identity_bound"},
++		{AuditActionSystemUserOIDCIdentityUnbound, "system.user_oidc_identity_unbound"},
+ 		{AuditActionSystemUserCreated, "system.user_created"},
+ 		{AuditActionSystemQueueTaskRetried, "system.queue_task_retried"},
+ 		{AuditActionSystemQueueTaskDeleted, "system.queue_task_deleted"},
+diff --git a/internal/types/interfaces/user.go b/internal/types/interfaces/user.go
+index 76636c3..8e1c51b 100644
+--- a/internal/types/interfaces/user.go
++++ b/internal/types/interfaces/user.go
+@@ -14,9 +14,9 @@ type UserService interface {
+ 	Login(ctx context.Context, req *types.LoginRequest) (*types.LoginResponse, error)
+ 	// GetOIDCAuthorizationURL builds the third-party OIDC authorization URL
+ 	GetOIDCAuthorizationURL(ctx context.Context, redirectURI string) (*types.OIDCAuthURLResponse, error)
+-	// LoginWithOIDC exchanges the callback code, auto-provisions users if needed, and completes login.
+-	// provisioning is the default tenant mode for a newly auto-created user
+-	// (resolved by the caller from auth.default_tenant_mode).
++	// LoginWithOIDC completes login only for an explicitly bound, verified
++	// (issuer, subject) identity. provisioning is retained for compatibility
++	// but must not cause automatic account creation.
+ 	LoginWithOIDC(
+ 		ctx context.Context, code, redirectURI string,
+ 		provisioning types.TenantProvisioningMode, codeVerifier string,
+diff --git a/internal/types/user.go b/internal/types/user.go
+index d189e90..a1d2236 100644
+--- a/internal/types/user.go
++++ b/internal/types/user.go
+@@ -113,6 +113,10 @@ type User struct {
+ 	Username string `json:"username"   gorm:"type:varchar(100);uniqueIndex;not null"`
+ 	// Email address of the user
+ 	Email string `json:"email"      gorm:"type:varchar(255);uniqueIndex;not null"`
++	// OIDC identity is bound explicitly by a system administrator. Email is
++	// profile data and must never be used as an authentication key.
++	OIDCIssuer  *string `json:"-" gorm:"type:varchar(500);uniqueIndex:idx_users_oidc_identity,priority:1"`
++	OIDCSubject *string `json:"-" gorm:"type:varchar(255);uniqueIndex:idx_users_oidc_identity,priority:2"`
+ 	// Hashed password of the user
+ 	PasswordHash string `json:"-"          gorm:"type:varchar(255);not null"`
+ 	// Avatar URL of the user
+diff --git a/migrations/sqlite/000054_users_oidc_identity.down.sql b/migrations/sqlite/000054_users_oidc_identity.down.sql
+new file mode 100644
+index 0000000..ca137a6
+--- /dev/null
++++ b/migrations/sqlite/000054_users_oidc_identity.down.sql
+@@ -0,0 +1,3 @@
++DROP INDEX IF EXISTS idx_users_oidc_identity;
++ALTER TABLE users DROP COLUMN oidc_subject;
++ALTER TABLE users DROP COLUMN oidc_issuer;
+diff --git a/migrations/sqlite/000054_users_oidc_identity.up.sql b/migrations/sqlite/000054_users_oidc_identity.up.sql
+new file mode 100644
+index 0000000..f930f30
+--- /dev/null
++++ b/migrations/sqlite/000054_users_oidc_identity.up.sql
+@@ -0,0 +1,5 @@
++ALTER TABLE users ADD COLUMN oidc_issuer VARCHAR(500);
++ALTER TABLE users ADD COLUMN oidc_subject VARCHAR(255);
++CREATE UNIQUE INDEX idx_users_oidc_identity
++    ON users (oidc_issuer, oidc_subject)
++    WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL;
+diff --git a/migrations/versioned/000138_users_oidc_identity.down.sql b/migrations/versioned/000138_users_oidc_identity.down.sql
+new file mode 100644
+index 0000000..2fcf12b
+--- /dev/null
++++ b/migrations/versioned/000138_users_oidc_identity.down.sql
+@@ -0,0 +1,3 @@
++DROP INDEX IF EXISTS idx_users_oidc_identity;
++ALTER TABLE users DROP COLUMN IF EXISTS oidc_subject;
++ALTER TABLE users DROP COLUMN IF EXISTS oidc_issuer;
+diff --git a/migrations/versioned/000138_users_oidc_identity.up.sql b/migrations/versioned/000138_users_oidc_identity.up.sql
+new file mode 100644
+index 0000000..9ff1b03
+--- /dev/null
++++ b/migrations/versioned/000138_users_oidc_identity.up.sql
+@@ -0,0 +1,7 @@
++-- OIDC login is matched on verified (issuer, subject), after an administrator
++-- explicitly binds the identity. Multiple unbound users remain valid.
++ALTER TABLE users ADD COLUMN IF NOT EXISTS oidc_issuer VARCHAR(500);
++ALTER TABLE users ADD COLUMN IF NOT EXISTS oidc_subject VARCHAR(255);
++CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_identity
++    ON users (oidc_issuer, oidc_subject)
++    WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL;

@@ -53,6 +53,18 @@ users = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
+# OIDC identities are indexed independently from mutable email/username fields.
+# The unique pair is the security boundary against accidental cross-account
+# linking when multiple application workers provision identities concurrently.
+oidc_identities = Table(
+    "oidc_identities",
+    metadata,
+    Column("username", String(64), primary_key=True),
+    Column("issuer", String(512), primary_key=True),
+    Column("subject", String(512), nullable=False),
+    UniqueConstraint("issuer", "subject", name="uq_oidc_identity_issuer_subject"),
+)
+
 standards = Table(
     "standards",
     metadata,

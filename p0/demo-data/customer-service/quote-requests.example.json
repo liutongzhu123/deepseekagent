@@ -1,0 +1,51 @@
+{
+  "dataset": {
+    "id": "SYN-CS-REQUESTS-001",
+    "kind": "synthetic",
+    "version": 1,
+    "demo_only": true
+  },
+  "lines": [
+    {
+      "line_id": "SYN-REQUEST-001",
+      "project_name": "合成内饰气味试验",
+      "item_name": "合成气味测试",
+      "standard": "SYN-STD-ODOR-001",
+      "quantity": 2,
+      "unit": "件"
+    },
+    {
+      "line_id": "SYN-REQUEST-002",
+      "project_name": "合成未知项目",
+      "item_name": "合成未收录项目",
+      "standard": "SYN-STD-UNKNOWN-001",
+      "quantity": 1,
+      "unit": "件"
+    },
+    {
+      "line_id": "SYN-REQUEST-003",
+      "project_name": "合成内饰气味试验",
+      "item_name": "合成旧版挥发测试",
+      "standard": "SYN-STD-OLD-001",
+      "quantity": 1,
+      "unit": "件"
+    },
+    {
+      "line_id": "SYN-REQUEST-004",
+      "project_name": "合成材料燃烧试验",
+      "item_name": "合成水平燃烧",
+      "standard": "SYN-STD-FLAME-001",
+      "quantity": 1,
+      "unit": "件"
+    },
+    {
+      "line_id": "SYN-REQUEST-005",
+      "project_name": "合成暂不可查询项目",
+      "item_name": "合成 CRM 不可用场景",
+      "standard": "SYN-STD-UNAVAILABLE-001",
+      "quantity": 1,
+      "unit": "件",
+      "simulate_source_unavailable": true
+    }
+  ]
+}

@@ -429,9 +429,10 @@ CRM 只读适配用 `P0_CRM_MODE`、`P0_CRM_PATH`、`P0_CRM_REQUIRED`（`api` �
 OCR 可用 `P0_OCR_ENABLED=0` 关闭，`P0_OCR_DPI`（默认 220）、`P0_OCR_MAX_PAGES` 控制速度；
 本地向量检索（仅调试）可用 `P0_EMBEDDING_URL`、`P0_EMBEDDING_MODEL`、`P0_VECTOR_MIN_SCORE`、
 `P0_VECTOR_TOP_K`、`P0_VECTOR_CACHE` 调整。
-客户私有化环境可设 `P0_LOCAL_MODEL_ONLY=1`，强制语义审核、查询改写、WeKnora 与 embedding
-只访问 loopback、私网 IP 或 `localhost`；容器单标签服务名需加入 `P0_LOCAL_MODEL_HOSTS`。
-仅显式 `0/false/no/off` 会关闭此保护；公网出口仍需由防火墙限制。详见
+`P0_ENV=production` 自动强制语义审核、查询改写、WeKnora 与 embedding 只访问 loopback、私网 IP
+或 `localhost`；即使误设 `P0_LOCAL_MODEL_ONLY=0` 也不会关闭。非生产环境可设
+`P0_LOCAL_MODEL_ONLY=1` 提前启用相同保护；容器单标签服务名需加入 `P0_LOCAL_MODEL_HOSTS`。
+模型配置通过检查仍不代表本地推理服务已连通，生产出网仍需由防火墙限制。详见
 `docs/p1-model-switchability.md`。登录后调用 `/api/v1/system/status` 的 `model_routing` 可查看
 各线路是否启用、配置完整且端点获准；这是配置检查，不代表模型服务已连通（`runtime_verified=false`），接口不会发起网络探测，也不返回 URL 或密钥。
 WeKnora 用 `P0_WEKNORA_BASE_URL`、`P0_WEKNORA_API_KEY`、`P0_WEKNORA_KB_ID`、`P0_WEKNORA_REQUIRED`、

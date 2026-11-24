@@ -77,7 +77,7 @@ def pg(monkeypatch, tmp_path):
 
 def test_users_and_audit_roundtrip(pg):
     user = auth.create_user("alice", "correct-horse-1", role="reviewer", projects=["P1"])
-    assert user["role"] == "reviewer"
+    assert user["role"] == "technical"
     assert auth.authenticate("alice", "correct-horse-1")["username"] == "alice"
     assert [item["username"] for item in auth.load_users()] == ["alice"]
     assert (pg / "auth" / "users.json").exists()
@@ -258,7 +258,7 @@ def test_migration_reconciliation_and_file_rollback(pg):
         mp.setattr(auth, "AUDIT_PATH", data / "rollback" / "audit" / "audit.jsonl")
         mp.setattr(ss, "DATA_DIR", data / "rollback" / "standards")
         mp.setattr(qs, "QUOTE_DIR", data / "rollback" / "quotes")
-        assert auth.find_user("after-migration")["role"] == "viewer"
+        assert auth.find_user("after-migration")["role"] == "technical"
         assert ss.load(STANDARD_ID)["meta"]["project"] == "P2"
         assert qs.load(QUOTE_ID, base_dir=data / "rollback" / "quotes")["project"] == "P1"
         assert auth.filter_audit(event="login_success")[0]["user"] == "legacy"

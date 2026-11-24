@@ -2,7 +2,7 @@
 
 P1-S1 turns the P0 login gate into a multi-user identity base:
 
-* four roles (admin / reviewer / sales / viewer) behind one permission matrix;
+* four CNZ roles (customer / business_manager / admin / technical);
 * account policy, per-account lockout, admin reset and activation control;
 * project grants on users, used by the API layer for row-level isolation;
 * an optional OIDC/SSO login (default off; local login always stays available);
@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import store
+from . import role_policy
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("P0_DATA_DIR", ROOT / "data"))
@@ -45,52 +46,12 @@ AUDIT_RETENTION_DAYS = int(os.getenv("P0_AUDIT_RETENTION_DAYS", "180"))
 COOKIE_NAME = "p0_session"
 SESSION_TTL_SECONDS = int(os.getenv("P0_SESSION_TTL", str(8 * 3600)))
 PBKDF2_ITERATIONS = 240_000
-ROLES = ("admin", "reviewer", "sales", "viewer")
-ROLE_LABELS = {
-    "admin": "管理员",
-    "reviewer": "复核人",
-    "sales": "销售",
-    "viewer": "只读",
-}
+ROLES = role_policy.ROLE_CODES
+ROLE_LABELS = role_policy.ROLE_LABELS
 MIN_PASSWORD_LENGTH = 10
 MAX_PASSWORD_LENGTH = 128
 MAX_FAILED_LOGINS = 5
 LOCKOUT_SECONDS = 15 * 60
-
-# action -> roles allowed.  ``admin`` is always allowed and is listed only for
-# documentation.  Endpoints call ``require_permission`` with these action names.
-PERMISSIONS: dict[str, tuple[str, ...]] = {
-    "rules:read": ("admin", "reviewer", "sales", "viewer"),
-    "report:audit": ("admin", "reviewer"),
-    "report:read": ("admin", "reviewer"),
-    "standard:read": ("admin", "reviewer", "sales", "viewer"),
-    "standard:parse": ("admin", "reviewer"),
-    "standard:review": ("admin", "reviewer"),
-    "standard:export": ("admin", "reviewer", "sales", "viewer"),
-    "standard:project": ("admin",),
-    "standard:publish": ("admin", "reviewer"),
-    "standard:ask": ("admin", "reviewer", "sales", "viewer"),
-    "feedback:read": ("admin",),
-    "quote:parse": ("admin", "sales"),
-    "quote:generate": ("admin", "sales"),
-    "quote:download": ("admin", "sales"),
-    "crm:read": ("admin", "reviewer", "sales"),
-    "crm:write": ("admin",),
-    "kb:rebuild": ("admin",),
-    "kb:stats": ("admin", "reviewer", "sales", "viewer"),
-    "user:manage": ("admin",),
-    "audit:read": ("admin",),
-    "audit:export": ("admin",),
-    "config:read": ("admin",),
-    "config:manage": ("admin",),
-    # Section-scoped rule maintenance: the owning department edits its own
-    # rules, administrators keep the all-section ``config:manage`` permission.
-    "config:manage:report": ("admin", "reviewer"),
-    "config:manage:standard": ("admin", "reviewer"),
-    "config:manage:quote": ("admin", "sales"),
-    "config:manage:business": ("admin", "sales"),
-    "system:status": ("admin", "reviewer", "sales", "viewer"),
-}
 
 _LOCK = threading.RLock()
 _SECRET: bytes | None = None
@@ -173,12 +134,7 @@ def verify_password(password: str, encoded: str) -> bool:
 # Roles, projects and permissions
 # ---------------------------------------------------------------------------
 def has_permission(user: dict | None, action: str) -> bool:
-    if not user:
-        return False
-    role = user.get("role", "")
-    if role == "admin":
-        return True
-    return role in PERMISSIONS.get(action, ())
+    return role_policy.has_permission(user, action)
 
 
 def normalize_projects(value: object) -> list[str]:
@@ -281,7 +237,11 @@ def find_user(username: str) -> dict | None:
 
 
 def find_user_by_identity(identifier: str) -> dict | None:
-    """Match an OIDC username/email to an existing account (no auto-create)."""
+    """Legacy directory lookup retained for administrative search only.
+
+    Authentication callbacks must use ``find_user_by_oidc``; names and email
+    addresses are mutable display attributes, not stable identity keys.
+    """
     key = (identifier or "").strip().lower()
     if not key:
         return None
@@ -293,10 +253,100 @@ def find_user_by_identity(identifier: str) -> dict | None:
     return None
 
 
+def find_user_by_oidc(issuer: str, subject: str) -> dict | None:
+    """Resolve one explicitly bound OIDC identity; duplicates fail closed."""
+    issuer_key = (issuer or "").strip().rstrip("/")
+    subject_key = (subject or "").strip()
+    if not issuer_key or not subject_key:
+        return None
+    matches = []
+    for user in load_users():
+        identities = user.get("oidc_identities") or []
+        if isinstance(identities, list) and any(
+            isinstance(item, dict)
+            and str(item.get("issuer", "")).strip().rstrip("/") == issuer_key
+            and str(item.get("subject", "")).strip() == subject_key
+            for item in identities
+        ):
+            matches.append(user)
+    return matches[0] if len(matches) == 1 else None
+
+
+def bind_oidc_identity(username: str, issuer: str, subject: str) -> dict:
+    """Bind a verified issuer/subject pair to one existing account."""
+    issuer_key = (issuer or "").strip().rstrip("/")
+    subject_key = (subject or "").strip()
+    if not issuer_key.startswith(("https://", "http://")) or len(issuer_key) > 512:
+        raise ValueError("OIDC issuer 必须是有效的 HTTP(S) 地址")
+    if not subject_key or len(subject_key) > 512:
+        raise ValueError("OIDC subject 不能为空且不能超过 512 位")
+    with _LOCK:
+        users = load_users()
+        target = next(
+            (entry for entry in users if entry.get("username", "").lower() == username.lower()),
+            None,
+        )
+        if target is None:
+            raise KeyError(username)
+        if target.get("role") not in {"business_manager", "admin", "technical"}:
+            raise ValueError("OIDC 身份只能绑定到已确认四角色中的员工账号")
+        for entry in users:
+            for identity in entry.get("oidc_identities") or []:
+                if (
+                    isinstance(identity, dict)
+                    and str(identity.get("issuer", "")).strip().rstrip("/") == issuer_key
+                    and str(identity.get("subject", "")).strip() == subject_key
+                    and entry.get("username", "").lower() != username.lower()
+                ):
+                    raise ValueError("OIDC 身份已绑定到其他账号")
+        identities = target.get("oidc_identities") or []
+        if not isinstance(identities, list):
+            identities = []
+        identities = [
+            item for item in identities
+            if not (
+                isinstance(item, dict)
+                and str(item.get("issuer", "")).strip().rstrip("/") == issuer_key
+            )
+        ]
+        identities.append({"issuer": issuer_key, "subject": subject_key})
+        target["oidc_identities"] = identities
+        target["session_epoch"] = int(target.get("session_epoch", 0)) + 1
+        target["updated_at"] = _now()
+        save_users(users)
+        return public_user(target)
+
+
+def unbind_oidc_identity(username: str, issuer: str) -> dict:
+    issuer_key = (issuer or "").strip().rstrip("/")
+    if not issuer_key:
+        raise ValueError("OIDC issuer 不能为空")
+    with _LOCK:
+        users = load_users()
+        target = next(
+            (entry for entry in users if entry.get("username", "").lower() == username.lower()),
+            None,
+        )
+        if target is None:
+            raise KeyError(username)
+        identities = target.get("oidc_identities") or []
+        target["oidc_identities"] = [
+            item for item in identities
+            if not (
+                isinstance(item, dict)
+                and str(item.get("issuer", "")).strip().rstrip("/") == issuer_key
+            )
+        ]
+        target["session_epoch"] = int(target.get("session_epoch", 0)) + 1
+        target["updated_at"] = _now()
+        save_users(users)
+        return public_user(target)
+
+
 def create_user(
     username: str,
     password: str,
-    role: str = "viewer",
+    role: str = "business_manager",
     display_name: str = "",
     department: str = "",
     projects: object = None,
@@ -306,6 +356,8 @@ def create_user(
         raise ValueError("用户名不能为空且不超过 64 位")
     if role not in ROLES:
         raise ValueError(f"角色必须是 {', '.join(ROLES)}")
+    if role == "customer":
+        raise ValueError("外部客户账号由微信小程序身份服务管理，不能创建为员工登录账号")
     normalized = normalize_projects(projects)
     with _LOCK:
         users = load_users()
@@ -318,6 +370,7 @@ def create_user(
             "active": True,
             "department": (department or "").strip()[:128],
             "projects": normalized,
+            "permission_grants": [],
             "auth_provider": "local",
             "session_epoch": 0,
             "failed_logins": 0,
@@ -390,6 +443,8 @@ def update_user(
 ) -> dict:
     if role is not None and role not in ROLES:
         raise ValueError(f"角色必须是 {', '.join(ROLES)}")
+    if role == "customer":
+        raise ValueError("外部客户身份不能映射为员工登录账号")
     normalized = normalize_projects(projects) if projects is not None else None
     with _LOCK:
         users = load_users()
@@ -408,16 +463,62 @@ def update_user(
         if losing_admin and _count_active_admins(users) <= 1:
             raise ValueError("至少保留一个启用的管理员")
         if role is not None:
+            if role != target.get("role"):
+                target["permission_grants"] = []
             target["role"] = role
         if active is not None:
+            if not active:
+                target["permission_grants"] = []
             target["active"] = bool(active)
         if display_name is not None:
             target["display_name"] = display_name or target["username"]
         if department is not None:
             target["department"] = department.strip()[:128]
         if normalized is not None:
+            if normalized != list(target.get("projects") or []):
+                target["permission_grants"] = []
             target["projects"] = normalized
         target["updated_at"] = _now()
+        save_users(users)
+        return public_user(target)
+
+
+def set_review_permissions(
+    username: str,
+    permissions: object,
+    *,
+    granted_by: str,
+    reason: str,
+) -> dict:
+    """Replace an account's explicitly confirmed report/standard review grants."""
+    normalized = role_policy.normalize_review_permissions(permissions)
+    actor = (granted_by or "").strip()
+    why = (reason or "").strip()
+    if not actor or not why:
+        raise ValueError("逐账号授权必须填写审批人和原因")
+    if len(why) > 500:
+        raise ValueError("授权原因不能超过 500 字")
+    with _LOCK:
+        users = load_users()
+        target = next(
+            (entry for entry in users if entry.get("username", "").lower() == username.lower()),
+            None,
+        )
+        if target is None:
+            raise KeyError(username)
+        if target.get("role") not in {"business_manager", "admin", "technical"}:
+            raise ValueError("审核权限只能授予已确认四角色中的员工账号")
+        stamp = _now()
+        target["permission_grants"] = [
+            {
+                "permission": permission,
+                "granted_by": actor,
+                "granted_at": stamp,
+                "reason": why,
+            }
+            for permission in normalized
+        ]
+        target["updated_at"] = stamp
         save_users(users)
         return public_user(target)
 
@@ -426,12 +527,23 @@ def public_user(user: dict) -> dict:
     return {
         "username": user.get("username", ""),
         "display_name": user.get("display_name") or user.get("username", ""),
-        "role": user.get("role", "viewer"),
+        "role": user.get("role", ""),
         "active": bool(user.get("active", True)),
         "department": user.get("department", ""),
         "projects": list(user.get("projects") or []),
+        "review_permissions": sorted(role_policy.valid_account_review_grants(user)),
+        "permissions": sorted(
+            set(role_policy.ROLE_PERMISSIONS.get(user.get("role", ""), ()))
+            | set(role_policy.valid_account_review_grants(user))
+        ),
         "restricted": is_restricted(user),
         "auth_provider": user.get("auth_provider", "local"),
+        "oidc_linked": bool(user.get("oidc_identities")),
+        "oidc_issuers": sorted({
+            str(identity.get("issuer", ""))
+            for identity in (user.get("oidc_identities") or [])
+            if isinstance(identity, dict) and identity.get("issuer")
+        }),
         "last_login_at": user.get("last_login_at", ""),
         "created_at": user.get("created_at", ""),
         "updated_at": user.get("updated_at", ""),
@@ -667,24 +779,30 @@ def _maybe_prune() -> None:
     prune_audit()
 
 
-def audit(entry: dict) -> None:
+def audit(entry: dict) -> bool:
     record = {"at": _now(), **entry}
     if store.config.postgres_enabled():
         try:
             store.audit.append(record)
-            _maybe_prune()
         except Exception:  # noqa: BLE001 - auditing must never break a request
+            return False
+        try:
+            _maybe_prune()
+        except Exception:  # noqa: BLE001 - retention maintenance is separate from the append
             pass
-        return
+        return True
     try:
         with _AUDIT_LOCK:
             AUDIT_DIR.mkdir(parents=True, exist_ok=True)
             with AUDIT_PATH.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            _maybe_prune()
     except OSError:
-        # Auditing must never take the business endpoint down.
+        return False
+    try:
+        _maybe_prune()
+    except OSError:
         pass
+    return True
 
 
 def _time_bound(value: str, end: bool) -> datetime | None:

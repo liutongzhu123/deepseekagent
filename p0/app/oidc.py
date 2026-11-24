@@ -1,10 +1,11 @@
 """Generic OIDC (authorization code + PKCE) login for the P1 console.
 
 Default off: only active when ``P0_OIDC_ISSUER`` and ``P0_OIDC_CLIENT_ID`` are
-set.  The flow binds an IdP identity to an **existing** active account by
-``preferred_username`` (or a user's ``email`` when present); it never creates a
-user or changes roles.  ID tokens are validated (RS256 + JWKS, issuer,
-audience, expiry, nonce) before a local session is issued.
+set.  The flow binds an IdP identity to an **existing** active account by an
+explicit ``(issuer, subject)`` mapping; email and username are never used to
+claim an account.  It never creates a user or changes roles.  ID tokens are
+validated (RS256 + JWKS, issuer, audience, expiry, nonce) before a local
+session is issued.
 
 Security notes:
 
@@ -291,6 +292,8 @@ def validate_id_token(
         raise OidcError("ID token issued in the future")
     if claims.get("nonce") != nonce:
         raise OidcError("ID token nonce mismatch")
+    if not isinstance(claims.get("sub"), str) or not claims["sub"].strip():
+        raise OidcError("ID token has no stable subject")
     return claims
 
 

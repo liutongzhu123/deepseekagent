@@ -39,8 +39,8 @@ def test_password_policy(env):
         auth.create_user("weak", "short1!")
     with pytest.raises(ValueError, match="至少两类"):
         auth.create_user("weak2", "abcdefghij")
-    user = auth.create_user("strong", "abcdefgh12", role="reviewer")
-    assert user["role"] == "reviewer"
+    user = auth.create_user("strong", "abcdefgh12", role="technical")
+    assert user["role"] == "technical"
     assert user["projects"] == []
     assert auth.authenticate("strong", "abcdefgh12")["username"] == "strong"
 
@@ -106,10 +106,10 @@ def test_admin_updates_user_and_guards_last_admin(env):
 
     updated = admin.patch(
         "/api/v1/auth/users/carol",
-        json={"role": "reviewer", "projects": ["P-A"], "department": "质量部"},
+        json={"role": "technical", "projects": ["P-A"], "department": "质量部"},
     )
     assert updated.status_code == 200
-    assert updated.json()["user"]["role"] == "reviewer"
+    assert updated.json()["user"]["role"] == "technical"
     assert updated.json()["user"]["projects"] == ["P-A"]
     assert updated.json()["user"]["restricted"] is True
 

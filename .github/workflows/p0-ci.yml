@@ -5,11 +5,17 @@ on:
     branches: [main]
     paths:
       - "p0/**"
+      - "weknora/**"
+      - "ci/upstream-v0.9.1.json"
+      - "scripts/prepare_weknora_source.py"
       - ".github/workflows/p0-ci.yml"
   pull_request:
     branches: [main]
     paths:
       - "p0/**"
+      - "weknora/**"
+      - "ci/upstream-v0.9.1.json"
+      - "scripts/prepare_weknora_source.py"
       - ".github/workflows/p0-ci.yml"
   workflow_dispatch:
 
@@ -44,6 +50,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run workbench and Mini Program tests
+        run: node --test p0/static/tests/*.test.js p0/miniprogram/tests/*.test.js
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -58,3 +71,28 @@ jobs:
       - name: Run pytest
         working-directory: p0
         run: python -m pytest -q
+
+  weknora-oidc-identity:
+    name: WeKnora OIDC identity patch (Go 1.26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.11"
+
+      - name: Download pinned official WeKnora source
+        run: curl --fail --location --silent --show-error https://github.com/Tencent/WeKnora/archive/refs/tags/v0.9.1.tar.gz --output "$RUNNER_TEMP/weknora-v0.9.1.tar.gz"
+
+      - name: Verify source manifest and apply CNZ patch
+        run: python3 scripts/prepare_weknora_source.py "$RUNNER_TEMP/weknora-v0.9.1.tar.gz" "$RUNNER_TEMP/cnz-weknora"
+
+      - name: Run identity-binding and OIDC verification tests
+        working-directory: ${{ runner.temp }}/cnz-weknora/WeKnora-0.9.1
+        run: >-
+          go test ./internal/application/repository ./internal/application/service
+          ./internal/handler ./internal/router ./internal/types
+          -run 'TestOIDCIdentityRequiresExplicitUniqueBinding|TestResolveOIDCUserInfo|TestModelCatalogRequiresSystemAdmin|TestAuditAction_SystemNamespacePrefix|TestAuditAction_SystemWireValues'
+          -count=1
