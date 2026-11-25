@@ -32,16 +32,29 @@ test -f /opt/cnz-weknora/active/WeKnora-0.9.1/.env
 test "$(stat -c %a /opt/cnz-weknora/active/WeKnora-0.9.1/.env)" = 600
 (cd /var/backups/testkb-yunan-persist-20261124 && sha256sum -c SHA256SUMS >/dev/null)
 test "$(docker ps -aq --filter name='^cnz-weknora-' | wc -l)" -eq 0
-test -z "$(docker volume ls -q --filter name=cnz-weknora)"
 test ! -e "$root/active-release" && test ! -L "$root/active-release"
 test ! -e "$incoming" && test ! -L "$incoming"
 if [ -e "$release" ] || [ -L "$release" ]; then
   test -d "$release" && test ! -L "$release"
   grep -Fxq "$sha" "$release/DEPLOYED_FROM_MAIN"
   test "$(stat -c %a "$release/source/WeKnora-0.9.1/.env")" = 600
+  release_present=1
   echo RELEASE_PRESENT
 else
+  release_present=0
   echo RELEASE_NEW
+fi
+expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data | sort)"
+existing_volumes="$(docker volume ls -q --filter name=cnz-weknora | sort)"
+if [ -n "$existing_volumes" ]; then
+  test "$release_present" -eq 1
+  test "$existing_volumes" = "$expected_volumes"
+  while IFS= read -r volume; do
+    logical="${volume#cnz-weknora_}"
+    test "$(docker volume inspect -f '{{ index .Labels "com.docker.compose.project" }}' "$volume")" = cnz-weknora
+    test "$(docker volume inspect -f '{{ index .Labels "com.docker.compose.volume" }}' "$volume")" = "$logical"
+  done <<< "$existing_volumes"
+  echo PROJECT_VOLUMES_REUSED
 fi
 test "$(docker ps --filter name=yunan-persist --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 5
 test "$(df -Pk /opt | awk 'NR==2 {print $4}')" -ge 31457280
@@ -99,7 +112,7 @@ rollback() {
   exit "$code"
 }
 trap rollback EXIT
-compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"'
+compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert s["redis"]["healthcheck"]["test"]==["CMD","redis-cli","ping"]'
 echo COMPOSE_CONTRACT_OK
 phase=image_build
 compose build app frontend docreader
@@ -178,6 +191,8 @@ def validate_compose(config: dict) -> None:
     app_env=s["app"].get("environment",{})
     if app_env.get("DISABLE_REGISTRATION") != "true" or app_env.get("OIDC_AUTH_ENABLE") != "false":
         raise ValueError("F6: registration must be disabled and OIDC must stay off")
+    if s["redis"].get("healthcheck",{}).get("test") != ["CMD", "redis-cli", "ping"]:
+        raise ValueError("F6: Redis healthcheck is required")
 
 def remote(target,script,sha,timeout=300):
     return subprocess.run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",target,"bash","-s","--",sha],

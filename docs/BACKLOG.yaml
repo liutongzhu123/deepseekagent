@@ -976,7 +976,7 @@ tasks:
       - 有 Go 测试、镜像构建、健康检查、合成知识样例检索/引用、OIDC 账号绑定与权限拒绝、备份恢复和回滚验收证据
       - 四角色名称保持新客户/小微客户、业务经理、系统管理员、技术部门；reviewer 的历史权限逐账号确认前不自动映射
     files: [weknora/, ci/upstream-v0.9.1.json, scripts/prepare_weknora_source.py, .github/workflows/p0-ci.yml, docs/weknora-source-baseline-and-web-unification-2026-11-24.md]
-    note: PR #238/#239/#240（OIDC 身份、apt 顺序、Rustup 镜像）、PR #241（testkb 首次部署器）、PR #242（release staging 路径）和 PR #243（安全失败阶段标记）已合并 main，Agent/Python/Go CI 全通过。部署器校验 testkb 备份、5 个 yunan-persist 健康、回环端口及磁盘后，已上传官方 6,441 文件源码 release；构建因 testkb 直连 proxy.golang.org 与 Docker Hub 超时停止。当前无 CNZ 容器/卷/active 指针，yunan-persist 未变更。已探测可达 goproxy.cn 与 docker.m.daocloud.io；本 PR 加入项目级镜像参数、保持 Node/nginx digest，并改为使用 go.mod/go.sum 锁定 migrate。CI 绿灯后从 main 重试构建。
+    note: PR #238/#239/#240（OIDC 身份、apt 顺序、Rustup 镜像）、PR #241（testkb 首次部署器）、PR #242（release staging 路径）和 PR #243（安全失败阶段标记）已合并 main，Agent/Python/Go CI 全通过。testkb 部署校验备份、yunan-persist 健康、回环端口与磁盘后，构建锁定的 WeKnora v0.9.1 镜像并启动隔离服务；首轮运行发现部署器要求 Redis healthy 但 override 未定义健康检查，已按 F8 停止 CNZ 服务并保留其四个独立卷，yunan-persist 未变更。部署修复需为 Redis 加 healthcheck，并允许同一 main SHA、release 标记、无 CNZ 容器且卷名/Compose 所有权标签完全匹配时安全复用失败启动留下的卷；不同 release、卷集合异常、所有权不符或 active 指针存在都必须拒绝重试。
 
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）
