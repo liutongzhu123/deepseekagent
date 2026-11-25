@@ -8,7 +8,7 @@
 - commit：`71c32af9273482e0dad013d0e3bea2f4d719516c`
 - 官方归档 SHA-256：`183b0538d895b85906da030b8b62a93bd884cd1967d10bcb38020b549b3bc5cd`
 - 来源清单：[`ci/upstream-v0.9.1.json`](../ci/upstream-v0.9.1.json)
-- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)、[`patches/0002-rustup-mirror.patch`](patches/0002-rustup-mirror.patch)、[`patches/0003-cnz-testkb-build-mirrors.patch`](patches/0003-cnz-testkb-build-mirrors.patch)、[`patches/0004-cnz-knowledge-workspace-profile.patch`](patches/0004-cnz-knowledge-workspace-profile.patch)
+- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)、[`patches/0002-rustup-mirror.patch`](patches/0002-rustup-mirror.patch)、[`patches/0003-cnz-testkb-build-mirrors.patch`](patches/0003-cnz-testkb-build-mirrors.patch)、[`patches/0004-cnz-knowledge-workspace-profile.patch`](patches/0004-cnz-knowledge-workspace-profile.patch)、[`patches/0005-cnz-login-scope-copy.patch`](patches/0005-cnz-login-scope-copy.patch)
 
 CNZ 专用前端只保留知识库管理、平台设置和退出入口；通用聊天、Agent、自动化、工具箱、组织与制品页面从导航中隐藏，并由路由白名单阻止直接打开。设置里仅保留模型、解析器、空间与系统管理、任务队列、审计、账号及成员配置；其他设置入口隐藏，直接设置链接也回退到模型页。业务工作台仍是报价、客服与业务知识问答的统一入口；WeKnora 继续承担知识存储、解析和检索。前端隐藏/路由限制只用于精简操作面，后端 API 授权仍是最终安全边界。
 
@@ -20,7 +20,7 @@ CNZ 专用前端只保留知识库管理、平台设置和退出入口；通用�
 python3 scripts/prepare_weknora_source.py /path/to/v0.9.1.tar.gz /path/to/new-build-dir
 ```
 
-脚本拒绝不匹配的归档、损坏或内容不同的清单、危险归档路径，以及非空目标目录；它逐个验证 6,441 个文件后，按顺序检查并应用四个项目补丁。GitHub Actions 也会运行这条准备路径、OIDC 测试和 CNZ 前端功能档测试。
+脚本拒绝不匹配的归档、损坏或内容不同的清单、危险归档路径，以及非空目标目录；它逐个验证 6,441 个文件后，按顺序检查并应用五个项目补丁。GitHub Actions 也会运行这条准备路径、OIDC 测试、CNZ 前端功能档与登录文案测试。
 
 ### 构建网络
 
