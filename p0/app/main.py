@@ -1230,7 +1230,7 @@ def replay_business_rule_draft(
         "scope": "read_only_draft_replay",
         "message": "仅用于内部规则版本复核；没有改变现行规则或生成正式业务结论",
     }
-    return _redact_customer_risk_candidates(response, admin=user.get("role") == "admin")
+    return _redact_customer_risk_candidates(response, admin=False)
 
 
 class RecordIn(BaseModel):

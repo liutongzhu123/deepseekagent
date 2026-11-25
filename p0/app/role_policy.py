@@ -33,7 +33,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "crm:read",
             "crm:prices:manage",
             "system:status",
-            "customer-service:registration:review",
             "customer-service:order:review",
             "customer-service:conversation:manage",
             "customer-service:quote:manage",
@@ -66,6 +65,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "config:manage:quote",
             "config:manage:business",
             "system:status",
+            "customer-service:registration:review",
             "crm:read",
             "crm:base:manage",
         }
@@ -77,6 +77,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "schedule:read",
             "schedule:manage",
             "rush-rule:manage",
+            "standard:parse",
             "standard:read",
             "standard:ask",
         }

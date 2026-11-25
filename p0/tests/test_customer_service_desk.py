@@ -45,8 +45,8 @@ def _admin(monkeypatch, tmp_path):
     monkeypatch.setattr(auth, "AUDIT_PATH", tmp_path / "audit" / "audit.jsonl")
     monkeypatch.setattr(auth, "INITIAL_PASSWORD_PATH", tmp_path / "auth" / "initial.txt")
     monkeypatch.setattr(auth, "_SECRET", None)
-    auth.create_user("desk-admin", "admin-password", role="admin")
-    auth.create_user("desk-sales", "sales-password", role="sales")
+    auth.create_user("desk-admin", "admin-password", role="business_manager")
+    auth.create_user("desk-sales", "sales-password", role="technical")
     client = TestClient(main.app)
     assert client.post("/api/v1/auth/login", json={"username": "desk-admin", "password": "admin-password"}).status_code == 200
     return client
@@ -188,7 +188,7 @@ def test_admin_queue_claim_assign_archive_and_reason_audit(monkeypatch, tmp_path
     conversation = _create(client, created).json()["conversation"]
     assert client.get("/api/v1/customer-service/demo/admin/conversations").status_code == 401
     admin = _admin(monkeypatch, tmp_path)
-    auth.create_user("desk-admin-2", "admin-password-2", role="admin")
+    auth.create_user("desk-admin-2", "admin-password-2", role="business_manager")
     assert admin.get("/api/v1/customer-service/demo/admin/conversations").status_code == 200
     sales = TestClient(main.app)
     assert sales.post("/api/v1/auth/login", json={"username": "desk-sales", "password": "sales-password"}).status_code == 200
@@ -285,7 +285,7 @@ def test_employee_reply_is_assignee_scoped_customer_readable_and_not_external(mo
     assert unassigned.status_code == 409
 
     assert _admin_action(admin, conversation["conversation_id"], "claim", {"reason": "desk-admin 内部处置理由"}, "desk-admin-claim-operation-0003").status_code == 200
-    auth.create_user("desk-admin-2", "admin-password-2", role="admin")
+    auth.create_user("desk-admin-2", "admin-password-2", role="business_manager")
     other_staff = TestClient(main.app)
     assert other_staff.post("/api/v1/auth/login", json={"username": "desk-admin-2", "password": "admin-password-2"}).status_code == 200
     assert other_staff.post(f"{admin_url}/reply", headers={"Idempotency-Key": "web-unassigned-reply-operation-002"}, json={"text": "非当前负责人不能回复"}).status_code == 409
@@ -348,7 +348,7 @@ def test_employee_unread_count_is_per_user_and_read_snapshot_preserves_new_messa
     assert "marked_read" not in str(customer_list[0]["history"])
 
     admin = _admin(monkeypatch, tmp_path)
-    second_admin = auth.create_user("desk-admin-2", "admin-password-2", role="admin")
+    second_admin = auth.create_user("desk-admin-2", "admin-password-2", role="business_manager")
     assert second_admin["username"] == "desk-admin-2"
     other = TestClient(main.app)
     assert other.post("/api/v1/auth/login", json={"username": "desk-admin-2", "password": "admin-password-2"}).status_code == 200

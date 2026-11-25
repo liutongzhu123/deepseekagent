@@ -42,7 +42,7 @@ def test_business_manager_can_quote_and_manage_quote_data_but_not_global_rules()
     assert not role_policy.has_permission(user, "crm:base:manage")
     assert not role_policy.has_permission(user, "config:manage:discount")
     assert not role_policy.has_permission(user, "report:audit")
-    assert role_policy.has_permission(user, "customer-service:registration:review")
+    assert not role_policy.has_permission(user, "customer-service:registration:review")
     assert role_policy.has_permission(user, "customer-service:order:review")
     assert role_policy.has_permission(user, "customer-service:conversation:manage")
 
@@ -52,6 +52,7 @@ def test_technical_role_can_read_rules_and_manage_schedule_and_rush_rules():
     assert role_policy.has_permission(user, "rules:read")
     assert role_policy.has_permission(user, "schedule:manage")
     assert role_policy.has_permission(user, "rush-rule:manage")
+    assert role_policy.has_permission(user, "standard:parse")
     assert not role_policy.has_permission(user, "config:manage:discount")
     assert not role_policy.has_permission(user, "crm:quote:write")
     assert not role_policy.has_permission(user, "standard:review")
@@ -63,6 +64,7 @@ def test_admin_does_not_implicitly_inherit_report_or_standard_review():
     user = {"role": "admin", "active": True}
     assert role_policy.has_permission(user, "user:manage")
     assert role_policy.has_permission(user, "config:manage:discount")
+    assert role_policy.has_permission(user, "customer-service:registration:review")
     assert not role_policy.has_permission(user, "report:audit")
     assert not role_policy.has_permission(user, "standard:review")
 

@@ -157,8 +157,8 @@ def test_admin_review_requires_auth_reason_and_enforces_state(monkeypatch, tmp_p
     monkeypatch.setattr(auth, "AUDIT_PATH", tmp_path / "audit" / "audit.jsonl")
     monkeypatch.setattr(auth, "INITIAL_PASSWORD_PATH", tmp_path / "auth" / "initial.txt")
     monkeypatch.setattr(auth, "_SECRET", None)
-    auth.create_user("order-admin", "admin-password", role="admin")
-    auth.create_user("order-sales", "sales-password", role="sales")
+    auth.create_user("order-admin", "admin-password", role="business_manager")
+    auth.create_user("order-sales", "sales-password", role="technical")
     admin = TestClient(main.app)
     assert admin.post("/api/v1/auth/login", json={"username": "order-admin", "password": "admin-password"}).status_code == 200
     queue = admin.get("/api/v1/customer-service/demo/admin/orders")
