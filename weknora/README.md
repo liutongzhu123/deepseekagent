@@ -8,7 +8,7 @@
 - commit：`71c32af9273482e0dad013d0e3bea2f4d719516c`
 - 官方归档 SHA-256：`183b0538d895b85906da030b8b62a93bd884cd1967d10bcb38020b549b3bc5cd`
 - 来源清单：[`ci/upstream-v0.9.1.json`](../ci/upstream-v0.9.1.json)
-- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)、[`patches/0002-rustup-mirror.patch`](patches/0002-rustup-mirror.patch)
+- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)、[`patches/0002-rustup-mirror.patch`](patches/0002-rustup-mirror.patch)、[`patches/0003-cnz-testkb-build-mirrors.patch`](patches/0003-cnz-testkb-build-mirrors.patch)
 
 ## 准备源码
 
@@ -22,7 +22,7 @@ python3 scripts/prepare_weknora_source.py /path/to/v0.9.1.tar.gz /path/to/new-bu
 
 ### 构建网络
 
-镜像构建要显式设置 Dockerfile 支持的 Debian 镜像主机名、Go 模块代理、Rustup 分发镜像及 docreader 的 Debian 镜像 URL。`APK_MIRROR_ARG` 不带 scheme，`APT_MIRROR` 带 `http://`；选择 HTTP 镜像可在精简基础镜像安装 CA 证书之前下载 apt 索引。`RUSTUP_MIRROR_ARG` 指向提供 `rustup-init.sh`、Rust 工具链和组件的 Rustup 镜像。构建参数是公开镜像地址，不含凭据。Compose override 将 Debian、Go、Rustup 参数传给 app 构建。
+构建环境不能直连 Docker Hub 与 `proxy.golang.org`，但 testkb 对项目级 Docker Hub 镜像 `docker.m.daocloud.io`、Go 模块代理 `https://goproxy.cn`、Debian 清华镜像及 Rustup `https://rsproxy.cn` 的探测成功。构建 override 把这些公开端点只传给 CNZ app/frontend/docreader；不修改 Docker daemon 的全局 registry 配置，不影响 `yunan-persist`。Docker Hub 的基础镜像经代理路径获取，已固定 digest 的 Node/nginx 继续按原 digest 拉取；Go migrate 工具从已锁定的主项目 `go.mod`/`go.sum` 安装，不再查询 `@latest`。`APK_MIRROR_ARG` 不带 scheme，`APT_MIRROR` 带 `http://`；选择 HTTP 镜像可在精简基础镜像安装 CA 证书之前下载 apt 索引。`RUSTUP_MIRROR_ARG` 指向提供 `rustup-init.sh`、Rust 工具链和组件的 Rustup 镜像。构建参数是公开镜像地址，不含凭据。
 
 ```sh
 docker compose -p cnz-weknora \
@@ -30,7 +30,7 @@ docker compose -p cnz-weknora \
   build app frontend docreader
 ```
 
-在 `.env` 中设置 `APK_MIRROR_ARG`、`APT_MIRROR`、`GOPROXY_ARG`、`NPM_REGISTRY`、`RUSTUP_MIRROR_ARG` 后运行；测试环境模板给出已验证的镜像端点示例。`.env` 仍必须包含独立强随机数据库/Redis 密码并保持 `0600`。
+在 `.env` 中设置 `APK_MIRROR_ARG`、`APT_MIRROR`、`GOPROXY_ARG`、`CNZ_DOCKERHUB_MIRROR_ARG`、`NPM_REGISTRY`、`RUSTUP_MIRROR_ARG` 后运行；测试环境模板给出已验证的镜像端点示例。`.env` 仍必须包含独立强随机数据库/Redis 密码并保持 `0600`。
 
 ## testkb 环境边界
 

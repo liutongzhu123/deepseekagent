@@ -976,7 +976,7 @@ tasks:
       - 有 Go 测试、镜像构建、健康检查、合成知识样例检索/引用、OIDC 账号绑定与权限拒绝、备份恢复和回滚验收证据
       - 四角色名称保持新客户/小微客户、业务经理、系统管理员、技术部门；reviewer 的历史权限逐账号确认前不自动映射
     files: [weknora/, ci/upstream-v0.9.1.json, scripts/prepare_weknora_source.py, .github/workflows/p0-ci.yml, docs/weknora-source-baseline-and-web-unification-2026-11-24.md]
-    note: PR #238（身份适配，1be9d0c）和 PR #239（apt 镜像顺序，5160e17）已合并 main，Agent/Python/Go CI 均通过，P0 本地回归 1137 passed、41 skipped；testkb 备份校验通过，隔离栈端口 18082/39301 空闲。目标机 app 构建已完成 Debian apt、Go 模块和 DuckDB 阶段；两个 Rustup 安装点直连 static.rust-lang.org 超过 6 分钟无进度，已安全终止；未启动任何 CNZ 容器，yunan-persist 未改动。当前工作为将两处 Rustup 安装器及后续工具链下载统一改走显式配置的 rsproxy 镜像，待 CI 与合并后再重试构建。
+    note: PR #238/#239/#240（OIDC 身份、apt 顺序、Rustup 镜像）、PR #241（testkb 首次部署器）、PR #242（release staging 路径）和 PR #243（安全失败阶段标记）已合并 main，Agent/Python/Go CI 全通过。部署器校验 testkb 备份、5 个 yunan-persist 健康、回环端口及磁盘后，已上传官方 6,441 文件源码 release；构建因 testkb 直连 proxy.golang.org 与 Docker Hub 超时停止。当前无 CNZ 容器/卷/active 指针，yunan-persist 未变更。已探测可达 goproxy.cn 与 docker.m.daocloud.io；本 PR 加入项目级镜像参数、保持 Node/nginx digest，并改为使用 go.mod/go.sum 锁定 migrate。CI 绿灯后从 main 重试构建。
 
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）

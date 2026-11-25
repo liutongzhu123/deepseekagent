@@ -1,0 +1,88 @@
+--- a/docker/Dockerfile.app
++++ b/docker/Dockerfile.app
+@@ -1,5 +1,6 @@
+ # Build extension and daemon from the same pinned source on the runtime architecture.
+-FROM --platform=$TARGETPLATFORM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS browserskill
++ARG CNZ_DOCKERHUB_MIRROR_ARG=docker.m.daocloud.io
++FROM --platform=$TARGETPLATFORM ${CNZ_DOCKERHUB_MIRROR_ARG}/library/node@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS browserskill
+ WORKDIR /build
+ # Use the same optional Debian mirror as the Go builder and runtime stages.
+ ARG APK_MIRROR_ARG
+@@ -23,7 +24,7 @@
+ RUN bash scripts/build_browserskill.sh /opt/weknora/browserskill "${TARGETOS}/${TARGETARCH}"
+ 
+ # Build stage
+-FROM golang:1.26-bookworm AS builder
++FROM ${CNZ_DOCKERHUB_MIRROR_ARG}/library/golang:1.26-bookworm AS builder
+ 
+ WORKDIR /app
+ 
+@@ -47,13 +48,13 @@
+     apt-get install -y git build-essential libsqlite3-dev curl
+ 
+ # Install migrate tool
+-RUN go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
++COPY go.mod go.sum ./
++COPY third_party/anydoc-go/go.mod third_party/anydoc-go/go.mod
++RUN --mount=type=cache,target=/go/pkg/mod go mod download
++RUN --mount=type=cache,target=/go/pkg/mod go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate
+ 
+ # Copy go mod files. go.mod replace-points anydoc at ./third_party/anydoc-go,
+ # so that module's go.mod must exist before `go mod download`.
+-COPY go.mod go.sum ./
+-COPY third_party/anydoc-go/go.mod third_party/anydoc-go/go.mod
+-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+ COPY cmd/download cmd/download
+ RUN go run cmd/download/duckdb/duckdb.go
+ COPY . .
+@@ -103,7 +104,7 @@
+ RUN --mount=type=cache,target=/go/pkg/mod cp -r /go/pkg/mod/github.com/yanyiwu/ /app/yanyiwu/
+ 
+ # Final stage
+-FROM debian:12.12-slim
++FROM ${CNZ_DOCKERHUB_MIRROR_ARG}/library/debian:12.12-slim
+ 
+ WORKDIR /app
+ 
+--- a/docker/Dockerfile.docreader
++++ b/docker/Dockerfile.docreader
+@@ -1,7 +1,8 @@
+ # =========================
+ # 构建阶段（轻量化：仅文档解析 + 图片提取，无 OCR/VLM）
+ # =========================
+-FROM python:3.10.18-bookworm AS builder
++ARG CNZ_DOCKERHUB_MIRROR_ARG=docker.m.daocloud.io
++FROM ${CNZ_DOCKERHUB_MIRROR_ARG}/library/python:3.10.18-bookworm AS builder
+ 
+ ARG APT_MIRROR=""
+ RUN if [ -n "$APT_MIRROR" ]; then \
+@@ -79,7 +80,7 @@
+ # =========================
+ # 运行阶段（轻量化）
+ # =========================
+-FROM python:3.10.18-bookworm AS runner
++FROM ${CNZ_DOCKERHUB_MIRROR_ARG}/library/python:3.10.18-bookworm AS runner
+ 
+ ARG VERSION_ARG=unknown
+ ARG COMMIT_ID_ARG=unknown
+--- a/frontend/Dockerfile
++++ b/frontend/Dockerfile
+@@ -23,7 +23,8 @@
+ # Pin by digest: compiled JS is shipped in the runtime image, so a floating
+ # node tag could change production assets. This index includes linux/amd64
+ # and linux/arm64 (Node 24 / Debian bookworm slim).
+-FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS builder
++ARG CNZ_DOCKERHUB_MIRROR_ARG=docker.m.daocloud.io
++FROM --platform=$BUILDPLATFORM ${CNZ_DOCKERHUB_MIRROR_ARG}/library/node@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS builder
+ 
+ WORKDIR /frontend
+ 
+@@ -58,7 +59,7 @@
+ # newer Alpine base (3.24+) fails to start on old hosts such as CentOS 7
+ # (kernel 3.10 + old libseccomp), which broke v0.7.0. This digest is
+ # nginx 1.30.3 / Alpine 3.23.5, the same base as the working v0.6.3 image.
+-FROM nginx:1.30.3-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1
++FROM ${CNZ_DOCKERHUB_MIRROR_ARG}/library/nginx@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae399e81f780f814d1
+ 
+ COPY --from=builder /frontend/dist /usr/share/nginx/html
+ 

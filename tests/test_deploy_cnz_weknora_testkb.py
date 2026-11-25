@@ -25,10 +25,13 @@ def valid_config():
         "services": {
             "app": {"container_name": "cnz-weknora-app", "ports": [
                 {"host_ip": "127.0.0.1", "target": 8080, "published": "39301"}],
+                "build": {"args": {"CNZ_DOCKERHUB_MIRROR_ARG": "docker.m.daocloud.io", "GOPROXY_ARG": "https://goproxy.cn"}},
                 "environment": {"DISABLE_REGISTRATION": "true", "OIDC_AUTH_ENABLE": "false"}},
             "frontend": {"container_name": "cnz-weknora-frontend", "ports": [
-                {"host_ip": "127.0.0.1", "target": 80, "published": "18082"}]},
-            "docreader": {"container_name": "cnz-weknora-docreader"},
+                {"host_ip": "127.0.0.1", "target": 80, "published": "18082"}],
+                "build": {"args": {"CNZ_DOCKERHUB_MIRROR_ARG": "docker.m.daocloud.io"}}},
+            "docreader": {"container_name": "cnz-weknora-docreader",
+                "build": {"args": {"CNZ_DOCKERHUB_MIRROR_ARG": "docker.m.daocloud.io"}}},
             "postgres": {"container_name": "cnz-weknora-postgres"},
             "redis": {"container_name": "cnz-weknora-redis"},
         },
@@ -110,6 +113,17 @@ def test_f6_compose_rejects_docker_socket_registration_or_oidc():
     config = valid_config()
     config["services"]["app"]["environment"]["DISABLE_REGISTRATION"] = "false"
     with pytest.raises(ValueError, match="F6"):
+        deploy.validate_compose(config)
+
+
+def test_f6_compose_requires_reachable_build_mirrors():
+    config = valid_config()
+    config["services"]["app"]["build"]["args"]["GOPROXY_ARG"] = ""
+    with pytest.raises(ValueError, match="Go module proxy"):
+        deploy.validate_compose(config)
+    config = valid_config()
+    config["services"]["frontend"]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"] = "docker.io"
+    with pytest.raises(ValueError, match="Docker Hub mirror"):
         deploy.validate_compose(config)
 
 

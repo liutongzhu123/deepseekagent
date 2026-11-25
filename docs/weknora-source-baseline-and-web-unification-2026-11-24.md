@@ -100,6 +100,12 @@ v0.9.0 的官方 commit 对象不在该 Git 对象库，不能直接在该目录
 
 当前改动仍是**源码适配与可复现构建准备**，尚未部署至 `testkb`，也未迁移账号、变更注册配置或接收资料。历史 reviewer 的报告审核/标准复核能力按用户决定逐账号确认；确认前维持原权限隔离，不自动并入业务经理、技术人员或管理员。准备部署时使用新的 Compose 项目名、数据库、Redis、原文卷、容器名和端口，严禁挂接或迁移 `yunan-persist` 的既有存储。
 
+### 6.1 testkb 首次部署与构建网络复核（2026-11-26）
+
+PR #241 的首次安装部署器、PR #242 的 incoming/release 路径修正及 PR #243 的失败阶段标记已合并 main，Agent/Python/Go CI 均通过。部署器已验证 `/var/backups/testkb-yunan-persist-20261124/SHA256SUMS`、现有五个 `yunan-persist` 容器健康、端口和磁盘余量；第 2 次部署将 6,441 个官方源文件及中汽补丁上传到按 main SHA 命名的隔离 release，但镜像构建因 testkb 无法直连 `proxy.golang.org` 与 Docker Hub 而停止。失败后没有 CNZ 容器、数据卷或 active 指针；`yunan-persist` 未变更。
+
+网络只读探测确认 testkb 可达 `https://goproxy.cn`、`docker.m.daocloud.io`、`https://rsproxy.cn` 和 Debian 清华镜像。当前 PR 正将 Go migrate 安装改为主项目 `go.mod` / `go.sum` 锁定的版本，并对 app/frontend/docreader 使用项目级 Docker Hub 镜像参数；已锁定 digest 的 Node 与 nginx 保持原 digest。不会修改 Docker daemon 的全局 registry 配置。该补丁通过官方 6,441 文件清单复现、Docker Compose 渲染及 loopback/卷/容器/权限配置断言后，才重试镜像构建。
+
 ## 4. 两个 Web 端能否合并
 
 ### 4.1 真实差异

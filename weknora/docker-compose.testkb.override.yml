@@ -2,6 +2,9 @@ services:
   frontend:
     image: cnz-weknora-ui:dev
     container_name: cnz-weknora-frontend
+    build:
+      args:
+        - CNZ_DOCKERHUB_MIRROR_ARG=${CNZ_DOCKERHUB_MIRROR_ARG:-docker.m.daocloud.io}
 
   app:
     image: cnz-weknora-app:dev
@@ -9,12 +12,16 @@ services:
     build:
       args:
         - APK_MIRROR_ARG=${APK_MIRROR_ARG:-mirrors.tuna.tsinghua.edu.cn}
-        - GOPROXY_ARG=${GOPROXY_ARG:-}
+        - GOPROXY_ARG=${GOPROXY_ARG:-https://goproxy.cn}
         - RUSTUP_MIRROR_ARG=${RUSTUP_MIRROR_ARG:-https://rsproxy.cn}
+        - CNZ_DOCKERHUB_MIRROR_ARG=${CNZ_DOCKERHUB_MIRROR_ARG:-docker.m.daocloud.io}
 
   docreader:
     image: cnz-weknora-docreader:dev
     container_name: cnz-weknora-docreader
+    build:
+      args:
+        - CNZ_DOCKERHUB_MIRROR_ARG=${CNZ_DOCKERHUB_MIRROR_ARG:-docker.m.daocloud.io}
 
   postgres:
     container_name: cnz-weknora-postgres

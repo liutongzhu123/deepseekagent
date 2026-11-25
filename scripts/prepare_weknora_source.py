@@ -23,6 +23,7 @@ MANIFEST = ROOT / "ci/upstream-v0.9.1.json"
 PATCHES = (
     ROOT / "weknora/patches/0001-cnz-explicit-oidc-identity.patch",
     ROOT / "weknora/patches/0002-rustup-mirror.patch",
+    ROOT / "weknora/patches/0003-cnz-testkb-build-mirrors.patch",
 )
 
 
