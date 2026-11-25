@@ -46,6 +46,7 @@ def test_f1_fetch_failure_stops_before_any_remote_action(monkeypatch, tmp_path):
         subprocess.CompletedProcess([], 0, "local-commit-sha", ""),
         subprocess.CompletedProcess([], 0, "https://github.com/acme/repo.git", ""),
         subprocess.CompletedProcess([], 1, "", "API unavailable"),
+        subprocess.CompletedProcess([], 1, "", "no local tree"),
     ]
     monkeypatch.setattr(deploy, "run", lambda *_a, **_k: answers.pop(0))
     with pytest.raises(RuntimeError, match="F1"):
@@ -74,7 +75,6 @@ def test_f1_github_api_fallback_requires_exact_main_tree(monkeypatch, tmp_path):
         subprocess.CompletedProcess([], 0, "https://github.com/acme/repo.git", ""),
         subprocess.CompletedProcess([], 0, "a" * 40 + "\t" + "tree-sha", ""),
         subprocess.CompletedProcess([], 0, "tree-sha", ""),
-        subprocess.CompletedProcess([], 0, "local-commit-sha", ""),
         subprocess.CompletedProcess([], 0, "", ""),
     ]
     monkeypatch.setattr(deploy, "run", lambda *_a, **_k: answers.pop(0))
