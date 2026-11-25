@@ -156,7 +156,8 @@ def oidc_env(monkeypatch, tmp_path):
     monkeypatch.setenv("P0_OIDC_REDIRECT_URI", "https://p0.example/p0/api/v1/auth/oidc/callback")
     monkeypatch.setattr(oidc, "_DISCOVERY_CACHE", {})
     monkeypatch.setattr(oidc, "_JWKS_CACHE", {})
-    auth.create_user("alice", "alice-pass-1", role="reviewer")
+    auth.create_user("alice", "alice-pass-1", role="technical")
+    auth.bind_oidc_identity("alice", "https://idp.example", "subject-1")
     return SimpleNamespace(client=TestClient(main.app), tmp=tmp_path)
 
 
@@ -175,7 +176,7 @@ def _login_flow(client: TestClient, claims: dict, monkeypatch) -> httpx.Response
 
 
 def test_callback_creates_session_for_existing_user(oidc_env, monkeypatch):
-    response = _login_flow(oidc_env.client, {"preferred_username": "alice"}, monkeypatch)
+    response = _login_flow(oidc_env.client, _claims(), monkeypatch)
     assert response.status_code == 303
     assert response.headers["location"].endswith("/standards")
     me = oidc_env.client.get("/api/v1/auth/me")
@@ -184,13 +185,42 @@ def test_callback_creates_session_for_existing_user(oidc_env, monkeypatch):
 
 
 def test_callback_rejects_unknown_user(oidc_env, monkeypatch):
-    response = _login_flow(oidc_env.client, {"preferred_username": "nobody"}, monkeypatch)
+    response = _login_flow(oidc_env.client, _claims(sub="subject-nobody", preferred_username="alice"), monkeypatch)
     assert response.status_code == 303
     assert "sso_error=account" in response.headers["location"]
 
 
+def test_oidc_identity_binding_uses_stable_subject_and_rejects_duplicates(oidc_env):
+    assert auth.find_user_by_oidc("https://idp.example/", "subject-1")["username"] == "alice"
+    auth.create_user("bob", "bob-pass-1", role="business_manager")
+    try:
+        auth.bind_oidc_identity("bob", "https://idp.example", "subject-1")
+    except ValueError as exc:
+        assert "已绑定" in str(exc)
+    else:
+        raise AssertionError("a subject must not bind to two accounts")
+    assert auth.find_user_by_oidc("https://idp.example", "subject-1")["username"] == "alice"
+
+
+def test_oidc_identity_cannot_be_bound_to_legacy_or_customer_role(oidc_env):
+    auth.save_users(auth.load_users() + [{
+        "username": "legacy-reviewer", "role": "reviewer", "active": True,
+        "projects": [], "permission_grants": [],
+    }, {
+        "username": "external-customer", "role": "customer", "active": True,
+        "projects": [], "permission_grants": [],
+    }])
+    for username in ("legacy-reviewer", "external-customer"):
+        try:
+            auth.bind_oidc_identity(username, "https://idp.example", f"subject-{username}")
+        except ValueError as exc:
+            assert "已确认四角色" in str(exc)
+        else:
+            raise AssertionError("OIDC must only bind to an explicitly confirmed staff role")
+
+
 def test_callback_rejects_bad_state(oidc_env, monkeypatch):
-    _mock_exchange(monkeypatch, {"preferred_username": "alice"})
+    _mock_exchange(monkeypatch, _claims())
     oidc_env.client.get("/api/v1/auth/oidc/start", follow_redirects=False)
     response = oidc_env.client.get(
         "/api/v1/auth/oidc/callback?code=abc&state=wrong", follow_redirects=False

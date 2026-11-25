@@ -6,6 +6,7 @@ F77: an explicitly named internal service may be used by Docker deployments.
 F78: malformed URLs must fail closed before a request is built.
 F79: every model transport must check this policy before sending content.
 F80: redirects and environment proxies must not bypass local-only routing.
+F81: production mode enforces local-only routing even when the optional flag is unset or explicitly false.
 """
 from __future__ import annotations
 
@@ -23,6 +24,10 @@ _LOCAL_RANGES = tuple(ipaddress.ip_network(value) for value in (
 
 
 def local_only() -> bool:
+    # Production can process customer data, so a deployment typo or an
+    # explicit opt-out must not silently restore public model routing.
+    if os.getenv("P0_ENV", "").strip().lower() == "production":
+        return True
     value = os.getenv("P0_LOCAL_MODEL_ONLY", "").strip().lower()
     if not value:
         return False

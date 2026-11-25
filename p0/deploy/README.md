@@ -15,6 +15,7 @@ https://<DOMAIN>/             -> WeKnora 管理端
 
 ```bash
 P0_ENV=production
+P0_LOCAL_MODEL_ONLY=1
 P0_ROOT_PATH=/p0
 P0_COOKIE_SECURE=1
 P0_DATA_DIR=/opt/cq-ai-p0/data
@@ -36,6 +37,7 @@ P0_WEKNORA_REQUIRED=1
 P0_WEKNORA_MIN_SCORE=0.35
 P0_WEKNORA_TOP_K=6
 P0_WEKNORA_RERANK=0
+# Production also enforces local-only model routing if this explicit setting is omitted.
 P0_OCR_ENABLED=1
 P0_AUDIT_RETENTION_DAYS=180
 MAX_UPLOAD_MB=20
@@ -73,6 +75,8 @@ P0_STORE=json
 # P0_ACCESS_LOG=1
 # P0_MONITOR_TLS_HOST=<DOMAIN>
 ```
+
+`P0_SESSION_SECRET` must remain stable for the lifetime of issued customer-demo registration capabilities: registration retry recovery derives the opaque demo token from this secret plus its one-time operation key. Rotating it invalidates existing sessions and customer-demo capabilities; rotate only with a planned credential migration or after clearing the demo data.
 
 - `P0_STORE=postgres` 的完整迁移/对账/回滚步骤见 `docs/p1-data-layer/README.md`；
   迁移完成前不要打开该开关。

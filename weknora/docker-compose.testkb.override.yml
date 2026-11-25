@@ -1,0 +1,23 @@
+services:
+  frontend:
+    image: cnz-weknora-ui:dev
+    container_name: cnz-weknora-frontend
+
+  app:
+    image: cnz-weknora-app:dev
+    container_name: cnz-weknora-app
+
+  docreader:
+    image: cnz-weknora-docreader:dev
+    container_name: cnz-weknora-docreader
+
+  postgres:
+    container_name: cnz-weknora-postgres
+
+  redis:
+    container_name: cnz-weknora-redis
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

@@ -139,6 +139,10 @@ def test_project_isolation_filters_history_and_detail(auth_env):
     auth.create_user("reviewer-p1", "review-pass-1", role="reviewer", projects=["P1"])
     auth.create_user("reviewer-p2", "review-pass-2", role="reviewer", projects=["P2"])
     auth.create_user("root", "root-pass-1", role="admin")
+    auth.set_review_permissions(
+        "root", ["report:audit"], granted_by="test-supervisor",
+        reason="测试账号逐账号确认报告审核职责",
+    )
 
     rev1 = TestClient(main.app)
     rev2 = TestClient(main.app)

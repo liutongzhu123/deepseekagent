@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 from sqlalchemy import delete, insert, select
+from sqlalchemy.exc import IntegrityError
 
 from . import config, db
 
@@ -58,7 +59,7 @@ def save_users(users: list[dict]) -> None:
     rows = [
         {
             "username": user["username"],
-            "role": user.get("role", "viewer"),
+            "role": user.get("role", ""),
             "active": bool(user.get("active", True)),
             "data": user,
             "password_hash": user.get("password_hash", ""),
@@ -67,10 +68,25 @@ def save_users(users: list[dict]) -> None:
         for user in users
         if user.get("username")
     ]
-    with db.engine().begin() as conn:
-        conn.execute(delete(db.users))
-        if rows:
-            conn.execute(insert(db.users), rows)
+    identity_rows = []
+    for user in users:
+        for identity in user.get("oidc_identities") or []:
+            if isinstance(identity, dict):
+                identity_rows.append({
+                    "username": user["username"],
+                    "issuer": str(identity.get("issuer", "")),
+                    "subject": str(identity.get("subject", "")),
+                })
+    try:
+        with db.engine().begin() as conn:
+            conn.execute(delete(db.oidc_identities))
+            conn.execute(delete(db.users))
+            if rows:
+                conn.execute(insert(db.users), rows)
+            if identity_rows:
+                conn.execute(insert(db.oidc_identities), identity_rows)
+    except IntegrityError as exc:
+        raise ValueError("OIDC 身份绑定重复，未保存账号变更") from exc
     _mirror(users)
 
 

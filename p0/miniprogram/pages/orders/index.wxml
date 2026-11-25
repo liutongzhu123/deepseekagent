@@ -1,8 +1,9 @@
 <view class="page">
-  <view class="demo-banner">本页只展示当前设备中的模拟需求，没有连接订单系统。</view>
-  <view class="row"><view class="title">业务记录</view><text wx:if="{{quotes.length || orders.length}}" class="link" bindtap="clear">清空</text></view>
+  <view class="demo-banner">{{apiEnabled ? '本地服务端委托演示 · 仅展示当前登记凭证的记录，不创建真实检测任务。' : '本页只展示当前设备中的模拟需求，没有连接订单系统。'}}</view>
+  <view class="row"><view class="title">业务记录</view><text wx:if="{{!apiEnabled && (quotes.length || orders.length)}}" class="link" bindtap="clear">清空</text></view>
+  <view wx:if="{{orderError}}" class="card empty">{{orderError}}；未切换为本地数据。</view>
   <view class="card" style="padding:18rpx"><view class="row"><text>委托单</text><button class="secondary" size="mini" bindtap="createOrder">新建模拟委托单</button></view></view>
-  <view wx:if="{{!quotes.length && !orders.length}}" class="card empty">还没有模拟业务记录。<view style="margin-top:22rpx"><button class="secondary" bindtap="goQuote">填写检测需求</button></view></view>
+  <view wx:if="{{!quotes.length && !orders.length && !orderError}}" class="card empty">还没有模拟业务记录。<view style="margin-top:22rpx"><button class="secondary" bindtap="goQuote">填写检测需求</button></view></view>
   <view wx:if="{{orders.length}}" class="section-title">委托单</view>
   <view wx:for="{{orders}}" wx:key="orderNo" class="card">
     <view class="row"><text class="title" style="font-size:30rpx">{{item.project}}</text><text class="pill">{{item.status}}</text></view>
@@ -10,7 +11,12 @@
     <view class="item"><text class="muted">委托单位</text><text> {{item.companyName}}</text></view>
     <view class="item"><text class="muted">模板 / 样品</text><text> {{item.templateName}} / {{item.sampleName}}</text></view>
     <view class="item"><text class="muted">数量 / 标准</text><text> {{item.quantity}} / {{item.standard || '未填写'}}</text></view>
-    <view class="muted" style="margin-top:18rpx">本机保存 · {{item.createdAt}}</view>
+    <button wx:if="{{item.rawStatus === 'needs_info'}}" class="secondary" size="mini" data-order-id="{{item.orderId}}" bindtap="editOrder">补充信息并重提</button>
+    <view wx:if="{{item.rawStatus === 'approved'}}" class="row" style="margin-top:14rpx">
+      <button class="primary" size="mini" data-order-id="{{item.orderId}}" data-decision="accepted" bindtap="confirmOrder">确认委托内容（演示）</button>
+      <button class="secondary" size="mini" data-order-id="{{item.orderId}}" data-decision="declined" bindtap="confirmOrder">暂不接受</button>
+    </view>
+    <view class="muted" style="margin-top:18rpx">{{item.serverStored ? '本地演示服务端' : '本机保存'}} · {{item.createdAt}}</view>
   </view>
   <view wx:if="{{quotes.length}}" class="section-title">询价需求</view>
   <view wx:for="{{quotes}}" wx:key="id" class="card">

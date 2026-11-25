@@ -1,7 +1,7 @@
 """Multi-format quote input extraction for the quote assistant.
 
-Real customer inquiries reach the business manager as Excel workbooks, PDF
-test outlines / quote sheets, and phone photos or screenshots of a test
+Real customer inquiries reach the business manager as Word and Excel
+workbooks, PDF test outlines / quote sheets, and phone photos or screenshots of a test
 requirement table.  This module turns those formats into either:
 
 * a grid of rows (Excel sheets and PDF tables), consumed by the generic
@@ -31,6 +31,7 @@ SUPPORTED_SUFFIXES = {
     ".xlsx",
     ".xlsm",
     ".xls",
+    ".docx",
     ".pdf",
     ".png",
     ".jpg",
@@ -40,11 +41,16 @@ SUPPORTED_SUFFIXES = {
 }
 
 EXCEL_SUFFIXES = {".xlsx", ".xlsm", ".xls"}
+WORD_SUFFIXES = {".docx"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+MAX_WORD_ARCHIVE_MEMBERS = 2000
+MAX_WORD_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+MAX_WORD_MEMBER_BYTES = 50 * 1024 * 1024
 
 METHOD_LABELS = {
     "excel": "Excel 表格",
     "excel-embedded-image": "Excel 内嵌图片（OCR）",
+    "word-table": "Word 表格",
     "pdf-text": "PDF 文本表格",
     "pdf-ocr": "PDF 扫描件（OCR）",
     "image-ocr": "图片（OCR）",
@@ -240,12 +246,56 @@ def extract_quote_source(data: bytes, filename: str) -> Extraction:
     suffix = Path(filename).suffix.lower()
     if suffix in EXCEL_SUFFIXES:
         return _extract_excel(data, filename)
+    if suffix in WORD_SUFFIXES:
+        return _extract_word(data, filename)
     if suffix == ".pdf":
         return _extract_pdf(data, filename)
     if suffix in IMAGE_SUFFIXES:
         return _extract_image(data, filename)
     raise ValueError(
-        "仅支持 Excel（.xlsx/.xlsm/.xls）、PDF 或图片（.png/.jpg/.jpeg/.webp/.bmp）报价输入"
+        "仅支持 Word（.docx）、Excel（.xlsx/.xlsm/.xls）、PDF 或图片（.png/.jpg/.jpeg/.webp/.bmp）报价输入"
+    )
+
+
+def _extract_word(data: bytes, filename: str) -> Extraction:
+    # F1: corrupt/unsupported DOCX containers fail closed with a readable error.
+    # F2: documents without quote tables are not reported as parsed.
+    # F3: oversized archives/tables fail explicitly instead of expanding or truncating unbounded data.
+    from docx import Document
+
+    try:
+        with ZipFile(BytesIO(data)) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_WORD_ARCHIVE_MEMBERS:
+                raise ValueError("Word 文档内部文件过多，已拒绝解析")
+            total_size = sum(member.file_size for member in members)
+            if total_size > MAX_WORD_UNCOMPRESSED_BYTES or any(
+                member.file_size > MAX_WORD_MEMBER_BYTES for member in members
+            ):
+                raise ValueError("Word 文档解压后超过安全大小限制，已拒绝解析")
+        document = Document(BytesIO(data))
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - normalize parser boundary errors
+        raise ValueError(f"无法读取 Word 文档：{exc}") from exc
+    if len(document.tables) > 20:
+        raise ValueError("Word 文档表格超过 20 个解析上限，请拆分文件后重试")
+    grids: list[tuple[str, list[list[str]]]] = []
+    for table_index, table in enumerate(document.tables, start=1):
+        if len(table.rows) > 300 or any(len(row.cells) > 40 for row in table.rows):
+            raise ValueError(f"Word 表格 {table_index} 超过 300 行或 40 列解析上限，请拆分文件后重试")
+        rows: list[list[str]] = []
+        for row in table.rows:
+            rows.append([_cell_text(cell.text) for cell in row.cells])
+        if rows:
+            grids.append((f"表格 {table_index}", rows))
+    if not grids:
+        raise ValueError("Word 文档中没有可解析的表格")
+    return Extraction(
+        grids=grids,
+        method="word-table",
+        kind="word",
+        meta={"source": Path(filename).name, "table_count": len(grids)},
     )
 
 

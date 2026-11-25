@@ -1,9 +1,11 @@
-"""Catalog validation guards F70–F74 before coverage numbers are reported."""
+"""Catalog validation guards F70–F76 before coverage numbers are reported."""
 
 from copy import deepcopy
+from pathlib import Path
 import sys
 
 import pytest
+import yaml
 
 from scripts import coverage
 
@@ -17,6 +19,15 @@ def test_current_catalog_is_valid():
     assert coverage.validate_catalog(*_catalog()) == []
 
 
+@pytest.mark.parametrize("catalog", [
+    "tasks:\n  - id: SIM\n    note: first\n    note: second\n",
+    "tasks:\n  - id: SIM\n    nested:\n      value: first\n      value: second\n",
+])
+def test_f76_duplicate_yaml_mapping_keys_are_rejected(catalog):
+    with pytest.raises(yaml.constructor.ConstructorError, match="found duplicate key"):
+        coverage.load_yaml(catalog)
+
+
 def test_f70_unknown_coverage_reference_is_rejected():
     requirements, backlog = _catalog()
     backlog["tasks"][0]["covers"].append("RA-NOT-REAL")
@@ -27,6 +38,48 @@ def test_f71_unknown_status_is_rejected():
     requirements, backlog = _catalog()
     backlog["tasks"][0]["status"] = "finished"
     assert "R_BASE: 未知状态 'finished'" in coverage.validate_catalog(requirements, backlog)
+
+
+def test_f71_unknown_coverage_status_is_rejected():
+    requirements, backlog = _catalog()
+    backlog["tasks"][0]["coverage_status"] = "finished"
+    assert "R_BASE: 未知覆盖状态 'finished'" in coverage.validate_catalog(requirements, backlog)
+
+
+def test_done_simulation_can_only_mark_requirement_partial():
+    requirements = {"areas": [{"name": "A", "modules": [{"items": [{"id": "REQ-1", "text": "req"}]}]}]}
+    backlog = {"tasks": [{"id": "SIM", "status": "done", "coverage_status": "partial", "covers": ["REQ-1"]}]}
+    assert coverage.validate_catalog(requirements, backlog) == []
+    assert coverage.coverage_map(backlog) == {"REQ-1": "partial"}
+
+
+def test_customer_service_acceptance_matrix_lists_all_29_requirements():
+    requirements, _ = _catalog()
+    customer_ids = {
+        item["id"]
+        for area in requirements["areas"] if area.get("id") == "CS"
+        for module in area["modules"]
+        for item in module["items"]
+    }
+    matrix = Path("docs/customer-service-acceptance-matrix.md").read_text(encoding="utf-8")
+    rows = [line for line in matrix.splitlines() if line.startswith("| CS-")]
+    assert len(customer_ids) == 29
+    assert len(rows) == 29
+    assert {line.split("|", 2)[1].strip().split()[0] for line in rows} == customer_ids
+
+
+def test_customer_waiting_tasks_record_owner_inputs_and_resume_conditions():
+    _, backlog = _catalog()
+    tasks = {task["id"]: task for task in backlog["tasks"]}
+    external_tasks = {
+        task_id for task_id, task in tasks.items()
+        if task_id.startswith("CS_") and task["status"] == "waiting"
+    } | {"CS_BASE", "BLOCK_PROD"}
+    for task_id in external_tasks:
+        task = tasks[task_id]
+        assert task.get("waiting_on"), task_id
+        assert task.get("external_owner"), task_id
+        assert task.get("resume_when"), task_id
 
 
 @pytest.mark.parametrize("catalog", ["requirements", "backlog"])

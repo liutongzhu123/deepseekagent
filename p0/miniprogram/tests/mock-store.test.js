@@ -99,6 +99,9 @@ test('F7: quote handoff requires a project and retains context in the local serv
   assert.match(context, /检测标准：待补充/);
   assert.match(context, /样品数量：2件/);
   assert.match(context, /建议补充：检测标准/);
+  const serviceContext = store.quoteContext({ project: '气味测试', standard: '标准1', quantity: '2件' }, 'service');
+  assert.match(serviceContext, /已提交至本地客服演示队列/);
+  assert.doesNotMatch(serviceContext, /本机演示，未发送/);
   const messages = store.addMessage(context);
   assert.equal(messages.at(-1).text, context);
 });

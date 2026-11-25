@@ -1,11 +1,24 @@
 <view class="page">
   <view class="demo-banner">访客演示态 · 未获取微信 OpenID、手机号或客户身份信息。</view>
   <view class="card"><view class="pill">本地访客</view><view class="title" style="margin-top:20rpx">客户资料</view><view class="subtitle">登记信息只用于委托单自动带入演示，不会核验或提交至业务系统。</view>
-    <view class="field"><text class="field-label">* 企业名称</text><input class="input" data-field="companyName" value="{{companyName}}" bindinput="onInput" placeholder="请输入虚构演示企业名称" /></view>
-    <view class="field"><text class="field-label">* 联系人</text><input class="input" data-field="contactName" value="{{contactName}}" bindinput="onInput" placeholder="请输入演示联系人" /></view>
-    <view class="field"><text class="field-label">* 所在地区</text><input class="input" data-field="region" value="{{region}}" bindinput="onInput" placeholder="例如：上海市·浦东新区" /></view>
+    <view class="field"><text class="field-label">* 企业名称</text><input class="input" data-field="companyName" value="{{companyName}}" bindinput="onInput" disabled="{{registrationPending}}" placeholder="请输入虚构演示企业名称" /></view>
+    <view class="field"><text class="field-label">* 联系人</text><input class="input" data-field="contactName" value="{{contactName}}" bindinput="onInput" disabled="{{registrationPending}}" placeholder="请输入演示联系人" /></view>
+    <view class="field"><text class="field-label">* 所在地区</text><input class="input" data-field="region" value="{{region}}" bindinput="onInput" disabled="{{registrationPending}}" placeholder="例如：上海市·浦东新区" /></view>
     <button class="secondary" style="margin-top:22rpx" bindtap="saveProfile">保存本机演示资料</button>
     <view wx:if="{{profile}}" class="muted" style="margin-top:18rpx">{{profile.status}} · {{profile.updatedAt}}</view>
+  </view>
+  <view class="card">
+    <view class="pill">仅本地演示服务</view>
+    <view class="title" style="margin-top:20rpx">模拟注册审核</view>
+    <view class="subtitle">不会连接微信身份、企查查或客户业务系统；演示 API 未配置或不可用时不会保存为已提交。</view>
+    <view class="row item"><text>服务状态</text><text>{{registrationApiConfigured ? '已配置' : '未配置'}}</text></view>
+    <view class="row item"><text>登记状态</text><text>{{registrationStatus || '尚未提交'}}</text></view>
+    <view wx:if="{{registrationPending && registrationPendingBlocked}}" class="muted" style="margin-top:12rpx">{{registrationPendingUnreadable ? '登记状态或待办在本机不可读取，已停止提交以避免重复操作。可清理本机登记状态并核对服务端记录。' : '检测到另一登记账号有未确认操作。为保护资料，请切回原账号恢复；若无法切回，可清理本机登记状态并核对服务端记录。'}}</view>
+    <view wx:if="{{registrationPending && !registrationPendingBlocked}}" class="muted" style="margin-top:12rpx">为避免重复写入，已恢复上次内容；请按原内容重试以确认操作结果。</view>
+    <button wx:if="{{(registrationPending && registrationPendingBlocked) || registrationPendingClearedNeedsCheck}}" class="secondary" style="margin-top:16rpx" bindtap="clearRegistrationPending">{{registrationPendingClearedNeedsCheck ? '我已核对服务端登记状态，继续' : '清理本机登记状态'}}</button>
+    <button class="secondary" style="margin-top:22rpx" loading="{{registrationBusy}}" disabled="{{registrationBusy || registrationPendingBlocked || registrationPendingClearedNeedsCheck}}" bindtap="submitRegistration">{{registrationPending ? '重试上次登记' : '提交本地演示审核'}}</button>
+    <button wx:if="{{registrationStatus}}" class="secondary" style="margin-top:12rpx" bindtap="refreshRegistration">查询审核状态</button>
+    <view class="muted" style="margin-top:14rpx">登记凭证仅保存在本机存储中；清除本机数据不会删除演示服务端记录。</view>
   </view>
   <view class="card">
     <view class="row item"><text>本机模拟需求</text><text>{{quoteCount}}</text></view>

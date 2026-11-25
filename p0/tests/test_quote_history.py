@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
-from app import auth, main, quote_store
+from app import auth, crm, main, quote_store
 
 
 def _workbook_bytes() -> bytes:
@@ -120,6 +120,41 @@ def test_generate_quote_persists_history_metadata(quote_env):
     assert row["has_sales_quote"] is False
     assert row["crm"]["mode"] == "off"
     assert row["summary"]["priced_lines"] == 2
+
+
+def test_project_scoped_quote_reconciliation_uses_only_requested_crm_project(auth_env, monkeypatch):
+    auth.create_user("sales-p1", "sales-pass-1", role="sales", projects=["P1"])
+    _login(auth_env.client, "sales-p1", "sales-pass-1")
+    monkeypatch.setenv("P0_CRM_MODE", "excel")
+    snapshot = crm.CrmSnapshot(
+        mode="excel",
+        source="/private/customer/crm.xlsx",
+        projects=[crm.CrmProject("P1", "项目A"), crm.CrmProject("P2", "项目B")],
+        prices=[
+            crm.CrmPrice("P1", "项目A", "F610S座椅安全带提醒器总成", "气味", "大纲", "", "材料", 1, 1200),
+            crm.CrmPrice("P2", "项目B", "F610S座椅安全带提醒器总成", "雾化", "大纲", "", "材料", 2, 2000),
+        ],
+    )
+    monkeypatch.setattr(main.crm, "provider", lambda: type("Provider", (), {"snapshot": lambda self: snapshot})())
+
+    response = auth_env.client.post(
+        "/api/v1/quotes/generate",
+        data={"project": "P1"},
+        files={
+            "file": (
+                "demo.xlsx",
+                _workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    reconciliation = response.json()["crm_reconciliation"]
+    assert reconciliation["source"] == "CRM project-scoped view"
+    assert reconciliation["crm_counts"]["projects"] == 1
+    assert reconciliation["crm_counts"]["prices"] == 1
+    assert [item["item_name"] for item in reconciliation["missing"]] == ["雾化"]
 
 
 def test_quote_history_is_project_filtered(auth_env):

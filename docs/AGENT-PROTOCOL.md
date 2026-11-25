@@ -134,7 +134,7 @@ PLAN.md 第一节的「基线」不可改动：代码基线、数据基线、规
 每个 PR 开完后执行：
 
 ```bash
-"/Users/liutongzhunew/Desktop/01云安公司资料/deepseek agent/bin/send-pr-card" \
+"./bin/send-pr-card" \
   --task T104 --pr 41 --ci 通过 --summary "一句话改动" --next "T105 xxx"
 ```
 

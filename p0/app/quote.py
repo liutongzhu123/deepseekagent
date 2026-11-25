@@ -35,10 +35,12 @@ from .xlsx_writer import write_xlsx
 
 SUPPORTED_SUFFIXES = quote_import.SUPPORTED_SUFFIXES
 SUPPORTED_INPUT_HINT = (
-    "仅支持 Excel（.xlsx/.xlsm/.xls）、PDF 或图片（.png/.jpg/.jpeg/.webp/.bmp）报价输入"
+    "仅支持 Word（.docx）、Excel（.xlsx/.xlsm/.xls）、PDF 或图片（.png/.jpg/.jpeg/.webp/.bmp）报价输入"
 )
 
 CRM_HEADERS = [column["label"] for column in _DEFAULT_QUOTE["crm_columns"]]
+MAX_QUOTE_GRID_ROWS = 300
+MAX_QUOTE_REVIEW_LINES = 200
 
 _UNIT_MAP = dict(_DEFAULT_QUOTE["unit_map"])
 _CRM_COLUMNS = [dict(column) for column in _DEFAULT_QUOTE["crm_columns"]]
@@ -560,6 +562,8 @@ def _parse_grid(
     if header is None:
         return None
     header_row, item_col = header
+    if len(rows) - header_row > MAX_QUOTE_GRID_ROWS:
+        raise ValueError(f"询价表超过 {MAX_QUOTE_GRID_ROWS} 行扫描上限，请拆分文件后重试")
 
     found: dict[str, list[tuple[int, int]]] = {}
     for row in rows[header_row : min(header_row + 4, len(rows))]:
@@ -766,7 +770,7 @@ def parse_quote_bytes(
     discount: float | None = None,
     rule_config: dict | None = None,
 ) -> QuoteResult:
-    """Parse any supported quote input (Excel / PDF / image) from raw bytes."""
+    """Parse any supported quote input (Word / Excel / PDF / image) from raw bytes."""
     rule_config = rule_config or {}
     discount = _quote_discount(rule_config, discount)
     headers = rule_config.get("headers")
@@ -794,6 +798,9 @@ def parse_quote_bytes(
             if parsed.lines:
                 candidates.append((parsed, extraction.method_label))
 
+    if extraction.kind == "word" and len(candidates) > 1:
+        raise ValueError("Word 文档包含多个可解析询价表，为避免漏行或混淆来源，请拆分后逐表上传")
+
     if not candidates:
         raise ValueError(
             "未识别到报价表：需要包含「试验项目/检验项目/测试项目」表头，"
@@ -801,6 +808,8 @@ def parse_quote_bytes(
         )
 
     result, method_label = max(candidates, key=lambda item: len(item[0].lines))
+    if len(result.lines) > MAX_QUOTE_REVIEW_LINES:
+        raise ValueError(f"解析结果超过 {MAX_QUOTE_REVIEW_LINES} 行复核上限，请拆分文件后重试")
     result.parse_method = method_label
     result.parse_meta = {
         **extraction.meta,

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import copy
 import json
+import multiprocessing
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,19 @@ from app import admin_config, auth, main, quote, standard_store
 from app.docx_parser import ReportData
 from app.rules import RULES, audit_report
 from app.standard_parser import parse_standard
+
+
+def _write_config_from_worker(start, results, config_path, payload):
+    admin_config.CONFIG_PATH = Path(config_path)
+    admin_config.reset_cache()
+    start.wait(timeout=30)
+    try:
+        config = admin_config.update_section(
+            "business", payload, updated_by="concurrent-worker", expected_revision=0,
+        )
+        results.put(("ok", config["revision"]))
+    except admin_config.ConfigRevisionConflict:
+        results.put(("conflict", None))
 
 
 @pytest.fixture()
@@ -93,32 +108,63 @@ def test_defaults_and_section_access(env):
     assert len(config["quote"]["crm_columns"]) == 11
     assert config["business"]["discount_tiers"] == [{"min_amount": 0.0, "discount": 60.0}]
     assert config["business"]["rush"]["enabled"] is False
+    assert config["business"]["region_routing"] == {
+        "enabled": False, "region_managers": [], "backup_manager_id": "",
+    }
     assert data["sections"] == ["report", "standard", "quote", "business"]
     assert data["warning"] == ""
 
 
-def test_section_permissions_let_departments_self_serve(env):
-    reviewer = _client("reviewer1", "reviewer-pass-1", "reviewer")
-    data = reviewer.get("/api/v1/admin/config")
-    assert data.status_code == 200
-    assert "path" not in data.json()
-    report = copy.deepcopy(data.json()["config"]["report"])
-    report["expected_notices"] = 9
-    assert reviewer.put("/api/v1/admin/config/report", json=report).status_code == 200
-    assert reviewer.put("/api/v1/admin/config/quote", json={}).status_code == 403
-    assert reviewer.put("/api/v1/admin/config/business", json={}).status_code == 403
+def test_global_rules_are_admin_only_and_business_manager_gets_redacted_read(env):
+    admin = _admin(env)
+    admin_business = copy.deepcopy(admin.get("/api/v1/admin/config").json()["config"]["business"])
+    admin_business["region_routing"] = {
+        "enabled": True,
+        "region_managers": [{"region": "上海", "manager_id": "private-manager"}],
+        "backup_manager_id": "private-backup",
+    }
+    admin_business["blacklist"] = {"companies": ["受限名单企业"]}
+    admin_business["whitelist"] = {"companies": ["重点客户企业"], "keywords": ["内部关键词"]}
+    admin_business["expected_revision"] = admin_config.load()["revision"]
+    admin_business["expected_revision"] = admin_config.load()["revision"]
+    assert admin.put("/api/v1/admin/config/business", json=admin_business).status_code == 200
 
-    sales = _client("sales1", "sales-pass-1", "sales")
-    data = sales.get("/api/v1/admin/config")
+    manager = _client("manager1", "manager-pass-1", "business_manager")
+    assert manager.get("/api/v1/admin/config").status_code == 403
+    data = manager.get("/api/v1/config/effective")
     assert data.status_code == 200
+    assert "region_routing" not in data.json()["config"]["business"]
+    assert "blacklist" not in data.json()["config"]["business"]
+    assert "whitelist" not in data.json()["config"]["business"]
+    assert "受限名单企业" not in data.text
     business = copy.deepcopy(data.json()["config"]["business"])
     business["rush"] = {"enabled": True, "fee_rate": 25, "lead_days": 2}
     business["intermediary"] = {"enabled": True, "block": False, "keywords": ["中介", "代理"]}
-    business["blacklist"]["companies"] = ["某某贸易有限公司"]
-    response = sales.put("/api/v1/admin/config/business", json=business)
-    assert response.status_code == 200
-    assert response.json()["config"]["business"]["rush"]["fee_rate"] == 25
-    assert sales.put("/api/v1/admin/config/report", json=report).status_code == 403
+    assert manager.put("/api/v1/admin/config/report", json={}).status_code == 403
+    assert manager.put("/api/v1/admin/config/quote", json={}).status_code == 403
+    assert manager.put("/api/v1/admin/config/business", json=business).status_code == 403
+    forbidden_routing = business | {"region_routing": {
+        "enabled": True, "region_managers": [{"region": "上海", "manager_id": "secret-manager"}],
+        "backup_manager_id": "secret-backup",
+    }}
+    assert manager.put("/api/v1/admin/config/business", json=forbidden_routing).status_code == 403
+    sales_revision = admin_config.load()["revision"]
+    assert manager.post(f"/api/v1/admin/config/business/reset?expected_revision={sales_revision}").status_code == 403
+    assert admin_config.business_config()["region_routing"] == {
+        "enabled": True,
+        "region_managers": [{"region": "上海", "manager_id": "private-manager"}],
+        "backup_manager_id": "private-backup",
+    }
+    assert admin_config.business_config()["blacklist"]["companies"] == ["受限名单企业"]
+    assert admin_config.business_config()["whitelist"]["companies"] == ["重点客户企业"]
+    assert "whitelist" not in manager.get("/api/v1/config/effective").json()["config"]["business"]
+    assert manager.put("/api/v1/admin/config/business", json=business | {
+        "blacklist": {"companies": ["销售尝试改写"]},
+    }).status_code == 403
+    assert manager.get("/api/v1/admin/config/business/blacklist.csv").status_code == 403
+    assert manager.post("/api/v1/admin/config/business/blacklist/import", json={
+        "csv_text": "企业名称\\n越权企业", "expected_revision": admin_config.load()["revision"],
+    }).status_code == 403
 
 
 def test_business_rules_validation_and_reset(env):
@@ -130,13 +176,16 @@ def test_business_rules_validation_and_reset(env):
     business["rush"] = {"enabled": True, "fee_rate": 20, "lead_days": 3}
     business["intermediary"] = {"enabled": True, "block": True, "keywords": ["中介", "代理", "中介"]}
     business["blacklist"] = {"companies": ["甲公司"]}
-    business["whitelist"] = {"companies": ["乙公司"]}
+    business["whitelist"] = {"companies": ["乙公司"], "keywords": ["集团"]}
+    business["expected_revision"] = admin_config.load()["revision"]
     response = admin.put("/api/v1/admin/config/business", json=business)
     assert response.status_code == 200
     saved = admin_config.business_config()
     assert [tier["min_amount"] for tier in saved["discount_tiers"]] == [0, 10000]
     assert saved["intermediary"]["keywords"] == ["中介", "代理"]
     assert saved["blacklist"]["companies"] == ["甲公司"]
+    assert saved["whitelist"]["keywords"] == ["集团"]
+    business["expected_revision"] = admin_config.load()["revision"]
 
     bad = copy.deepcopy(business)
     bad["discount_tiers"] = [{"min_amount": 10000, "discount": 50}]
@@ -151,9 +200,153 @@ def test_business_rules_validation_and_reset(env):
     bad["intermediary"] = {"enabled": True, "block": False, "keywords": []}
     assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
 
-    reset = admin.post("/api/v1/admin/config/business/reset")
+    bad = copy.deepcopy(business)
+    bad["whitelist"]["keywords"] = [" "] * 101
+    assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
+
+    bad = copy.deepcopy(business)
+    bad["region_routing"] = {
+        "enabled": True,
+        "region_managers": [
+            {"region": "上海", "manager_id": "manager-a"},
+            {"region": "上 海", "manager_id": "manager-b"},
+        ],
+        "backup_manager_id": "backup-manager",
+    }
+    assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
+    bad["region_routing"] = {
+        "enabled": True,
+        "region_managers": [{"region": "上海", "manager_id": "manager-a"}],
+        "backup_manager_id": "",
+    }
+    assert admin.put("/api/v1/admin/config/business", json=bad).status_code == 400
+
+    reset = admin.post(f"/api/v1/admin/config/business/reset?expected_revision={admin_config.load()['revision']}")
     assert reset.status_code == 200
     assert reset.json()["config"]["business"] == admin_config.default_config()["business"]
+
+
+def test_blacklist_csv_import_export_revision_and_audit(env):
+    admin = _admin(env)
+    current_business = admin_config.business_config()
+    missing_revision = admin.put("/api/v1/admin/config/business", json={
+        **current_business,
+        "blacklist": current_business["blacklist"],
+    })
+    assert missing_revision.status_code == 422
+    payload = {"csv_text": "企业名称\r\n甲公司\r\n+危险格式企业\r\n甲公司\r\n", "mode": "merge", "expected_revision": 0}
+    imported = admin.post("/api/v1/admin/config/business/blacklist/import", json=payload)
+    assert imported.status_code == 200
+    assert imported.json()["blacklist_import"] == {
+        "mode": "merge", "input_rows": 3, "added": 2, "removed": 0, "company_count": 2,
+    }
+    assert admin_config.business_config()["blacklist"]["companies"] == ["甲公司", "+危险格式企业"]
+
+    stale = admin.post("/api/v1/admin/config/business/blacklist/import", json=payload)
+    assert stale.status_code == 409
+    stale_form = admin.put("/api/v1/admin/config/business", json={
+        **admin_config.business_config(), "expected_revision": 0,
+        "blacklist": {"companies": ["旧表单覆盖"]},
+    })
+    assert stale_form.status_code == 409
+    malformed = admin.post("/api/v1/admin/config/business/blacklist/import", json={
+        "csv_text": "企业名称,其他\n甲公司,值", "mode": "merge", "expected_revision": 1,
+    })
+    assert malformed.status_code == 400
+    empty = admin.post("/api/v1/admin/config/business/blacklist/import", json={
+        "csv_text": "企业名称\n", "mode": "replace", "expected_revision": 1,
+    })
+    assert empty.status_code == 400
+
+    exported = admin.get("/api/v1/admin/config/business/blacklist.csv")
+    assert exported.status_code == 200
+    assert exported.headers["content-type"].startswith("text/csv")
+    assert exported.text.startswith("\ufeff企业名称")
+    assert "'+危险格式企业" in exported.text
+    roundtrip = admin.post("/api/v1/admin/config/business/blacklist/import", json={
+        "csv_text": exported.text, "mode": "replace", "expected_revision": 1,
+    })
+    assert roundtrip.status_code == 200
+    assert admin_config.business_config()["blacklist"]["companies"] == ["甲公司", "+危险格式企业"]
+
+    audit_text = auth.AUDIT_PATH.read_text(encoding="utf-8")
+    assert "blacklist_imported" in audit_text
+    assert "blacklist_export_requested" in audit_text
+    assert '"user": "root"' in audit_text
+    assert "甲公司" not in audit_text and "+危险格式企业" not in audit_text
+
+
+def test_blacklist_import_audit_failure_prevents_mutation(env, monkeypatch):
+    admin = _admin(env)
+    seeded = admin.post("/api/v1/admin/config/business/blacklist/import", json={
+        "csv_text": "企业名称\n甲公司", "mode": "merge", "expected_revision": 0,
+    })
+    assert seeded.status_code == 200
+    revision = admin_config.load()["revision"]
+    monkeypatch.setattr(main, "_audit_event", lambda *args, **kwargs: False)
+    response = admin.post("/api/v1/admin/config/business/blacklist/import", json={
+        "csv_text": "企业名称\n乙公司", "mode": "merge", "expected_revision": revision,
+    })
+    assert response.status_code == 503
+    assert admin_config.business_config()["blacklist"]["companies"] == ["甲公司"]
+    direct_update = admin.put("/api/v1/admin/config/business", json={
+        **admin_config.business_config(),
+        "expected_revision": revision,
+        "blacklist": {"companies": ["被阻止的手工名单"]},
+    })
+    assert direct_update.status_code == 503
+    assert admin_config.business_config()["blacklist"]["companies"] == ["甲公司"]
+    direct_priority_update = admin.put("/api/v1/admin/config/business", json={
+        **admin_config.business_config(),
+        "expected_revision": revision,
+        "whitelist": {"companies": ["重点客户"], "keywords": ["关键词"]},
+    })
+    assert direct_priority_update.status_code == 503
+    assert admin_config.business_config()["whitelist"]["companies"] == []
+    reset = admin.post(f"/api/v1/admin/config/business/reset?expected_revision={revision}")
+    assert reset.status_code == 503
+    assert admin_config.business_config()["blacklist"]["companies"] == ["甲公司"]
+
+
+def test_blacklist_revision_conflict_and_corrupt_config_fail_closed(config_path, monkeypatch):
+    initial = admin_config.default_config()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(initial, ensure_ascii=False), encoding="utf-8")
+    admin_config.reset_cache()
+    with pytest.raises(admin_config.ConfigRevisionConflict):
+        admin_config.update_blacklist(["甲公司"], expected_revision=1)
+    before = config_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(admin_config, "_load_cached", lambda: (admin_config.default_config(), "损坏配置"))
+    with pytest.raises(admin_config.ConfigError, match="无效"):
+        admin_config.update_blacklist(["乙公司"], expected_revision=0)
+    assert config_path.read_text(encoding="utf-8") == before
+
+
+def test_expected_revision_conflict_is_enforced_across_processes(config_path):
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    results = context.Queue()
+    payloads = [
+        {"blacklist": {"companies": ["并发甲"]}},
+        {"blacklist": {"companies": ["并发乙"]}},
+    ]
+    workers = [
+        context.Process(target=_write_config_from_worker, args=(start, results, str(config_path), payload))
+        for payload in payloads
+    ]
+    for worker in workers:
+        worker.start()
+    start.set()
+    outcomes = [results.get(timeout=30), results.get(timeout=30)]
+    for worker in workers:
+        worker.join(timeout=30)
+        assert worker.exitcode == 0
+
+    assert sorted(outcome[0] for outcome in outcomes) == ["conflict", "ok"]
+    admin_config.reset_cache()
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["revision"] == 1
+    assert persisted["business"]["blacklist"]["companies"] in [["并发甲"], ["并发乙"]]
 
 
 def test_effective_config_is_readable_by_module_pages(env):
@@ -165,6 +358,7 @@ def test_effective_config_is_readable_by_module_pages(env):
     data = response.json()
     assert "path" not in data
     config = data["config"]
+    assert "region_routing" not in config["business"]
     assert len(config["report"]["rules"]) == len(RULES)
     assert len(config["standard"]["fields"]) == 8
     assert config["quote"]["default_discount"] == 60
@@ -250,6 +444,10 @@ def test_audit_and_quote_endpoints_use_saved_config(env, monkeypatch, tmp_path):
     report = copy.deepcopy(admin.get("/api/v1/admin/config").json()["config"]["report"])
     report["rules"][7]["enabled"] = False
     assert admin.put("/api/v1/admin/config/report", json=report).status_code == 200
+    auth.set_review_permissions(
+        "root", ["report:audit"], granted_by="test-supervisor",
+        reason="测试账号逐账号确认报告审核职责",
+    )
     monkeypatch.setattr(main, "parse_docx", lambda path: _report())
     response = admin.post(
         "/api/v1/reports/audit", files={"file": ("sample.docx", b"fake-docx")}
@@ -265,7 +463,12 @@ def test_audit_and_quote_endpoints_use_saved_config(env, monkeypatch, tmp_path):
     assert admin.put("/api/v1/admin/config/quote", json=quote_section).status_code == 200
     source = tmp_path / "DVP.xlsx"
     _dvp(source)
-    response = admin.post(
+    auth.create_user("quote-manager", "manager-pass-1", role="business_manager")
+    manager = TestClient(main.app)
+    assert manager.post(
+        "/api/v1/auth/login", json={"username": "quote-manager", "password": "manager-pass-1"}
+    ).status_code == 200
+    response = manager.post(
         "/api/v1/quotes/parse", files={"file": ("DVP.xlsx", source.read_bytes())}
     )
     assert response.status_code == 200

@@ -3,13 +3,22 @@
 const $ = (id) => document.getElementById(id);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const params = new URLSearchParams(location.search);
+let customerServicePreviewData = null;
+let parsedQuoteReview = null;
+let quoteParseReviewGeneration = 0;
+let crmScheduleRows = [];
+let crmScheduleCandidates = [];
+const crmScheduleDraftGuard = window.ScheduleCandidate.createDraftGuard();
+let crmQualificationRows = [];
+let crmPriceRows = [];
+let crmNameMappingRows = [];
 
-const ROLE_NAMES = { admin: '管理员', reviewer: '复核人', sales: '销售', viewer: '只读' };
+const ROLE_NAMES = { customer: '新客户/小微客户', business_manager: '业务经理', admin: '系统管理员', technical: '技术部门' };
 const ROLE_DESCRIPTIONS = {
-  admin: '全部权限 · 用户与审计',
-  reviewer: '报告审核 · 标准复核 / 发布',
-  sales: '报价 · 知识问答',
-  viewer: '只读查询 · 知识问答',
+  customer: '通过小程序办理本人企业的报价与委托',
+  business_manager: '报价、委托审核、客户沟通与 CRM 报价维护',
+  admin: '知识库、基础资料、全局规则、账号与统计管理',
+  technical: '排期项目库、加急规则与技术支持',
 };
 const FIELD_NAMES = { name: '实检项目', requirement: '技术要求', method: '试验方法' };
 const FEEDBACK_ACTIONS = { correct: '修正', confirm: '确认', supplement: '补充' };
@@ -18,23 +27,8 @@ const SEVERITY_NAMES = { high: '高', medium: '中', low: '低', info: '提示' 
 const SEVERITY_TONES = { high: 'danger', medium: 'warn', low: 'neutral', info: 'neutral' };
 const LAYER_LABELS = { deterministic: '确定性', crosscheck: '跨文档', partial: '部分规则', dsl: '规则 DSL', semantic: '语义' };
 const QUOTE_HEADER_NAMES = { item: '试验项目', price: '单价', quantity: '数量', unit: '单位', sample: '样品名称' };
-const PERMISSIONS = {
-  'report:audit': ['admin', 'reviewer'],
-  'report:read': ['admin', 'reviewer'],
-  'standard:parse': ['admin', 'reviewer'],
-  'standard:review': ['admin', 'reviewer'],
-  'standard:publish': ['admin', 'reviewer'],
-  'quote:generate': ['admin', 'sales'],
-  'feedback:read': ['admin'],
-  'user:manage': ['admin'],
-  'audit:read': ['admin'],
-  'config:read': ['admin'],
-  'config:manage': ['admin'],
-  'config:manage:report': ['admin', 'reviewer'],
-  'config:manage:standard': ['admin', 'reviewer'],
-  'config:manage:quote': ['admin', 'sales'],
-  'config:manage:business': ['admin', 'sales'],
-};
+const ROLE_CODES = ['customer', 'business_manager', 'admin', 'technical'];
+const EMPLOYEE_ROLE_CODES = ['business_manager', 'admin', 'technical'];
 const CONFIG_SECTION_PERMISSIONS = {
   report: 'config:manage:report',
   standard: 'config:manage:standard',
@@ -57,6 +51,7 @@ const EVENT_LABELS = {
   records_validated: '记录校验',
   standard_parsed: '解析标准',
   standard_reviewed: '复核标准',
+  customer_service_quote_parse_reviewed: '客服询价解析复核',
   standard_published: '发布标准',
   standard_unpublished: '下架标准',
   standard_ask_feedback: '问答反馈',
@@ -66,6 +61,7 @@ const EVENT_LABELS = {
   standard_asked: '知识问答',
   quote_generated: '生成报价',
   quote_downloaded: '下载报价',
+  customer_service_price_candidate_reviewed: '客服价格候选人工复核',
   audit_exported: '导出审计',
   kb_rebuilt: '重建索引',
   admin_config_updated: '更新规则配置',
@@ -93,6 +89,7 @@ const EVENT_OPTIONS = [
   ['standard_asked', '知识问答'],
   ['quote_generated', '生成报价'],
   ['quote_downloaded', '下载报价'],
+  ['customer_service_price_candidate_reviewed', '客服价格候选人工复核'],
   ['audit_exported', '导出审计'],
   ['admin_config_updated', '更新规则配置'],
   ['admin_config_reset', '恢复默认规则'],
@@ -113,6 +110,10 @@ const state = {
   lastAnswer: null,
   feedback: null,
   adminView: 'users',
+  customerRegistrations: [],
+  customerQuoteInquiries: [],
+  myQuoteInquiries: [],
+  quoteInquiryId: '',
   userRoleFilter: null,
   projectUser: null,
   resetUser: null,
@@ -215,12 +216,14 @@ async function jsonFetch(url, options) {
   if (!response.ok) {
     let detail = data && data.detail;
     if (Array.isArray(detail)) detail = detail.map((item) => item.msg || JSON.stringify(item)).join('；');
-    throw new Error(detail || `请求失败（${response.status}）`);
+    const error = new Error(detail || `请求失败（${response.status}）`);
+    error.statusCode = response.status;
+    throw error;
   }
   return data;
 }
 function can(action) {
-  return Boolean(state.me && (PERMISSIONS[action] || []).includes(state.me.role));
+  return Boolean(state.me && Array.isArray(state.me.permissions) && state.me.permissions.includes(action));
 }
 function applyRoleUi() {
   const canAudit = can('report:audit');
@@ -235,23 +238,25 @@ function applyRoleUi() {
   $('reportHistoryCard').classList.toggle('hidden', !canReadReports);
   $('reportRoleNotice').classList.toggle('hidden', canAudit);
   if (!canAudit) {
-    $('reportRoleNotice').innerHTML = `${ic('lock')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，只能查看规则说明；报告审核需要复核人或管理员权限。</span>`;
+    $('reportRoleNotice').innerHTML = `${ic('lock')}<span>当前账号未获报告审核权限；该权限由管理员逐账号确认并记录原因。</span>`;
   }
   $('stdUploadBlock').classList.toggle('hidden', !canParse);
   $('stdRoleNotice').classList.toggle('hidden', canParse);
   if (!canParse) {
-    $('stdRoleNotice').innerHTML = `${ic('eye')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，可查看与导出标准；解析、复核和发布需要复核人或管理员权限。</span>`;
+    $('stdRoleNotice').innerHTML = `${ic('eye')}<span>标准解析与复核按账号授权；未获授权的操作不会开放。</span>`;
   }
   $('publishBtn').classList.toggle('hidden', !canPublish);
   $('unpublishBtn').classList.toggle('hidden', !canPublish);
   ['saveBtn', 'confirmBtn', 'addItemBtn'].forEach((id) => $(id).classList.toggle('hidden', !canReview));
   ['editName', 'editReq', 'editMethod'].forEach((id) => { $(id).disabled = !canReview; });
   $('quoteUploadCard').classList.toggle('hidden', !canQuote);
+  $('quoteInquiryClientCard').classList.toggle('hidden', !canQuote);
   $('quoteResultCard').classList.toggle('hidden', !canQuote);
+  $('quoteDemoPreviewCard').classList.toggle('hidden', !canQuote);
   $('quoteHistoryCard').classList.toggle('hidden', !canQuote);
   $('quoteRoleNotice').classList.toggle('hidden', canQuote);
   if (!canQuote) {
-    $('quoteRoleNotice').innerHTML = `${ic('lock')}<span>当前角色为 ${escapeHtml(ROLE_NAMES[state.me.role] || state.me.role)}，没有报价权限；报价需要销售或管理员权限。</span>`;
+    $('quoteRoleNotice').innerHTML = `${ic('lock')}<span>当前账号没有业务经理报价权限。</span>`;
   }
 }
 
@@ -339,7 +344,7 @@ const TAB_META = {
   standards: { title: '标准解析' },
   quote: { title: '报价助手' },
   knowledge: { title: '知识问答' },
-  admin: { title: '权限、审计与规则' },
+  admin: { title: '业务工作区' },
 };
 function closeSidebar() {
   $('sidebar').classList.remove('open');
@@ -364,11 +369,12 @@ async function loadMe() {
     state.me = data.user;
     setSignedInUser(state.me);
     applyRoleUi();
+    applyNavigationPermissions();
     if (!can('user:manage')) {
-      $('adminPageTitle').textContent = '规则配置';
-      $('adminPageDesc').textContent = '维护你所负责业务链路的规则；保存后对新的请求生效，并写入审计日志。';
+      $('adminPageTitle').textContent = '业务工作区';
+      $('adminPageDesc').textContent = '处理你负责的客户服务、报价、CRM 价格或排期任务。';
     }
-    $('adminNavSection').classList.toggle('hidden', !canAnyConfig());
+    $('adminNavSection').classList.toggle('hidden', !canAnyAdminView());
     return true;
   } catch (error) {
     $('userBox').innerHTML = `<span class="avatar">!</span><div class="user-meta"><b>未登录</b><span>请重新登录</span></div>`;
@@ -377,7 +383,7 @@ async function loadMe() {
 }
 function switchTab(name) {
   if (!TAB_META[name]) name = 'report';
-  if (name === 'admin' && !canAnyConfig()) name = 'report';
+  if (!canUseTab(name)) name = defaultTab();
   $$('.nav-item').forEach((item) => item.classList.toggle('active', item.dataset.tab === name));
   $$('.panel').forEach((panel) => panel.classList.toggle('hidden', panel.id !== `panel-${name}`));
   $('crumbCurrent').textContent = TAB_META[name].title;
@@ -392,10 +398,13 @@ function switchTab(name) {
     loadReportInputs().catch(() => {});
     loadReports().catch(showError);
   }
-  if (name === 'quote' && can('quote:generate')) loadQuotes().catch(showError);
+  if (name === 'quote' && can('quote:generate')) {
+    loadQuotes().catch(showError);
+    loadMyQuoteInquiries();
+  }
   if (name === 'admin') {
     if (can('user:manage')) loadAdmin().catch(showError);
-    switchAdminView(state.adminView || (can('user:manage') ? 'users' : 'config'));
+    switchAdminView(can('user:manage') ? state.adminView : defaultAdminView());
   }
   const nextParams = new URLSearchParams(location.search);
   nextParams.set('tab', name);
@@ -421,6 +430,28 @@ function canConfig(section) {
 }
 function canAnyConfig() {
   return Object.keys(CONFIG_SECTION_PERMISSIONS).some(canConfig);
+}
+function canAnyAdminView() {
+  return [
+    'user:manage', 'config:read', 'customer-service:registration:review',
+    'customer-service:order:review', 'customer-service:quote:manage',
+    'customer-service:conversation:manage', 'schedule:manage', 'crm:base:manage',
+    'crm:prices:manage',
+  ].some(can);
+}
+function canUseTab(name) {
+  if (name === 'report') return can('report:audit') || can('report:read');
+  if (name === 'standards') return can('standard:read') || can('standard:parse');
+  if (name === 'quote') return can('quote:generate') || can('quote:parse');
+  if (name === 'knowledge') return can('standard:ask');
+  if (name === 'admin') return canAnyAdminView();
+  return false;
+}
+function defaultTab() {
+  return ['quote', 'knowledge', 'standards', 'admin', 'report'].find(canUseTab) || 'report';
+}
+function applyNavigationPermissions() {
+  $$('.nav-item').forEach((item) => item.classList.toggle('hidden', !canUseTab(item.dataset.tab)));
 }
 function configAccessText(section) {
   return canConfig(section) ? '' : ' · 由管理员维护';
@@ -1310,6 +1341,226 @@ function renderQuote(data) {
   $('quoteResult').classList.remove('hidden');
 }
 
+async function parseSelectedQuoteLines(projectName) {
+  const file = $('quoteFile').files[0];
+  if (!file) throw new Error('请先在报价输入区选择文件');
+  if (!projectName) throw new Error('请填写检测项目名称');
+  if (!parsedQuoteReview || parsedQuoteReview.file !== file || parsedQuoteReview.projectName !== projectName) {
+    throw new Error('请先解析当前文件和项目，再复核并确认明细');
+  }
+  if (!parsedQuoteReview.reviewedPayload) throw new Error('请先点击“确认复核并留痕”后再预览');
+  return parsedQuoteReview.reviewedPayload;
+}
+
+function resetQuoteParseReview(message = '') {
+  quoteParseReviewGeneration += 1;
+  parsedQuoteReview = null;
+  const target = $('quoteParseReview');
+  if (!target) return;
+  target.classList.toggle('hidden', !message);
+  target.innerHTML = message ? `<div class="banner info">${escapeHtml(message)}</div>` : '';
+}
+
+function renderQuoteParseReview() {
+  if (!parsedQuoteReview) return;
+  const target = $('quoteParseReview');
+  const rows = parsedQuoteReview.lines.map((line, index) => `
+    <tr>
+      <td>${index + 1}<br><small>来源行 ${escapeHtml(line.source_row || '未提供')}</small><br><small>${line.confidence === null || line.confidence === undefined ? '无置信度' : `置信 ${escapeHtml((Number(line.confidence) * 100).toFixed(1))}%`}</small></td>
+      <td><input type="text" maxlength="500" data-parse-index="${index}" data-parse-field="item_name" value="${escapeHtml(line.item_name)}" aria-label="第 ${index + 1} 行项目"></td>
+      <td><input type="text" maxlength="300" data-parse-index="${index}" data-parse-field="standard" value="${escapeHtml(line.standard)}" aria-label="第 ${index + 1} 行标准"></td>
+      <td><input type="text" maxlength="500" data-parse-index="${index}" data-parse-field="sample_name" value="${escapeHtml(line.sample_name)}" aria-label="第 ${index + 1} 行样品"></td>
+      <td><input type="number" min="0" step="any" data-parse-index="${index}" data-parse-field="quantity" value="${line.quantity === null ? '' : escapeHtml(line.quantity)}" aria-label="第 ${index + 1} 行数量"></td>
+      <td><input type="text" maxlength="80" data-parse-index="${index}" data-parse-field="unit" value="${escapeHtml(line.unit)}" aria-label="第 ${index + 1} 行单位"></td>
+    </tr>`).join('');
+  const warnings = (parsedQuoteReview.warnings || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+  target.innerHTML = `<div class="banner info">文件 ${escapeHtml(parsedQuoteReview.filename)} · ${escapeHtml(parsedQuoteReview.parseMethod)} · ${parsedQuoteReview.lines.length} 行。原始单价不进入本次 CRM 价格预览；低置信/缺项请人工核对。</div>${warnings ? `<ul class="check-list quote-warnings">${warnings}</ul>` : ''}<div class="table-wrap"><table><thead><tr><th>证据</th><th>检测项目</th><th>标准/条款</th><th>样品</th><th>数量</th><th>单位</th></tr></thead><tbody>${rows}</tbody></table></div><div class="row mt-16"><button type="button" class="btn btn-primary" id="quoteParseReviewConfirmBtn">确认复核并留痕</button><span id="quoteParseReviewStatus" class="muted">修改前后值将记录到审计日志；来源行和解析置信度由服务端固定。</span></div>`;
+  target.classList.remove('hidden');
+}
+
+async function beginQuoteParseReview() {
+  const file = $('quoteFile').files[0];
+  const projectName = $('quoteDemoProject').value.trim();
+  if (!file) throw new Error('请先在报价输入区选择文件');
+  if (!projectName) throw new Error('请填写检测项目名称');
+  const requestGeneration = ++quoteParseReviewGeneration;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('project', projectName);
+  const parsed = await jsonFetch('api/v1/quotes/parse', { method: 'POST', body: form });
+  if (requestGeneration !== quoteParseReviewGeneration
+    || $('quoteFile').files[0] !== file
+    || $('quoteDemoProject').value.trim() !== projectName) {
+    throw new Error('文件或项目已变化，已丢弃过期解析结果，请重新解析');
+  }
+  if (!Array.isArray(parsed.items) || !parsed.items.length) throw new Error('文件未解析出可匹配的报价明细');
+  parsedQuoteReview = {
+    file, filename: file.name, projectName,
+    sourceSha256: parsed.source_sha256,
+    parseToken: parsed.parse_token,
+    generation: requestGeneration,
+    editRevision: 0,
+    parseMethod: parsed.parse_method || '文件解析', warnings: parsed.warnings || [],
+    lines: parsed.items.map((item, index) => ({
+      line_index: index,
+      item_name: item.item_name || '', standard: item.standard || '',
+      sample_name: item.sample_name || parsed.sample_name || '',
+      quantity: item.quantity ?? null, unit: item.unit || '',
+      source_row: item.source_row || index + 1, confidence: item.confidence ?? null,
+    })),
+  };
+  renderQuoteParseReview();
+  return parsedQuoteReview;
+}
+
+function collectQuoteParseEdits() {
+  if (!parsedQuoteReview) throw new Error('请先解析文件');
+  return parsedQuoteReview.lines.map((line, index) => {
+    const value = (field) => $(`#quoteParseReview [data-parse-index="${index}"][data-parse-field="${field}"]`).value.trim();
+    const quantityText = value('quantity');
+    const quantity = quantityText ? Number(quantityText) : null;
+    if (quantity !== null && (!Number.isFinite(quantity) || quantity <= 0)) throw new Error(`第 ${index + 1} 行数量必须大于 0，或留空待补`);
+    return {
+      line_index: index, source_row: line.source_row,
+      item_name: value('item_name'), standard: value('standard'), sample_name: value('sample_name'),
+      quantity, unit: value('unit'),
+    };
+  });
+}
+
+async function saveQuoteParseReview() {
+  const reviewState = parsedQuoteReview;
+  const file = $('quoteFile').files[0];
+  const projectName = $('quoteDemoProject').value.trim();
+  if (!reviewState || reviewState.file !== file || reviewState.projectName !== projectName) throw new Error('所选文件或项目已变化，请重新解析');
+  const requestGeneration = quoteParseReviewGeneration;
+  const editRevision = reviewState.editRevision;
+  const edits = collectQuoteParseEdits();
+  const form = new FormData();
+  form.append('file', file);
+  form.append('project', projectName);
+  form.append('source_sha256', reviewState.sourceSha256 || '');
+  form.append('parse_token', reviewState.parseToken || '');
+  form.append('edits', JSON.stringify(edits));
+  const reviewed = await jsonFetch('api/v1/quotes/review', { method: 'POST', body: form });
+  if (parsedQuoteReview !== reviewState
+    || requestGeneration !== quoteParseReviewGeneration
+    || reviewState.editRevision !== editRevision
+    || $('quoteFile').files[0] !== file
+    || $('quoteDemoProject').value.trim() !== projectName) {
+    throw new Error('文件、项目或复核内容在提交期间发生变化；本次审计已记录，但结果未绑定到当前明细，请重新确认');
+  }
+  parsedQuoteReview.reviewedPayload = {
+    project_name: projectName, review_id: reviewed.review_id,
+    lines: reviewed.lines.map((line) => ({
+      item_name: line.item_name, standard: line.standard, sample_name: line.sample_name,
+      quantity: line.quantity, unit: line.unit, source_row: line.source_row, confidence: line.confidence,
+    })),
+  };
+  $('quoteParseReviewStatus').textContent = `已记录复核 ${reviewed.review_id}；源文件 SHA-256 ${reviewed.source_sha256.slice(0, 16)}…；未生成报价或写回 CRM。`;
+  $('quoteParseReviewConfirmBtn').disabled = true;
+  return parsedQuoteReview.reviewedPayload;
+}
+
+function renderCustomerServicePreview(data) {
+  customerServicePreviewData = data;
+  const hasLineArray = Boolean(data && Array.isArray(data.lines));
+  const lines = hasLineArray ? data.lines : [];
+  const sourceFlagsValid = hasLineArray && lines.every((line) =>
+    Boolean(line && Array.isArray(line.source_refs)
+      && line.source_refs.every((source) => source && source.synthetic === (data.environment === 'synthetic')))
+  );
+  const syntheticPreview = data && data.environment === 'synthetic' && data.demo_only === true;
+  const crmPreview = data && data.environment === 'internal' && data.demo_only === false
+    && ['excel', 'csv', 'base'].includes(data.source_mode) && Boolean(data.source_revision)
+    && data.input_origin === 'parsed_quote';
+  if ((!syntheticPreview && !crmPreview) || !sourceFlagsValid) {
+    throw new Error('服务端预览环境或来源标记无效，已拒绝显示');
+  }
+  const statusNames = {
+    matched: data.environment === 'synthetic' ? '已命中（演示）' : '已匹配（只读）',
+    missing: '未命中', expired: '已过期', ambiguous: '待确认',
+    unknown: '未知', standard_scope: '标准级范围', project_scope_only: '仅项目级范围',
+    not_found: '未找到', source_unavailable: '数据源不可用',
+    preview_only: '仅预览', ask_customer: '补充信息', manual_review: '转人工', block: '阻断',
+  };
+  const rows = lines.map((line, lineIndex) => {
+    const request = line.request || {};
+    const evidence = line.input_evidence || {};
+    const price = line.price_preview;
+    const schedule = line.schedule_preview;
+    const qualification = line.qualification_preview;
+    const currencyLabel = price && price.currency === 'CNY'
+      ? '¥'
+      : escapeHtml(price && price.currency ? price.currency : '币种待确认');
+    const priceText = line.price_status === 'matched' && price
+      ? `${currencyLabel} ${escapeHtml(money(price.unit_price))} · ${escapeHtml(price.tax_inclusive === true ? '含税' : price.tax_inclusive === false ? '税外' : '税口径待确认')}`
+      : statusNames[line.price_status] || line.price_status;
+    const priceEvidence = price && data.environment === 'internal'
+      ? `<br><small>${price.reference_quantity === null || price.reference_quantity === undefined ? '' : `CRM记录数量 ${escapeHtml(price.reference_quantity)} · `}${escapeHtml(price.sample_match_level === 'exact' ? '样品名精确匹配' : price.sample_match_level === 'fallback' ? '样品名未命中，按项目/项目行回退' : '未提供样品名')}</small>`
+      : '';
+    const priceCandidates = (line.price_candidates || []).map((candidate) => {
+      const candidateCurrency = candidate.currency === 'CNY' ? '¥' : candidate.currency || '币种待确认';
+      const candidatePrice = typeof candidate.unit_price === 'number' && Number.isFinite(candidate.unit_price)
+        ? `${escapeHtml(candidateCurrency)} ${escapeHtml(money(candidate.unit_price))}`
+        : '单价待核验';
+      const sampleMatch = request.sample_name && candidate.sample_name === request.sample_name
+        ? '样品名相同'
+        : request.sample_name
+          ? `样品：${escapeHtml(candidate.sample_name || '未记录')}`
+          : `样品：${escapeHtml(candidate.sample_name || '未记录')}`;
+      const reviewButton = data.environment === 'internal'
+        ? `<button type="button" class="btn btn-secondary btn-sm" data-cs-price-review="1" data-line-index="${lineIndex}" data-candidate-id="${escapeHtml(candidate.record_id || '')}">记录本次人工选择</button>`
+        : '';
+      return `<li>${sampleMatch} · ${candidatePrice} · 记录数量 ${escapeHtml(candidate.reference_quantity ?? '未提供')} · 有效至 ${escapeHtml(candidate.valid_until || '未提供')} · ${escapeHtml(candidate.record_id || '无来源编号')} ${reviewButton}</li>`;
+    }).join('');
+    const candidateDetails = priceCandidates
+      ? `<details class="quote-candidates"><summary>${(line.price_candidates || []).length} 条价格候选，待人工核验</summary><ul>${priceCandidates}</ul></details>`
+      : '';
+    const scheduleText = schedule
+      ? `${escapeHtml(statusNames[line.schedule_status] || line.schedule_status || '')}<br><small>${escapeHtml(schedule.start_date || '未提供')} – ${escapeHtml(schedule.end_date || '未提供')}</small>`
+      : escapeHtml(statusNames[line.schedule_status] || line.schedule_status || '');
+    const qualificationText = qualification
+      ? `${escapeHtml(statusNames[line.qualification_status] || line.qualification_status || '')}<br><small>${escapeHtml(qualification.certificate_no || '')}${qualification.standard ? ` · ${escapeHtml(qualification.standard)}` : qualification.note ? ` · ${escapeHtml(qualification.note)}` : ' · 未确认到具体标准'}</small>`
+      : escapeHtml(statusNames[line.qualification_status] || line.qualification_status || '');
+    const refs = (line.source_refs || []).map((source) =>
+      `${escapeHtml(source.record_id)} · ${escapeHtml(source.revision)}${source.valid_until ? ` · 有效至 ${escapeHtml(source.valid_until)}` : ''}${source.synthetic ? ' · 合成' : ' · 非合成来源'}`
+    ).join('<br>') || '无来源记录';
+    const missing = (line.missing_fields || []).map(escapeHtml).join('、') || '无';
+    const mappedName = line.matched_item_name && line.matched_item_name !== request.item_name
+      ? `<br><small>精确映射为：${escapeHtml(line.matched_item_name)}</small>` : '';
+    const parseEvidence = evidence.parse_confidence === null || evidence.parse_confidence === undefined
+      ? ''
+      : `<br><small>解析置信度 ${escapeHtml((Number(evidence.parse_confidence) * 100).toFixed(1))}%${evidence.source_row ? ` · 来源行 ${escapeHtml(evidence.source_row)}` : ''}</small>`;
+    return `<tr>
+      <td><b>${escapeHtml(request.project_name || '')}</b><br>${escapeHtml(request.item_name || '')}${mappedName}${request.sample_name ? `<br><small>样品：${escapeHtml(request.sample_name)}</small>` : ''}<br><small>${escapeHtml(request.standard || '')} · ${escapeHtml(request.quantity ?? '数量缺失')} ${escapeHtml(request.unit || '')}</small>${parseEvidence}</td>
+      <td>${priceText}${priceEvidence}<br><small>${escapeHtml(statusNames[line.price_status] || line.price_status || '')}</small>${candidateDetails}</td>
+      <td>${scheduleText}</td>
+      <td>${qualificationText}</td>
+      <td>${refs}</td>
+      <td>${missing}</td>
+      <td>${escapeHtml(statusNames[line.action] || line.action || '')}</td>
+    </tr>`;
+  }).join('');
+  const warnings = (data.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
+  const inputNote = syntheticPreview
+    ? (data.input_origin === 'parsed_quote'
+      ? '解析明细来自所选文件，仅用于与合成目录比对；不会作为真实 CRM 命中。'
+      : '使用仓库内置的合成询价样例。')
+    : `使用当前配置的 CRM 只读适配器（${data.source_mode}，数据版本 ${data.source_revision}）；这不代表 CRM API 已接通或数据已通过客户验收。`;
+  $('quoteDemoPreviewNotice').innerHTML = `${ic('alert')}<span><b>${syntheticPreview ? '合成数据，仅限内部演示。' : '当前 CRM 只读数据，仅限内部复核。'}</b> ${escapeHtml(inputNote)} 不生成客户报价，不计算总价或规则折扣，也不写回 CRM。</span>`;
+  $('quoteDemoPreviewNotice').classList.remove('hidden');
+  $('quoteDemoPreview').innerHTML = `
+    <ul class="check-list quote-warnings">${warnings}</ul>
+    <div class="table-wrap"><table>
+      <thead><tr><th>需求项目</th><th>价格状态</th><th>排期状态</th><th>资质状态</th><th>来源记录</th><th>待补内容</th><th>建议动作</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="7" class="muted">样例没有明细</td></tr>'}</tbody>
+    </table></div>
+    <div class="notice-box mt-16">金额汇总：未计算 · 规则版本：${escapeHtml((data.rule_snapshot || {}).version || '未提供')}</div>
+    <details class="raw-details"><summary>查看本次预览原始数据</summary><pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre></details>`;
+  $('quoteDemoPreview').classList.remove('hidden');
+}
+
 /* ---------------------------------------------------------------- knowledge */
 function renderKbHealth(weknora) {
   const configured = Boolean(weknora && weknora.configured);
@@ -1483,7 +1734,7 @@ function renderUserKpis() {
 function renderRoleCards() {
   const counts = {};
   state.users.forEach((user) => { counts[user.role] = (counts[user.role] || 0) + 1; });
-  $('roleCards').innerHTML = ['admin', 'reviewer', 'sales', 'viewer'].map((role) => `
+  $('roleCards').innerHTML = ROLE_CODES.map((role) => `
     <button type="button" class="role-card ${state.userRoleFilter === role ? 'active' : ''}" data-role="${role}">
       <div class="role-top"><b>${ROLE_NAMES[role]}</b><span class="role-count">${counts[role] || 0}</span></div>
       <p>${ROLE_DESCRIPTIONS[role]}</p>
@@ -1503,16 +1754,18 @@ function renderUsers() {
   $('userBody').innerHTML = users.map((user) => {
     const username = escapeHtml(user.username || '');
     const name = user.display_name || user.username || '未命名';
-    const options = ['admin', 'reviewer', 'sales', 'viewer'].map((role) => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${ROLE_NAMES[role]}</option>`).join('');
+    const options = EMPLOYEE_ROLE_CODES.map((role) => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${ROLE_NAMES[role]}</option>`).join('');
     const projects = (user.projects || []).map((project) => `<span class="chip">${project === '*' ? '全部项目' : escapeHtml(project)}</span>`).join('') || '<span class="muted">不限制</span>';
     const status = user.active ? '<span class="pill success">启用</span>' : '<span class="pill neutral">停用</span>';
     return `<tr>
       <td><div class="user-cell"><span class="avatar">${escapeHtml(initials(name))}</span><div><span class="u-name">${escapeHtml(name)}</span><span class="u-login">@${username}${user.restricted ? ' · 项目受限' : ''}</span></div></div></td>
-      <td><select class="role-select" data-role-user="${username}">${options}</select></td>
+      <td>${user.role === 'customer' ? '<span class="muted">小程序账号</span>' : `<select class="role-select" data-role-user="${username}">${options}</select>`}</td>
       <td>${escapeHtml(user.department || '—')}</td>
       <td>${projects}</td>
       <td>${status}${user.locked ? '<span class="pill danger">锁定</span>' : ''}</td>
       <td class="actions">
+        <button type="button" class="btn btn-secondary btn-sm" data-act="review-permissions" data-user="${username}" data-permissions="${escapeHtml((user.review_permissions || []).join(','))}">审核授权${(user.review_permissions || []).length ? ` (${user.review_permissions.length})` : ''}</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-act="oidc" data-user="${username}" data-issuers="${escapeHtml((user.oidc_issuers || []).join('|'))}">SSO${user.oidc_linked ? '已绑定' : '未绑定'}</button>
         <button type="button" class="btn btn-secondary btn-sm" data-act="projects" data-user="${username}" data-projects="${escapeHtml((user.projects || []).join(','))}">${ic('folder')}项目</button>
         <button type="button" class="btn btn-secondary btn-sm" data-act="reset" data-user="${username}">${ic('key')}重置</button>
         <button type="button" class="btn ${user.active ? 'btn-danger' : 'btn-secondary'} btn-sm" data-act="toggle" data-user="${username}" data-active="${user.active ? '1' : '0'}">${user.active ? '停用' : '启用'}</button>
@@ -1534,6 +1787,654 @@ async function loadAdmin() {
   renderRoleCards();
   renderUsers();
   if (state.adminView === 'audit') await loadAudit(false);
+}
+const REGISTRATION_STATUS_LABELS = {
+  draft: '草稿', submitted: '待审核', needs_info: '待补件', approved: '已批准', rejected: '已拒绝',
+};
+function registrationReviewPendingKey(registrationId) {
+  return `p0-registration-review:${String(state.me?.username || '')}:${registrationId}`;
+}
+function readPendingRegistrationReview(registrationId) {
+  const stored = sessionStorage.getItem(registrationReviewPendingKey(registrationId));
+  return stored ? JSON.parse(stored) : null;
+}
+async function loadCustomerRegistrations() {
+  const body = $('registrationBody');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="10" class="muted">正在读取演示注册…</td></tr>';
+  const status = $('registrationStatusFilter').value;
+  try {
+    const result = await jsonFetch('api/v1/customer-service/demo/admin/registrations');
+    const allRows = result.registrations || [];
+    state.customerRegistrations = filterReviewQueueItems(allRows, status, (item) => {
+      try { return Boolean(readPendingRegistrationReview(item.registration_id)); }
+      catch (error) { return true; }
+    });
+    if (!state.customerRegistrations.length) {
+      body.innerHTML = '<tr><td colspan="10" class="muted">当前筛选下没有演示登记</td></tr>';
+      return;
+    }
+    body.innerHTML = state.customerRegistrations.map((item) => {
+      let pendingReview = null;
+      try { pendingReview = readPendingRegistrationReview(item.registration_id); } catch (error) { pendingReview = { unreadable: true }; }
+      const risk = item.rule_review || {};
+      const routing = item.assignment_preview || {};
+      const ruleRevision = risk.status === 'candidate'
+        ? `data-registration-rule-revision="${escapeHtml(risk.config_revision)}" data-registration-revision="${escapeHtml(item.revision ?? 1)}"`
+        : '';
+      const actions = pendingReview
+        ? `<button class="btn btn-warning btn-sm" data-registration-review-retry="${escapeHtml(item.registration_id)}" ${pendingReview.unreadable ? 'disabled' : ''}>${pendingReview.unreadable ? '重试记录不可读' : '恢复上次审核'}</button>`
+        : item.status === 'submitted' && risk.status === 'candidate'
+        ? `<div class="row"><button class="btn btn-secondary btn-sm" data-registration-decision="needs_info" data-registration-id="${escapeHtml(item.registration_id)}" ${ruleRevision}>补件</button><button class="btn btn-primary btn-sm" data-registration-decision="approved" data-registration-id="${escapeHtml(item.registration_id)}" ${ruleRevision}>批准</button><button class="btn btn-danger btn-sm" data-registration-decision="rejected" data-registration-id="${escapeHtml(item.registration_id)}" ${ruleRevision}>拒绝</button></div>`
+        : (item.status === 'submitted' ? '规则不可用，暂不能审核' : (item.status === 'needs_info' ? '等待客户补件' : '—'));
+      const riskSignals = risk.status !== 'candidate' ? ['规则配置不可用'] : [
+        risk.company_list_conflict ? '黑白名单冲突候选' : (risk.blacklist_match ? '黑名单候选' : ''),
+        !risk.company_list_conflict && risk.whitelist_match ? '白名单候选' : '',
+        risk.whitelist_keyword_match ? '重点客户关键词候选' : '',
+        risk.intermediary_keyword_match ? '中介关键词候选' : '',
+      ].filter(Boolean);
+      const riskHint = risk.status === 'candidate' && !riskSignals.length
+        ? '当前规则未命中（不代表无风险）'
+        : riskSignals.join('、');
+      const riskCell = `<span class="pill">${escapeHtml(riskHint)}</span><div class="muted">版本 ${escapeHtml(risk.config_revision ?? '未知')}；仅供人工复核</div>`;
+      const routeLabels = { matched_candidate: '地区匹配候选', backup_candidate: '备用经理候选', unconfigured: '未启用', unmatched: '无匹配/无备用', unavailable: '配置不可用', ambiguous: '映射冲突' };
+      const routeText = routing.candidate_manager_id
+        ? `${routeLabels[routing.status] || routing.status}：${routing.candidate_manager_id}`
+        : (routeLabels[routing.status] || '未配置');
+      const routeCell = `<span class="pill">${escapeHtml(routeText)}</span><div class="muted">配置 ${escapeHtml(routing.config_revision ?? '未知')}；${routing.assigned ? '已指派' : '仅候选'}；${routing.notification_sent ? '已通知' : '未通知'}</div>`;
+      return `<tr><td>${escapeHtml(item.registration_id)}</td><td>${escapeHtml(item.company_name)}</td><td>${escapeHtml(item.contact_name)}</td><td>${escapeHtml(item.region)}</td><td>${escapeHtml(item.notes || '—')}</td><td>${riskCell}</td><td>${routeCell}</td><td><span class="pill">${escapeHtml(REGISTRATION_STATUS_LABELS[item.status] || item.status)}</span></td><td>${escapeHtml(item.updated_at)}</td><td>${actions}</td></tr>`;
+    }).join('');
+  } catch (error) {
+    body.innerHTML = `<tr><td colspan="10" class="muted">${escapeHtml(error.message || '演示注册服务暂不可用')}</td></tr>`;
+  }
+}
+async function decideCustomerRegistration(registrationId, decision, ruleConfigRevision = null, registrationRevision = null) {
+  const pendingKey = registrationReviewPendingKey(registrationId);
+  let pending = null;
+  try { pending = readPendingRegistrationReview(registrationId); }
+  catch (error) { toast('上次登记审核重试记录不可读取，已停止发送', 'error'); return; }
+  if (!pending && !decision) { toast('本机没有待恢复的登记审核记录，请刷新队列', 'error'); return; }
+  if (pending && pending.unreadable) { toast('上次登记审核重试记录不可读取，已停止发送', 'error'); return; }
+  if (pending && (!pending.operationId || !pending.payload || !pending.fingerprint
+      || pending.fingerprint !== JSON.stringify(pending.payload))) {
+    toast('上次登记审核重试记录不完整，已停止发送', 'error'); return;
+  }
+  if (pending && decision && pending.payload.decision !== decision) {
+    toast('上次审核结果尚未确认，请先恢复原操作', 'error'); return;
+  }
+  if (!pending) {
+    const label = REGISTRATION_STATUS_LABELS[decision] || decision;
+    const reason = window.prompt(`请填写“${label}”原因（必填）：`);
+    if (reason === null) return;
+    if (!reason.trim()) { toast('审核原因不能为空', 'error'); return; }
+    const payload = {
+      decision, reason: reason.trim(), rule_config_revision: ruleConfigRevision,
+      registration_revision: registrationRevision,
+    };
+    try {
+      pending = {
+        payload, fingerprint: JSON.stringify(payload),
+        operationId: createSecureOperationId('registration-review', window.crypto),
+      };
+      sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+    } catch (error) { toast(error.message || '无法保存审核重试编号，未提交', 'error'); return; }
+  }
+  try {
+    const result = await jsonFetch(`api/v1/customer-service/demo/admin/registrations/${encodeURIComponent(registrationId)}/review`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pending.operationId },
+      body: JSON.stringify(pending.payload),
+    });
+    try { sessionStorage.removeItem(pendingKey); } catch (error) { toast('审核已记录，但本机待办未能清除；请刷新恢复结果', 'info'); }
+    toast(result.idempotent_replay ? '已恢复上次审核结果' : `已记录：${REGISTRATION_STATUS_LABELS[pending.payload.decision] || pending.payload.decision}`);
+    await loadCustomerRegistrations();
+  } catch (error) {
+    if (error.statusCode === 409 || (error.statusCode >= 400 && error.statusCode < 500)) {
+      try { sessionStorage.removeItem(pendingKey); } catch (storageError) { /* Keep the operation if cleanup fails. */ }
+      toast(`${error.message}；请刷新队列后再决定`, 'error');
+    } else toast(error.message, 'error');
+  }
+}
+const ORDER_STATUS_LABELS = { submitted: '待审核', needs_info: '待补件', approved: '待客户确认（演示）', rejected: '已拒绝（演示）', customer_confirmed: '客户已确认（演示）', customer_declined: '客户暂不接受（演示）' };
+function orderReviewPendingKey(orderId) {
+  return `p0-order-review:${String(state.me?.username || '')}:${orderId}`;
+}
+function readPendingOrderReview(orderId) {
+  const stored = sessionStorage.getItem(orderReviewPendingKey(orderId));
+  return stored ? JSON.parse(stored) : null;
+}
+async function loadCustomerOrders() {
+  const body = $('orderBody');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="7" class="muted">正在读取演示委托…</td></tr>';
+  const status = $('orderStatusFilter').value;
+  try {
+    const result = await jsonFetch('api/v1/customer-service/demo/admin/orders');
+    const allRows = result.orders || [];
+    const rows = filterReviewQueueItems(allRows, status, (item) => {
+      try { return Boolean(readPendingOrderReview(item.order_id)); }
+      catch (error) { return true; }
+    });
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="muted">当前筛选下没有演示委托</td></tr>'; return; }
+    body.innerHTML = rows.map((item) => {
+      let pendingReview = null;
+      try { pendingReview = readPendingOrderReview(item.order_id); } catch (error) { pendingReview = { unreadable: true }; }
+      const actionable = ['submitted', 'needs_info'].includes(item.status);
+      const actions = actionable
+        ? `<div class="row"><button class="btn btn-secondary btn-sm" data-order-decision="needs_info" data-order-id="${escapeHtml(item.order_id)}" data-order-revision="${escapeHtml(item.revision ?? 1)}">补件</button><button class="btn btn-primary btn-sm" data-order-decision="approved" data-order-id="${escapeHtml(item.order_id)}" data-order-revision="${escapeHtml(item.revision ?? 1)}">批准</button><button class="btn btn-danger btn-sm" data-order-decision="rejected" data-order-id="${escapeHtml(item.order_id)}" data-order-revision="${escapeHtml(item.revision ?? 1)}">拒绝</button></div>`
+        : '—';
+      const retry = pendingReview
+        ? `<button class="btn btn-warning btn-sm" data-order-review-retry="${escapeHtml(item.order_id)}" ${pendingReview.unreadable ? 'disabled' : ''}>${pendingReview.unreadable ? '重试记录不可读' : '恢复上次审核'}</button>`
+        : '';
+      const snapshot = item.template_snapshot || {};
+      return `<tr><td>${escapeHtml(item.order_id)}</td><td>${escapeHtml(item.company_name)}<br><span class="muted">${escapeHtml(item.contact_name)}</span></td><td>${escapeHtml(item.project_name)}<br><span class="muted">${escapeHtml(item.sample_name)} · ${escapeHtml(item.quantity)}</span></td><td>${escapeHtml(snapshot.label || '—')}<br><span class="muted">${escapeHtml(snapshot.version || '')}</span></td><td><span class="pill">${escapeHtml(ORDER_STATUS_LABELS[item.status] || item.status)}</span></td><td>${escapeHtml(item.updated_at)}</td><td>${actions}${retry}</td></tr>`;
+    }).join('');
+  } catch (error) {
+    body.innerHTML = `<tr><td colspan="7" class="muted">${escapeHtml(error.message || '演示委托服务暂不可用')}</td></tr>`;
+  }
+}
+async function decideCustomerOrder(orderId, decision, expectedRevision = null) {
+  const pendingKey = orderReviewPendingKey(orderId);
+  let pending = null;
+  try { pending = readPendingOrderReview(orderId); }
+  catch (error) { toast('上次委托审核重试记录不可读取，已停止发送', 'error'); return; }
+  if (!pending && !decision) { toast('本机没有待恢复的委托审核记录，请刷新队列', 'error'); return; }
+  if (pending && (!pending.operationId || !pending.decision || !pending.reason || !Number.isInteger(pending.expectedRevision))) {
+    toast('上次委托审核重试记录不完整，已停止发送', 'error');
+    return;
+  }
+  if (pending && pending.unreadable) { toast('上次委托审核重试记录不可读取，已停止发送', 'error'); return; }
+  if (pending && decision && pending.decision !== decision) {
+    toast('上次审核结果尚未确认，请先恢复原操作', 'error');
+    return;
+  }
+  if (!pending) {
+    const label = ORDER_STATUS_LABELS[decision] || decision;
+    const reason = window.prompt(`请填写“${label}”原因（必填）：`);
+    if (reason === null) return;
+    if (!reason.trim()) { toast('审核原因不能为空', 'error'); return; }
+    try {
+      if (!Number.isInteger(expectedRevision)) { toast('委托审核版本无效，请刷新队列', 'error'); return; }
+      pending = {
+        decision, reason: reason.trim(), expectedRevision,
+        operationId: createSecureOperationId('order-review', window.crypto),
+      };
+      sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+    } catch (error) { toast(error.message || '无法保存审核重试编号，未提交', 'error'); return; }
+  }
+  try {
+    const result = await jsonFetch(`api/v1/customer-service/demo/admin/orders/${encodeURIComponent(orderId)}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pending.operationId },
+      body: JSON.stringify({
+        decision: pending.decision, reason: pending.reason,
+        expected_revision: pending.expectedRevision,
+      }),
+    });
+    try { sessionStorage.removeItem(pendingKey); } catch (error) { toast('审核已记录，但本机待办未能清除；请刷新恢复结果', 'info'); }
+    toast(result.idempotent_replay ? '已恢复上次审核结果' : `已记录：${ORDER_STATUS_LABELS[pending.decision] || pending.decision}`);
+    await loadCustomerOrders();
+  } catch (error) {
+    if (error.statusCode === 409) {
+      try { sessionStorage.removeItem(pendingKey); } catch (storageError) { /* Retain if the browser storage is unavailable. */ }
+      toast(`${error.message}；该操作未由本次重试写入，请刷新队列`, 'error');
+    } else if (error.statusCode >= 400 && error.statusCode < 500) {
+      try { sessionStorage.removeItem(pendingKey); } catch (storageError) { /* Preserve safe retry state if cleanup fails. */ }
+      toast(error.message, 'error');
+    } else toast(error.message, 'error');
+  }
+}
+const CONVERSATION_STATUS_LABELS = { open: '待接手', assigned: '已接手', archived: '已归档' };
+let customerConversationRequest = 0;
+function conversationActionPendingKey(conversationId) {
+  return `p0-demo-conversation-action:${String(state.me?.username || '')}:${conversationId}`;
+}
+function readPendingConversationAction(conversationId) {
+  const value = sessionStorage.getItem(conversationActionPendingKey(conversationId));
+  return value ? JSON.parse(value) : null;
+}
+async function loadCustomerConversations() {
+  const body = $('conversationBody');
+  if (!body) return;
+  const requestId = ++customerConversationRequest;
+  body.innerHTML = '<tr><td colspan="8" class="muted">正在读取本地演示会话…</td></tr>';
+  const status = $('conversationStatusFilter').value;
+  try {
+    const result = await jsonFetch('api/v1/customer-service/demo/admin/conversations');
+    if (requestId !== customerConversationRequest) return;
+    const rows = result.conversations || [];
+    state.customerConversations = rows;
+    const companyQuery = $('conversationCompanyFilter').value.trim().toLocaleLowerCase();
+    const priorityFilter = $('conversationPriorityFilter').value;
+    const unreadFilter = $('conversationUnreadFilter').value;
+    const visibleRows = filterReviewQueueItems.filterWithPendingOverride(rows, status, (item) => {
+      if (companyQuery && !String(item.company_name || '').toLocaleLowerCase().includes(companyQuery)) return false;
+      const isPriority = Boolean(item.priority_preview?.priority_candidate);
+      if (priorityFilter === 'yes' && !isPriority) return false;
+      if (priorityFilter === 'no' && isPriority) return false;
+      const hasUnread = (Number(item.unread_count) || 0) > 0;
+      if (unreadFilter === 'unread' && !hasUnread) return false;
+      if (unreadFilter === 'read' && hasUnread) return false;
+      return true;
+    }, (item) => {
+      try { return Boolean(readPendingConversationAction(item.conversation_id)); }
+      catch (error) { return true; }
+    });
+    if (!visibleRows.length) { body.innerHTML = '<tr><td colspan="8" class="muted">当前组合筛选下没有会话</td></tr>'; return; }
+    body.innerHTML = visibleRows.map((item) => {
+      const last = (item.messages || []).slice(-1)[0] || {};
+      const unread = Number(item.unread_count) || 0;
+      const priority = item.priority_preview || {};
+      const priorityLabel = priority.status !== 'candidate' ? '重点识别不可用' : '重点客户候选 · 人工核验';
+      const companyCell = `<span>${escapeHtml(item.company_name)}</span>${priority.priority_candidate ? ` <span class="pill warn">${escapeHtml(priorityLabel)}</span>` : (priority.status === 'candidate' ? '' : ` <span class="pill">${escapeHtml(priorityLabel)}</span>`)}`;
+      let pending = null;
+      try { pending = readPendingConversationAction(item.conversation_id); } catch (error) { pending = { unreadable: true }; }
+      const controls = `<div class="row"><button class="btn btn-secondary btn-sm" data-conversation-action="detail" data-conversation-id="${escapeHtml(item.conversation_id)}">查看</button>${pending ? `<button class="btn btn-warning btn-sm" data-conversation-action="retry" data-conversation-id="${escapeHtml(item.conversation_id)}" ${pending.unreadable ? 'disabled' : ''}>${pending.unreadable ? '重试记录不可读' : '恢复上次操作'}</button>` : item.status === 'archived' ? '' : `${item.status === 'open' ? `<button class="btn btn-secondary btn-sm" data-conversation-action="claim" data-conversation-id="${escapeHtml(item.conversation_id)}">接单</button>` : `<button class="btn btn-primary btn-sm" data-conversation-action="reply" data-conversation-id="${escapeHtml(item.conversation_id)}">回复</button>`}<button class="btn btn-secondary btn-sm" data-conversation-action="assign" data-conversation-id="${escapeHtml(item.conversation_id)}">转交</button><button class="btn btn-danger btn-sm" data-conversation-action="archive" data-conversation-id="${escapeHtml(item.conversation_id)}">归档</button>`}</div>`;
+      return `<tr><td>${escapeHtml(item.conversation_id)}</td><td>${companyCell}</td><td>${escapeHtml(last.text || '—')}</td><td><span class="pill ${unread ? 'warn' : ''}">${unread ? `未读 ${unread}` : '已读'}</span></td><td><span class="pill">${escapeHtml(CONVERSATION_STATUS_LABELS[item.status] || item.status)}</span></td><td>${escapeHtml(item.assigned_to || '未接手')}</td><td>${escapeHtml(item.updated_at)}</td><td>${controls}</td></tr>`;
+    }).join('');
+  } catch (error) {
+    if (requestId !== customerConversationRequest) return;
+    body.innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(error.message || '会话演示服务暂不可用')}</td></tr>`;
+  }
+}
+async function handleCustomerConversationAction(button) {
+  const conversationId = button.dataset.conversationId;
+  const action = button.dataset.conversationAction;
+  if (action === 'reply') {
+    const actor = String(state.me?.username || '');
+    const pendingKey = `p0-demo-reply:${actor}:${conversationId}`;
+    let pending = null;
+    try {
+      const stored = sessionStorage.getItem(pendingKey);
+      if (stored) pending = JSON.parse(stored);
+    } catch (error) { toast('上次回复重试记录不可读取，已停止发送', 'error'); return; }
+    const text = window.prompt(
+      pending ? '上次回复结果未确认。保持原文即可安全重试：' : '请输入回复内容（仅保存到本地演示会话，不会发送给客户微信）：',
+      pending ? pending.text : '',
+    );
+    if (text === null) return;
+    if (!text.trim()) { toast('回复内容不能为空', 'error'); return; }
+    if (pending && pending.text !== text.trim()) { toast('上一条回复结果尚未确认，请先用原文重试', 'error'); return; }
+    if (!pending) {
+      try { pending = { text: text.trim(), operationId: createSecureOperationId('web', window.crypto) }; }
+      catch (error) { toast(error.message, 'error'); return; }
+      try { sessionStorage.setItem(pendingKey, JSON.stringify(pending)); }
+      catch (error) { toast('无法保存回复重试编号，未提交回复', 'error'); return; }
+    }
+    try {
+      const result = await jsonFetch(`api/v1/customer-service/demo/admin/conversations/${encodeURIComponent(conversationId)}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pending.operationId },
+        body: JSON.stringify({ text: pending.text }),
+      });
+      sessionStorage.removeItem(pendingKey);
+      toast(result.idempotent_replay ? '已恢复上次回复结果' : '回复已存入本地演示会话');
+      await loadCustomerConversations();
+    } catch (error) { toast(error.message, 'error'); }
+    return;
+  }
+  if (action === 'detail') {
+    const latest = await jsonFetch('api/v1/customer-service/demo/admin/conversations');
+    const conversation = (latest.conversations || []).find((item) => item.conversation_id === conversationId);
+    if (!conversation) { toast('会话已变化，请刷新队列', 'error'); return; }
+    const history = (conversation.history || []).map((item) => `${item.at} · ${item.actor} · ${item.action} · ${item.from || '—'} → ${item.to} · ${item.reason || '—'}`);
+    window.alert([`企业：${conversation.company_name}`, `状态：${CONVERSATION_STATUS_LABELS[conversation.status] || conversation.status}`, ...(conversation.messages || []).map((item) => `${item.sender === 'customer' ? '客户' : '客服'}：${item.text}`), '状态历史：', ...(history.length ? history : ['暂无'])].join('\n\n'));
+    if ((Number(conversation.unread_count) || 0) > 0) {
+      await jsonFetch(`api/v1/customer-service/demo/admin/conversations/${encodeURIComponent(conversationId)}/read`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ through_message_count: conversation.message_count }),
+      });
+      await loadCustomerConversations();
+    }
+    return;
+  }
+  const pendingKey = conversationActionPendingKey(conversationId);
+  const actor = String(state.me?.username || '');
+  if (!actor) { toast('当前管理员身份不可用，未提交操作', 'error'); return; }
+  let pending = null;
+  try { pending = readPendingConversationAction(conversationId); }
+  catch (error) { toast('上次队列操作记录不可读取，已停止发送', 'error'); return; }
+  if (pending && (pending.unreadable || !pending.operationId || !pending.action || !pending.payload
+      || pending.fingerprint !== JSON.stringify({ action: pending.action, payload: pending.payload }))) {
+    toast('上次队列操作记录不完整，已停止发送', 'error'); return;
+  }
+  if (action === 'retry') {
+    if (!pending) { toast('本机没有待恢复操作，请刷新队列', 'error'); return; }
+  } else if (pending && pending.action !== action) {
+    toast('上次操作结果尚未确认，请先恢复原操作', 'error'); return;
+  }
+  let route = pending ? pending.action : action;
+  let body = pending ? pending.payload : {};
+  if (!pending) {
+    const reason = window.prompt(`请填写${action === 'claim' ? '接单' : action === 'assign' ? '转交' : '归档'}原因（必填）：`);
+    if (reason === null) return;
+    if (!reason.trim()) { toast('原因不能为空', 'error'); return; }
+    body = { reason: reason.trim() };
+    if (action === 'assign') {
+      const assignee = window.prompt('请输入启用中的管理员账号（经理角色映射尚未配置）：');
+      if (assignee === null) return;
+      if (!assignee.trim()) { toast('转交对象不能为空', 'error'); return; }
+      body.assignee = assignee.trim();
+    }
+    try {
+      pending = {
+        action: route, payload: body,
+        fingerprint: JSON.stringify({ action: route, payload: body }),
+        operationId: createSecureOperationId('web', window.crypto),
+      };
+      sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+    } catch (error) { toast(error.message || '无法保存队列操作重试编号，未提交', 'error'); return; }
+  }
+  try {
+    const result = await jsonFetch(`api/v1/customer-service/demo/admin/conversations/${encodeURIComponent(conversationId)}/${route}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pending.operationId },
+      body: JSON.stringify(pending.payload),
+    });
+    try { sessionStorage.removeItem(pendingKey); }
+    catch (error) { toast('操作已记录，但本机待办未能清除；刷新后可恢复结果', 'info'); }
+    toast(result.idempotent_replay ? '已恢复上次队列操作' : (route === 'claim' ? '会话已接手' : route === 'assign' ? '会话已转交' : '会话已归档'));
+    await loadCustomerConversations();
+  } catch (error) {
+    if (isDefinitiveReviewActionRejection(error.statusCode)) {
+      try { sessionStorage.removeItem(pendingKey); } catch (storageError) { /* retain if cleanup failed */ }
+    }
+    await loadCustomerConversations();
+    toast(error.message, 'error');
+  }
+}
+const QUOTE_INQUIRY_STATUS_LABELS = {
+  draft: '草稿', submitted: '已提交', need_info: '待补信息', preview: '内部预览',
+  needs_human: '待人工处理', resolved: '已关闭',
+};
+function quoteInquiryActionPendingKey(inquiryId) {
+  return `p0-quote-inquiry-action:${String(state.me?.username || '')}:${inquiryId}`;
+}
+function readPendingQuoteInquiryAction(inquiryId) {
+  const value = sessionStorage.getItem(quoteInquiryActionPendingKey(inquiryId));
+  return value ? JSON.parse(value) : null;
+}
+function collectQuoteInquiryPayload() {
+  const project_name = $('inquiryProject').value.trim();
+  if (!project_name) throw new Error('请填写已授权的项目标识');
+  const quantityText = $('inquiryQuantity').value.trim();
+  const quantity = quantityText ? Number(quantityText) : null;
+  if (quantity !== null && (!Number.isFinite(quantity) || quantity <= 0)) throw new Error('数量必须大于 0');
+  return {
+    project_name,
+    context: $('inquiryContext').value.trim(),
+    lines: [{
+      item_name: $('inquiryItem').value.trim(),
+      sample_name: $('inquirySample').value.trim(),
+      standard: $('inquiryStandard').value.trim(),
+      quantity,
+      unit: $('inquiryUnit').value.trim(),
+    }],
+  };
+}
+function restoreQuoteInquiryPayload(payload) {
+  const line = (payload && Array.isArray(payload.lines) ? payload.lines : [])[0] || {};
+  $('inquiryProject').value = payload.project_name || '';
+  $('inquiryContext').value = payload.context || '';
+  $('inquiryItem').value = line.item_name || '';
+  $('inquirySample').value = line.sample_name || '';
+  $('inquiryStandard').value = line.standard || '';
+  $('inquiryQuantity').value = line.quantity == null ? '' : String(line.quantity);
+  $('inquiryUnit').value = line.unit || '';
+}
+function renderQuoteInquiryPreview(inquiry) {
+  const target = $('inquiryPreview');
+  const preview = inquiry.preview;
+  const rows = preview && Array.isArray(preview.lines) ? preview.lines : [];
+  const facts = rows.map((line) => {
+    const request = line.request || {};
+    const price = line.price_preview ? `${line.price_preview.unit_price} / 单位` : '未匹配';
+    const sources = (line.source_refs || []).map((source) => source.record_id).join('、') || '无来源记录';
+    return `<li><b>${escapeHtml(request.item_name || '待补项目')}</b> · ${escapeHtml(QUOTE_INQUIRY_STATUS_LABELS[line.action] || line.action)}<br><span class="muted">内部单价事实：${escapeHtml(price)}；来源：${escapeHtml(sources)}；总价不计算。</span><br><span class="muted">待处理：${escapeHtml((line.missing_fields || []).join('、') || '无')}</span></li>`;
+  }).join('');
+  target.classList.remove('hidden');
+  target.innerHTML = `<div class="banner ${inquiry.status === 'needs_human' ? 'warn' : 'info'}">状态：${escapeHtml(QUOTE_INQUIRY_STATUS_LABELS[inquiry.status] || inquiry.status)}${inquiry.manual_reason ? ` · ${escapeHtml(inquiry.manual_reason)}` : ''}</div>${facts ? `<ul class="check-list mt-16">${facts}</ul>` : '<p class="muted mt-16">尚无 CRM 来源预览；询价已保留供人工处理。</p>'}<p class="muted">${escapeHtml((preview && preview.warnings || []).join('；'))}</p>`;
+}
+function renderMyQuoteInquiries() {
+  const target = $('myQuoteInquiries');
+  if (!state.myQuoteInquiries.length) {
+    target.innerHTML = '<div class="muted">还没有询价工单</div>';
+    return;
+  }
+  target.innerHTML = state.myQuoteInquiries.map((item) => `
+    <button type="button" class="history-item" data-my-inquiry="${escapeHtml(item.inquiry_id)}">
+      <span><b>${escapeHtml(item.project_name)}</b><small>${escapeHtml(item.inquiry_id)} · ${escapeHtml(item.updated_at)}</small></span>
+      <span class="pill">${escapeHtml(QUOTE_INQUIRY_STATUS_LABELS[item.status] || item.status)}</span>
+    </button>`).join('');
+}
+async function loadMyQuoteInquiries() {
+  const target = $('myQuoteInquiries');
+  if (!target) return;
+  try {
+    const result = await jsonFetch('api/v1/customer-service/quote-inquiries');
+    state.myQuoteInquiries = result.inquiries || [];
+    renderMyQuoteInquiries();
+  } catch (error) {
+    target.innerHTML = `<div class="muted">${escapeHtml(error.message || '询价工单暂不可用')}；服务端需启用本地询价流程。</div>`;
+  }
+}
+async function saveQuoteInquiryDraft() {
+  const payload = collectQuoteInquiryPayload();
+  let result;
+  if (state.quoteInquiryId) {
+    const current = state.myQuoteInquiries.find((item) => item.inquiry_id === state.quoteInquiryId);
+    if (current && !['draft', 'need_info', 'needs_human'].includes(current.status)) {
+      throw new Error('当前工单状态不可修改；请新建询价或联系人工处理');
+    }
+    result = await jsonFetch(`api/v1/customer-service/quote-inquiries/${encodeURIComponent(state.quoteInquiryId)}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  } else {
+    const actor = String(state.me?.username || '');
+    if (!actor) throw new Error('登录状态不可用，未创建询价草稿');
+    const pendingKey = `p0-quote-inquiry-create:${actor}`;
+    let pending = null;
+    try {
+      const stored = sessionStorage.getItem(pendingKey);
+      if (stored) pending = JSON.parse(stored);
+    } catch (error) { throw new Error('询价创建重试记录不可读取，已停止发送'); }
+    const payloadFingerprint = JSON.stringify(payload);
+    if (pending && (!pending.operationId || !pending.payload || !pending.fingerprint)) {
+      throw new Error('询价创建重试记录不完整，已停止发送');
+    }
+    if (pending && pending.confirmedInquiryId && pending.fingerprint !== payloadFingerprint) {
+      try { sessionStorage.removeItem(pendingKey); }
+      catch (error) { throw new Error('上一条询价已确认，但本机记录无法清理；请稍后重试'); }
+      pending = null;
+    }
+    if (pending && pending.fingerprint !== payloadFingerprint) {
+      restoreQuoteInquiryPayload(pending.payload);
+      throw new Error('上次询价创建结果尚未确认；已恢复原资料，请按原内容重试');
+    }
+    if (!pending) {
+      pending = { payload, fingerprint: payloadFingerprint, operationId: createSecureOperationId('quote', window.crypto) };
+      try { sessionStorage.setItem(pendingKey, JSON.stringify(pending)); }
+      catch (error) { throw new Error('无法保存询价重试编号，未提交草稿'); }
+    }
+    try {
+      result = await jsonFetch('api/v1/customer-service/quote-inquiries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pending.operationId },
+        body: JSON.stringify(pending.payload),
+      });
+    } catch (error) {
+      if (error.statusCode >= 400 && error.statusCode < 500 && error.statusCode !== 409) {
+        try { sessionStorage.removeItem(pendingKey); } catch (storageError) { /* keep uncertain retry state */ }
+      }
+      throw error;
+    }
+    pending.confirmedInquiryId = result.inquiry.inquiry_id;
+    try {
+      sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+      sessionStorage.removeItem(pendingKey);
+    } catch (error) {
+      toast('草稿已保存；本机重试记录未能清理，新建询价时将先回读并确认该工单', 'info');
+    }
+  }
+  const inquiry = result.inquiry;
+  state.quoteInquiryId = inquiry.inquiry_id;
+  renderQuoteInquiryPreview(inquiry);
+  await loadMyQuoteInquiries();
+  return inquiry;
+}
+async function submitQuoteInquiry() {
+  const button = $('inquirySubmit');
+  busy(button, true, '提交中…');
+  try {
+    if (state.quoteInquiryId) {
+      const latest = await jsonFetch(`api/v1/customer-service/quote-inquiries/${encodeURIComponent(state.quoteInquiryId)}`);
+      if (latest.inquiry.status !== 'draft') {
+        const inquiry = latest.inquiry;
+        renderQuoteInquiryPreview(inquiry);
+        $('inquiryStatus').textContent = `工单 ${inquiry.inquiry_id} · ${QUOTE_INQUIRY_STATUS_LABELS[inquiry.status] || inquiry.status}`;
+        toast('已恢复工单当前状态');
+        await loadMyQuoteInquiries();
+        return;
+      }
+    }
+    const draft = await saveQuoteInquiryDraft();
+    if (draft.status !== 'draft') {
+      renderQuoteInquiryPreview(draft);
+      $('inquiryStatus').textContent = `工单 ${draft.inquiry_id} · ${QUOTE_INQUIRY_STATUS_LABELS[draft.status] || draft.status}`;
+      toast('已恢复工单当前状态');
+      await loadMyQuoteInquiries();
+      return;
+    }
+    const result = await jsonFetch(`api/v1/customer-service/quote-inquiries/${encodeURIComponent(draft.inquiry_id)}/submit`, { method: 'POST' });
+    renderQuoteInquiryPreview(result.inquiry);
+    $('inquiryStatus').textContent = `工单 ${result.inquiry.inquiry_id} · ${QUOTE_INQUIRY_STATUS_LABELS[result.inquiry.status] || result.inquiry.status}`;
+    toast('询价已保存，按来源状态转入内部处理');
+    await loadMyQuoteInquiries();
+  } catch (error) {
+    $('inquiryStatus').textContent = error.message;
+    toast(error.message, 'error');
+  } finally {
+    busy(button, false);
+  }
+}
+async function openMyQuoteInquiry(inquiryId) {
+  try {
+    const result = await jsonFetch(`api/v1/customer-service/quote-inquiries/${encodeURIComponent(inquiryId)}`);
+    const inquiry = result.inquiry;
+    state.quoteInquiryId = inquiry.inquiry_id;
+    $('inquiryProject').value = inquiry.project_name || '';
+    $('inquiryContext').value = inquiry.context || '';
+    const line = (inquiry.lines || [])[0] || {};
+    $('inquiryItem').value = line.item_name || '';
+    $('inquirySample').value = line.sample_name || '';
+    $('inquiryStandard').value = line.standard || '';
+    $('inquiryQuantity').value = line.quantity === null ? '' : (line.quantity || '');
+    $('inquiryUnit').value = line.unit || '';
+    $('inquiryStatus').textContent = `${inquiry.inquiry_id} · ${QUOTE_INQUIRY_STATUS_LABELS[inquiry.status] || inquiry.status}`;
+    renderQuoteInquiryPreview(inquiry);
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+async function loadCustomerQuoteInquiries() {
+  const body = $('quoteInquiryBody');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="8" class="muted">正在读取询价队列…</td></tr>';
+  const status = $('quoteInquiryStatusFilter').value;
+  try {
+    const result = await jsonFetch('api/v1/customer-service/quote-inquiries/admin/queue');
+    state.customerQuoteInquiries = filterReviewQueueItems(result.inquiries || [], status, (item) => {
+      try { return Boolean(readPendingQuoteInquiryAction(item.inquiry_id)); }
+      catch (error) { return true; }
+    });
+    if (!state.customerQuoteInquiries.length) {
+      body.innerHTML = '<tr><td colspan="8" class="muted">当前筛选下没有询价工单</td></tr>';
+      return;
+    }
+    body.innerHTML = state.customerQuoteInquiries.map((item) => {
+      let pendingAction = null;
+      try { pendingAction = readPendingQuoteInquiryAction(item.inquiry_id); }
+      catch (error) { pendingAction = { unreadable: true }; }
+      const active = ['need_info', 'preview', 'needs_human'].includes(item.status);
+      const lineSummary = (item.lines || []).map((line) => line.item_name || '待补项目').join('、');
+      const actions = `${active
+        ? `<div class="row">${item.assigned_to ? '' : `<button class="btn btn-secondary btn-sm" data-inquiry-action="claim" data-inquiry-id="${escapeHtml(item.inquiry_id)}">接单</button>`}<button class="btn btn-secondary btn-sm" data-inquiry-action="assign" data-inquiry-id="${escapeHtml(item.inquiry_id)}">转派</button><button class="btn btn-danger btn-sm" data-inquiry-action="resolve" data-inquiry-id="${escapeHtml(item.inquiry_id)}">关闭</button></div>`
+        : '—'}${pendingAction ? `<button class="btn btn-warning btn-sm" data-inquiry-action="retry" data-inquiry-id="${escapeHtml(item.inquiry_id)}" ${pendingAction.unreadable ? 'disabled' : ''}>${pendingAction.unreadable ? '重试记录不可读' : '恢复上次操作'}</button>` : ''}`;
+      return `<tr><td><button class="btn btn-secondary btn-sm" data-inquiry-action="detail" data-inquiry-id="${escapeHtml(item.inquiry_id)}">${escapeHtml(item.inquiry_id)}</button></td><td>${escapeHtml(item.project_name)}</td><td>${escapeHtml(item.created_by)}</td><td>${escapeHtml(lineSummary || '—')}</td><td><span class="pill">${escapeHtml(QUOTE_INQUIRY_STATUS_LABELS[item.status] || item.status)}</span></td><td>${escapeHtml(item.assigned_to || '未接单')}</td><td>${escapeHtml(item.updated_at)}</td><td>${actions}</td></tr>`;
+    }).join('');
+  } catch (error) {
+    body.innerHTML = `<tr><td colspan="8" class="muted">${escapeHtml(error.message || '询价队列暂不可用')}</td></tr>`;
+  }
+}
+async function handleCustomerQuoteInquiryAction(button) {
+  const inquiryId = button.dataset.inquiryId;
+  const action = button.dataset.inquiryAction;
+  if (action === 'detail') {
+    const item = state.customerQuoteInquiries.find((row) => row.inquiry_id === inquiryId);
+    if (!item) return;
+    const lines = (item.preview && item.preview.lines || []).map((line) => {
+      const price = line.price_preview ? `${line.price_preview.unit_price}（内部事实；未计算总价）` : '未匹配';
+      return `${line.request.item_name || '待补项目'}｜${line.action}｜${price}`;
+    }).join('\n');
+    window.alert([`项目：${item.project_name}`, `上下文：${item.context || '—'}`, `状态原因：${item.manual_reason || '—'}`, `明细：\n${lines || '尚无 CRM 预览'}`].join('\n\n'));
+    return;
+  }
+  const pendingKey = quoteInquiryActionPendingKey(inquiryId);
+  let pending = null;
+  try { pending = readPendingQuoteInquiryAction(inquiryId); }
+  catch (error) { toast('上次询价队列操作记录不可读取，已停止发送', 'error'); return; }
+  if (pending && pending.unreadable) { toast('上次询价队列操作记录不可读取，已停止发送', 'error'); return; }
+  if (pending && (!pending.operationId || !pending.action || !pending.payload
+      || pending.fingerprint !== JSON.stringify({ action: pending.action, payload: pending.payload }))) {
+    toast('上次询价队列操作记录不完整，已停止发送', 'error'); return;
+  }
+  if (action === 'retry') {
+    if (!pending) { toast('本机没有待恢复的操作，请刷新队列', 'error'); return; }
+  } else if (pending && pending.action !== action) {
+    toast('上次操作结果尚未确认，请先恢复原操作', 'error'); return;
+  }
+  let body = pending ? pending.payload : {};
+  let route = pending ? pending.action : action;
+  if (!pending && (action === 'claim' || action === 'resolve')) {
+    const reason = window.prompt(`请填写${action === 'claim' ? '接单' : '关闭'}原因（必填）：`);
+    if (reason === null) return;
+    if (!reason.trim()) { toast('原因不能为空', 'error'); return; }
+    body.reason = reason.trim();
+  } else if (!pending && action === 'assign') {
+    const assignee = window.prompt('请输入启用中的销售账号：');
+    if (assignee === null) return;
+    const reason = window.prompt('请填写转派原因（必填）：');
+    if (reason === null) return;
+    if (!assignee.trim() || !reason.trim()) { toast('转派对象和原因不能为空', 'error'); return; }
+    body = { assignee: assignee.trim(), reason: reason.trim() };
+  } else if (!pending) return;
+  if (!pending) {
+    const actor = String(state.me?.username || '');
+    if (!actor) { toast('当前员工身份不可用，未提交操作', 'error'); return; }
+    try {
+      pending = {
+        action: route, payload: body,
+        fingerprint: JSON.stringify({ action: route, payload: body }),
+        operationId: createSecureOperationId('quote-admin', window.crypto),
+      };
+      sessionStorage.setItem(pendingKey, JSON.stringify(pending));
+    } catch (error) { toast(error.message || '无法保存操作重试编号，未提交', 'error'); return; }
+  }
+  try {
+    const result = await jsonFetch(`api/v1/customer-service/quote-inquiries/admin/${encodeURIComponent(inquiryId)}/${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': pending.operationId },
+      body: JSON.stringify(pending.payload),
+    });
+    try { sessionStorage.removeItem(pendingKey); }
+    catch (error) { toast('操作已记录，但本机重试记录无法清理；请刷新恢复状态', 'info'); }
+    toast(result.idempotent_replay ? '已恢复上次操作结果' : (route === 'claim' ? '已接单' : route === 'assign' ? '已转派' : '工单已关闭'));
+    await loadCustomerQuoteInquiries();
+  } catch (error) {
+    if (isDefinitiveReviewActionRejection(error.statusCode)) {
+      try { sessionStorage.removeItem(pendingKey); } catch (storageError) { /* Keep the operation if cleanup fails. */ }
+      await loadCustomerQuoteInquiries();
+    }
+    toast(error.message, 'error');
+  }
 }
 async function patchUser(username, body, successMessage) {
   try {
@@ -1794,6 +2695,18 @@ function renderAdminConfig() {
   $('cfgBizIntermediaryKeywords').value = (businessIntermediary.keywords || []).join(', ');
   $('cfgBizBlacklist').value = (business.blacklist?.companies || []).join('\n');
   $('cfgBizWhitelist').value = (business.whitelist?.companies || []).join('\n');
+  $('cfgBizWhitelistKeywords').value = (business.whitelist?.keywords || []).join('\n');
+  const regionRouting = business.region_routing || {};
+  $('cfgBizRegionManagers').value = (regionRouting.region_managers || []).map((item) => `${item.region}=${item.manager_id}`).join('\n');
+  $('cfgBizBackupManager').value = regionRouting.backup_manager_id || '';
+  $('cfgBizRegionRoutingEnabled').checked = Boolean(regionRouting.enabled);
+  const canManageRegionRouting = Boolean(state.me && state.me.role === 'admin');
+  $('cfgBizRegionManagers').closest('.field').classList.toggle('hidden', !canManageRegionRouting);
+  $('cfgBizBackupManager').closest('.field').classList.toggle('hidden', !canManageRegionRouting);
+  const canManageCustomerLists = Boolean(state.me && state.me.role === 'admin');
+  ['cfgBizBlacklist', 'cfgBizWhitelist', 'cfgBizWhitelistKeywords'].forEach((id) => {
+    $(id).closest('.field').classList.toggle('hidden', !canManageCustomerLists);
+  });
 
   Object.entries(ADMIN_CONFIG_SECTIONS).forEach(([section, meta]) => $(meta.id).classList.toggle('hidden', !canConfig(section)));
 }
@@ -1878,6 +2791,7 @@ function parseDiscountTiers(value) {
 }
 function collectBusinessConfig() {
   return {
+    expected_revision: state.config?.config?.revision,
     discount_tiers: parseDiscountTiers($('cfgBizDiscountTiers').value),
     rush: {
       enabled: $('cfgBizRushEnabled').checked,
@@ -1889,9 +2803,28 @@ function collectBusinessConfig() {
       block: $('cfgBizIntermediaryBlock').checked,
       keywords: splitList($('cfgBizIntermediaryKeywords').value),
     },
-    blacklist: { companies: splitList($('cfgBizBlacklist').value) },
-    whitelist: { companies: splitList($('cfgBizWhitelist').value) },
+    ...(state.me && state.me.role === 'admin' ? {
+      blacklist: { companies: splitList($('cfgBizBlacklist').value) },
+      whitelist: {
+        companies: splitList($('cfgBizWhitelist').value),
+        keywords: splitList($('cfgBizWhitelistKeywords').value),
+      },
+    } : {}),
+    ...(state.me && state.me.role === 'admin' ? { region_routing: {
+      enabled: $('cfgBizRegionRoutingEnabled').checked,
+      region_managers: parseRegionManagers($('cfgBizRegionManagers').value),
+      backup_manager_id: $('cfgBizBackupManager').value.trim(),
+    } } : {}),
   };
+}
+function parseRegionManagers(value) {
+  return String(value || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+    const parts = line.split('=');
+    if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
+      throw new Error(`地区经理映射格式不正确：${line}（应为「地区=账号」）`);
+    }
+    return { region: parts[0].trim(), manager_id: parts[1].trim() };
+  });
 }
 async function saveConfigSection(section, button, collector) {
   let body;
@@ -1926,12 +2859,51 @@ async function resetConfigSection(section, label) {
   });
   if (!confirmed) return;
   try {
-    state.config = await jsonFetch(`api/v1/admin/config/${section}/reset`, { method: 'POST' });
+    const revision = state.config?.config?.revision;
+    const query = Number.isInteger(revision) ? `?expected_revision=${encodeURIComponent(revision)}` : '';
+    state.config = await jsonFetch(`api/v1/admin/config/${section}/reset${query}`, { method: 'POST' });
     renderAdminConfig();
     await loadModuleConfig();
     toast(`已恢复默认${label}`);
   } catch (error) {
     showError(error);
+  }
+}
+async function importBusinessBlacklist() {
+  const input = $('cfgBizBlacklistFile');
+  const file = input.files && input.files[0];
+  if (!file) { toast('请选择黑名单 CSV 文件', 'error'); return; }
+  if (file.size > 200_000) { toast('CSV 文件不能超过 200 KB', 'error'); return; }
+  if ($('cfgBizBlacklistImportMode').value === 'replace') {
+    const confirmed = await confirmDialog({
+      title: '替换现有黑名单？',
+      message: 'CSV 校验通过后将以文件中的企业名单替换当前名单。',
+      confirmText: '替换名单', tone: 'danger',
+    });
+    if (!confirmed) return;
+  }
+  const button = $('cfgBizBlacklistImport');
+  busy(button, true, '导入中…');
+  try {
+    const csvText = await file.text();
+    const result = await jsonFetch('api/v1/admin/config/business/blacklist/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        csv_text: csvText,
+        mode: $('cfgBizBlacklistImportMode').value,
+        expected_revision: state.config?.config?.revision,
+      }),
+    });
+    state.config = result;
+    renderAdminConfig();
+    await loadModuleConfig();
+    const summary = result.blacklist_import || {};
+    toast(`黑名单已导入：新增 ${summary.added || 0} 家，当前共 ${summary.company_count || 0} 家`);
+  } catch (error) {
+    showError(error);
+  } finally {
+    input.value = '';
+    busy(button, false);
   }
 }
 const ADMIN_CONFIG_SECTIONS = {
@@ -1966,20 +2938,544 @@ function focusAdminConfigSection(section) {
   configFocusTimer = window.setTimeout(() => target.classList.remove('config-target'), 3200);
   return true;
 }
+async function loadCrmSchedules() {
+  const body = $('crmScheduleBody');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="6" class="muted">正在读取本地排期库…</td></tr>';
+  try {
+    const result = await jsonFetch('api/v1/crm/base-data/schedules');
+    crmScheduleRows = Array.isArray(result.schedules) ? result.schedules : [];
+    $('crmScheduleVersion').textContent = `版本 ${Number(result.version) || 0} · ${crmScheduleRows.length} 条排期`;
+    if (!crmScheduleRows.length) {
+      body.innerHTML = '<tr><td colspan="6" class="muted">暂无本地排期记录</td></tr>';
+      return;
+    }
+    body.innerHTML = crmScheduleRows.map((row, index) => `<tr>
+      <td>${escapeHtml(row.project_id || '—')}</td>
+      <td>${escapeHtml(row.project_name || '—')}</td>
+      <td>${escapeHtml(row.start_date || '未提供')} – ${escapeHtml(row.end_date || '未提供')}</td>
+      <td>${escapeHtml(row.status || '未填写')}<br><small class="muted">状态语义待客户确认</small></td>
+      <td>${escapeHtml(row.note || '—')}</td>
+      <td>${can('schedule:manage') || can('crm:base:manage') ? `<button type="button" class="btn btn-danger btn-sm" data-crm-schedule-delete="${index}">删除</button>` : '只读'}</td>
+    </tr>`).join('');
+  } catch (error) {
+    crmScheduleRows = [];
+    body.innerHTML = `<tr><td colspan="6" class="muted">${escapeHtml(error.message || '排期库暂不可用')}</td></tr>`;
+  }
+}
+
+async function loadCrmQualifications() {
+  const body = $('crmQualificationBody');
+  if (!body) return;
+  body.innerHTML = '<tr><td colspan="6" class="muted">正在读取本地资质库…</td></tr>';
+  try {
+    const result = await jsonFetch('api/v1/crm/base-data');
+    crmQualificationRows = Array.isArray(result.qualifications) ? result.qualifications : [];
+    $('crmQualificationVersion').textContent = `版本 ${Number(result.version) || 0} · ${crmQualificationRows.length} 条资质`;
+    if (!crmQualificationRows.length) {
+      body.innerHTML = '<tr><td colspan="6" class="muted">暂无本地资质记录</td></tr>';
+      return;
+    }
+    body.innerHTML = crmQualificationRows.map((row, index) => `<tr>
+      <td>${escapeHtml(row.name || '—')}</td>
+      <td>${escapeHtml(row.certificate_no || '—')}</td>
+      <td>${escapeHtml(row.scope || '未提供')}</td>
+      <td>${escapeHtml(row.valid_until || '未提供')}</td>
+      <td>${escapeHtml(row.status || '未填写')}<br><small class="muted">状态语义待客户确认</small></td>
+      <td><button type="button" class="btn btn-danger btn-sm" data-crm-qualification-delete="${index}">删除</button></td>
+    </tr>`).join('');
+  } catch (error) {
+    crmQualificationRows = [];
+    body.innerHTML = `<tr><td colspan="6" class="muted">${escapeHtml(error.message || '资质库暂不可用')}</td></tr>`;
+  }
+}
+
+async function saveCrmQualification(event) {
+  event.preventDefault();
+  const button = $('crmQualificationSave');
+  const payload = {
+    name: $('crmQualificationName').value.trim(),
+    certificate_no: $('crmQualificationCertificate').value.trim(),
+    scope: $('crmQualificationScope').value.trim(),
+    valid_until: $('crmQualificationValidUntil').value,
+    status: $('crmQualificationStatus').value.trim(),
+    source: $('crmQualificationSource').value.trim(),
+    reason: $('crmQualificationReason').value.trim(),
+  };
+  if (!payload.name || !payload.source || !payload.reason) {
+    toast('请填写资质名称、来源和变更原因', 'error');
+    return;
+  }
+  busy(button, true, '保存中…');
+  try {
+    let result;
+    try {
+      result = await jsonFetch('api/v1/crm/base-data/qualifications', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      if (error.statusCode !== 409 || !window.confirm('相同证书号或资质名称已有记录。确认覆盖该条记录吗？')) throw error;
+      result = await jsonFetch('api/v1/crm/base-data/qualifications', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, force_replace: true }),
+      });
+    }
+    $('crmQualificationForm').reset();
+    toast(result.action === 'updated' ? '资质记录已更新并记录审计' : '资质记录已新增并记录审计');
+    await loadCrmQualifications();
+  } catch (error) {
+    toast(`${error.message || '资质保存失败'}。请刷新列表核对服务端状态后再操作。`, 'error');
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function deleteCrmQualification(index) {
+  const row = crmQualificationRows[index];
+  if (!row) return;
+  if (!window.confirm(`确定删除资质“${row.name}”${row.certificate_no ? `（${row.certificate_no}）` : ''}？`)) return;
+  const reason = window.prompt('请输入删除原因');
+  if (!reason || !reason.trim()) return;
+  const source = window.prompt('请输入来源或变更记录');
+  if (!source || !source.trim()) {
+    toast('请填写删除来源', 'error');
+    return;
+  }
+  try {
+    await jsonFetch('api/v1/crm/base-data/qualifications', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...row, source: source.trim(), reason: reason.trim() }),
+    });
+    toast('资质记录已删除并记录审计');
+    await loadCrmQualifications();
+  } catch (error) {
+    toast(`${error.message || '资质删除失败'}。请刷新列表核对服务端状态。`, 'error');
+  }
+}
+
+function baseDataErrorRow(body, count, message) {
+  body.innerHTML = `<tr><td colspan="${count}" class="muted">${escapeHtml(message)}</td></tr>`;
+}
+
+async function loadCrmPrices() {
+  const body = $('crmPriceBody');
+  if (!body) return;
+  baseDataErrorRow(body, 7, '正在读取本地价格库…');
+  try {
+    const result = await jsonFetch('api/v1/crm/base-data');
+    crmPriceRows = Array.isArray(result.prices) ? result.prices : [];
+    $('crmPriceVersion').textContent = `版本 ${Number(result.version) || 0} · ${crmPriceRows.length} 条价格`;
+    if (!crmPriceRows.length) { baseDataErrorRow(body, 7, '暂无本地价格记录'); return; }
+    body.innerHTML = crmPriceRows.map((row, index) => `<tr>
+      <td>${escapeHtml(row.project_name || '—')}<br><small class="muted">${escapeHtml(row.project_id || '项目编号未提供')}</small></td>
+      <td>${escapeHtml(row.sample_name || '未提供样品')}<br><small>${escapeHtml(row.item_name || '—')}</small></td>
+      <td>${escapeHtml(row.standard || '未提供标准')}<br><small>${escapeHtml(row.department || '未提供部门')}</small></td>
+      <td>${escapeHtml(String(row.quantity ?? '—'))} / ${escapeHtml(row.unit || '未提供')}</td>
+      <td>${escapeHtml(String(row.unit_price ?? '—'))} / ${escapeHtml(String(row.discount ?? '—'))}%</td>
+      <td>${escapeHtml(row.valid_until || '未提供')}</td>
+      <td>${can('crm:prices:manage') || can('crm:base:manage') ? `<button type="button" class="btn btn-danger btn-sm" data-crm-price-delete="${index}">删除</button>` : '只读'}</td>
+    </tr>`).join('');
+  } catch (error) {
+    crmPriceRows = [];
+    baseDataErrorRow(body, 7, error.message || '价格库暂不可用');
+  }
+}
+
+async function saveCrmPrice(event) {
+  event.preventDefault();
+  const button = $('crmPriceSave');
+  let numericValues;
+  try {
+    numericValues = window.CrmPriceInput.preserveNumericText(
+      $('crmPriceQuantity').value, $('crmPriceUnitPrice').value, $('crmPriceDiscount').value,
+    );
+  } catch (error) {
+    toast(error.message, 'error');
+    return;
+  }
+  const payload = {
+    project_id: $('crmPriceProjectId').value.trim(),
+    project_name: $('crmPriceProjectName').value.trim(),
+    sample_name: $('crmPriceSample').value.trim(),
+    item_name: $('crmPriceItem').value.trim(),
+    standard: $('crmPriceStandard').value.trim(),
+    department: $('crmPriceDepartment').value.trim(),
+    unit: $('crmPriceUnit').value.trim(),
+    // Preserve the decimal strings; server-side checks detect underflow/loss.
+    ...numericValues,
+    valid_until: $('crmPriceValidUntil').value,
+    source: $('crmPriceSource').value.trim(),
+    reason: $('crmPriceReason').value.trim(),
+  };
+  if (!payload.project_name || !payload.item_name || !payload.source || !payload.reason) {
+    toast('请检查项目、试验项目、有效数值、来源和变更原因', 'error');
+    return;
+  }
+  busy(button, true, '保存中…');
+  try {
+    let result;
+    try {
+      result = await jsonFetch('api/v1/crm/base-data/prices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      if (error.statusCode !== 409 || !window.confirm('相同项目、样品、试验项目和标准已有记录。确认覆盖该条记录吗？')) throw error;
+      result = await jsonFetch('api/v1/crm/base-data/prices', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, force_replace: true }),
+      });
+    }
+    $('crmPriceForm').reset();
+    toast(result.action === 'updated' ? '价格记录已更新并记录审计' : '价格记录已新增并记录审计');
+    await loadCrmPrices();
+  } catch (error) {
+    toast(`${error.message || '价格保存失败'}。请刷新列表核对服务端状态后再操作。`, 'error');
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function deleteCrmPrice(index) {
+  const row = crmPriceRows[index];
+  if (!row) return;
+  if (!window.confirm(`确定删除“${row.project_name} / ${row.item_name}”价格记录？`)) return;
+  const reason = window.prompt('请输入删除原因');
+  if (!reason || !reason.trim()) return;
+  const source = window.prompt('请输入来源或变更记录');
+  if (!source || !source.trim()) { toast('请填写删除来源', 'error'); return; }
+  try {
+    await jsonFetch('api/v1/crm/base-data/prices', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...row, source: source.trim(), reason: reason.trim() }),
+    });
+    toast('价格记录已删除并记录审计');
+    await loadCrmPrices();
+  } catch (error) {
+    toast(`${error.message || '价格删除失败'}。请刷新列表核对服务端状态。`, 'error');
+  }
+}
+
+async function loadCrmNameMappings() {
+  const body = $('crmNameMappingBody');
+  if (!body) return;
+  baseDataErrorRow(body, 6, '正在读取本地名称映射…');
+  try {
+    const result = await jsonFetch('api/v1/crm/base-data');
+    crmNameMappingRows = Array.isArray(result.name_mappings) ? result.name_mappings : [];
+    $('crmNameMappingVersion').textContent = `版本 ${Number(result.version) || 0} · ${crmNameMappingRows.length} 条映射`;
+    if (!crmNameMappingRows.length) { baseDataErrorRow(body, 6, '暂无名称映射'); return; }
+    body.innerHTML = crmNameMappingRows.map((row, index) => {
+      const approved = row.review_status === 'approved';
+      const status = approved
+        ? `已批准${row.approved_by ? ` · ${escapeHtml(row.approved_by)}` : ''}`
+        : `待审批${row.review_status && row.review_status !== 'pending' ? ` · ${escapeHtml(row.review_status)}` : ''}`;
+      return `<tr><td>${escapeHtml(row.alias || '—')}</td><td>${escapeHtml(row.canonical || '—')}</td>
+        <td>${escapeHtml(row.note || '—')}</td><td>${status}</td><td>${escapeHtml(row.source || '按创建记录查看')}</td><td>
+        ${approved ? '' : `<button type="button" class="btn btn-secondary btn-sm" data-crm-name-mapping-approve="${index}">批准</button> `}
+        <button type="button" class="btn btn-danger btn-sm" data-crm-name-mapping-delete="${index}">删除</button></td></tr>`;
+    }).join('');
+  } catch (error) {
+    crmNameMappingRows = [];
+    baseDataErrorRow(body, 6, error.message || '名称映射暂不可用');
+  }
+}
+
+async function saveCrmNameMapping(event) {
+  event.preventDefault();
+  const button = $('crmNameMappingSave');
+  const payload = {
+    alias: $('crmNameMappingAlias').value.trim(),
+    canonical: $('crmNameMappingCanonical').value.trim(),
+    note: $('crmNameMappingNote').value.trim(),
+    source: $('crmNameMappingSource').value.trim(),
+    reason: $('crmNameMappingReason').value.trim(),
+  };
+  if (!payload.alias || !payload.canonical || !payload.source || !payload.reason) {
+    toast('请填写来源名称、标准名称、来源和变更原因', 'error'); return;
+  }
+  busy(button, true, '保存中…');
+  try {
+    let result;
+    try {
+      result = await jsonFetch('api/v1/crm/base-data/name_mappings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      if (error.statusCode !== 409 || !window.confirm('该来源名称已有映射。确认用新内容替换并重新进入待审批状态吗？')) throw error;
+      result = await jsonFetch('api/v1/crm/base-data/name_mappings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, force_replace: true }),
+      });
+    }
+    $('crmNameMappingForm').reset();
+    toast(result.action === 'updated' ? '映射已替换并回到待审批状态' : '映射已保存，等待管理员审批');
+    await loadCrmNameMappings();
+  } catch (error) {
+    toast(`${error.message || '映射保存失败'}。请刷新列表核对服务端状态后再操作。`, 'error');
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function approveCrmNameMapping(index) {
+  const row = crmNameMappingRows[index];
+  if (!row || row.review_status === 'approved') return;
+  if (!window.confirm(`确认批准“${row.alias}”→“${row.canonical}”？批准后该映射可能参与项目名称匹配。`)) return;
+  const source = window.prompt('请输入审批依据/来源');
+  if (!source || !source.trim()) return;
+  const reason = window.prompt('请输入批准原因');
+  if (!reason || !reason.trim()) return;
+  try {
+    await jsonFetch('api/v1/crm/base-data/name-mappings/approve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alias: row.alias,
+        expected: {
+          alias: row.alias,
+          canonical: row.canonical || '',
+          note: row.note || '',
+          source: row.source || '',
+          review_status: row.review_status || 'pending',
+        },
+        source: source.trim(),
+        reason: reason.trim(),
+      }),
+    });
+    toast('名称映射已批准并记录审计');
+    await loadCrmNameMappings();
+  } catch (error) {
+    toast(`${error.message || '映射审批失败'}。请刷新列表核对服务端状态。`, 'error');
+  }
+}
+
+async function deleteCrmNameMapping(index) {
+  const row = crmNameMappingRows[index];
+  if (!row) return;
+  if (!window.confirm(`确定删除名称映射“${row.alias}”→“${row.canonical}”？`)) return;
+  const reason = window.prompt('请输入删除原因');
+  if (!reason || !reason.trim()) return;
+  const source = window.prompt('请输入来源或变更记录');
+  if (!source || !source.trim()) { toast('请填写删除来源', 'error'); return; }
+  try {
+    await jsonFetch('api/v1/crm/base-data/name_mappings', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...row, source: source.trim(), reason: reason.trim() }),
+    });
+    toast('名称映射已删除并记录审计');
+    await loadCrmNameMappings();
+  } catch (error) {
+    toast(`${error.message || '映射删除失败'}。请刷新列表核对服务端状态。`, 'error');
+  }
+}
+
+function parseCrmScheduleCandidates() {
+  const result = window.ScheduleCandidate.parse($('crmScheduleSourceText').value);
+  crmScheduleCandidates = result.candidates;
+  const status = $('crmScheduleParseStatus');
+  const container = $('crmScheduleCandidates');
+  if (result.errors.length) {
+    status.textContent = '未生成候选';
+    container.innerHTML = `${scheduleCandidateStaleNotice()}${result.errors.map((message) => `<div class="banner warn">${escapeHtml(message)}</div>`).join('')}`;
+    return;
+  }
+  if (!crmScheduleCandidates.length) {
+    status.textContent = '未找到候选';
+    container.innerHTML = `${scheduleCandidateStaleNotice()}<p class="muted">输入字段文本后点击“解析候选”。</p>`;
+    return;
+  }
+  const validCount = crmScheduleCandidates.filter((candidate) => candidate.adoptable).length;
+  status.textContent = `候选 ${crmScheduleCandidates.length} 条 · 可采用 ${validCount} 条`;
+  container.innerHTML = `${scheduleCandidateStaleNotice()}${crmScheduleCandidates.map((candidate, index) => {
+    const fields = candidate.fields;
+    const errors = candidate.errors.length
+      ? `<div class="banner warn">${candidate.errors.map(escapeHtml).join('<br>')}</div>`
+      : '<div class="banner info">字段格式可用；状态语义仍待客户确认。请人工核对日期、项目和原文。</div>';
+    return `<article class="card card-pad mt-16">
+      <div class="card-head"><div><h3>候选 ${index + 1} · 第 ${candidate.line_start}-${candidate.line_end} 行</h3><p>${escapeHtml(fields.project_name || '项目名称缺失')}</p></div>
+        <button type="button" class="btn btn-secondary" data-crm-schedule-adopt="${index}" ${candidate.adoptable ? '' : 'disabled'}>人工确认并填入表单</button></div>
+      ${errors}
+      <div class="config-facts"><span>项目编号：${escapeHtml(fields.project_id || '未提供')}</span><span>计划日期：${escapeHtml(fields.start_date || '未提供')} – ${escapeHtml(fields.end_date || '未提供')}</span><span>状态原文：${escapeHtml(fields.status || '未提供')}</span><span>备注：${escapeHtml(fields.note || '未提供')}</span></div>
+      <details><summary>查看来源原文（仅当前页面）</summary><pre>${escapeHtml(candidate.raw)}</pre></details>
+    </article>`;
+  }).join('')}`;
+}
+
+function scheduleCandidateStaleNotice() {
+  if (!crmScheduleDraftGuard.isStale()) return '';
+  return '<div class="banner warn">来源文本已变化，之前采纳的草稿已锁定。重新解析并采纳新候选，或明确解除候选关联后按人工录入继续。<br><button type="button" class="btn btn-secondary mt-16" data-crm-schedule-manualize>解除候选关联并转人工录入</button></div>';
+}
+
+function adoptCrmScheduleCandidate(index) {
+  const candidate = crmScheduleCandidates[index];
+  if (!candidate || !candidate.adoptable) return;
+  const draft = window.ScheduleCandidate.toDraft(candidate);
+  $('crmScheduleProjectId').value = draft.project_id;
+  $('crmScheduleProjectName').value = draft.project_name;
+  $('crmScheduleStart').value = draft.start_date;
+  $('crmScheduleEnd').value = draft.end_date;
+  $('crmScheduleStatus').value = draft.status;
+  $('crmScheduleNote').value = draft.note;
+  $('crmScheduleSource').value = draft.source;
+  $('crmScheduleReason').value = '';
+  crmScheduleDraftGuard.adopt();
+  $('crmScheduleForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('crmScheduleProjectName').focus({ preventScroll: true });
+  toast('候选已填入草稿。完整原文已放入备注；请复核字段并手动填写变更原因后保存。');
+}
+
+function manualizeCrmScheduleDraft() {
+  if (!crmScheduleDraftGuard.isStale()) return;
+  if (!window.confirm('解除后保留当前业务字段，但会清空候选来源和原文备注。请之后填写人工来源和变更原因。继续吗？')) return;
+  crmScheduleDraftGuard.manualize();
+  $('crmScheduleSource').value = '';
+  $('crmScheduleNote').value = '';
+  $('crmScheduleReason').value = '';
+  $('crmScheduleParseStatus').textContent = '已解除旧候选关联；请填写人工来源和变更原因。';
+  $('crmScheduleCandidates').innerHTML = '<div class="banner info">候选关联已解除。当前表单保留业务字段；填写人工来源和变更原因后，可作为人工录入提交。</div>';
+}
+
+async function saveCrmSchedule(event) {
+  event.preventDefault();
+  if (crmScheduleDraftGuard.isStale()) {
+    toast('候选来源已变化。请重新采纳候选，或先明确解除候选关联。', 'error');
+    return;
+  }
+  const button = $('crmScheduleSave');
+  const payload = {
+    project_id: $('crmScheduleProjectId').value.trim(),
+    project_name: $('crmScheduleProjectName').value.trim(),
+    start_date: $('crmScheduleStart').value,
+    end_date: $('crmScheduleEnd').value,
+    status: $('crmScheduleStatus').value.trim(),
+    note: $('crmScheduleNote').value.trim(),
+    source: $('crmScheduleSource').value.trim(),
+    reason: $('crmScheduleReason').value.trim(),
+  };
+  if (!payload.project_name || !payload.source || !payload.reason) {
+    toast('请填写项目名称、来源和变更原因', 'error');
+    return;
+  }
+  busy(button, true, '保存中…');
+  try {
+    let result;
+    try {
+      result = await jsonFetch('api/v1/crm/base-data/schedules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      if (error.statusCode !== 409 || !window.confirm('同一项目和日期已有内容不同的排期。确认用当前表单覆盖该条记录吗？')) throw error;
+      result = await jsonFetch('api/v1/crm/base-data/schedules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, force_replace: true }),
+      });
+    }
+    $('crmScheduleForm').reset();
+    crmScheduleDraftGuard.reset();
+    toast(result.action === 'updated' ? '排期已更新并记录审计' : '排期已新增并记录审计');
+    await loadCrmSchedules();
+  } catch (error) {
+    toast(`${error.message || '排期保存失败'}。请刷新列表核对服务端状态后再操作。`, 'error');
+  } finally {
+    busy(button, false);
+  }
+}
+
+async function deleteCrmSchedule(index) {
+  const row = crmScheduleRows[index];
+  if (!row) return;
+  if (!window.confirm(`确定删除“${row.project_name}” ${row.start_date || '未提供开始日期'} – ${row.end_date || '未提供结束日期'}？`)) return;
+  const reason = window.prompt('请输入删除原因');
+  if (!reason || !reason.trim()) return;
+  const source = window.prompt('请输入来源或变更记录');
+  if (!source || !source.trim()) {
+    toast('请填写删除来源', 'error');
+    return;
+  }
+  try {
+    await jsonFetch('api/v1/crm/base-data/schedules', {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...row, source: source.trim(), reason: reason.trim() }),
+    });
+    toast('排期已删除并记录审计');
+    await loadCrmSchedules();
+  } catch (error) {
+    toast(`${error.message || '排期删除失败'}。请刷新列表核对服务端状态。`, 'error');
+  }
+}
+
 function switchAdminView(view, section = '') {
   const canManageUsers = can('user:manage');
-  if (!canManageUsers && view !== 'config') view = 'config';
+  const canManageCrmBase = can('crm:base:manage');
+  const canWriteCrmPrices = can('crm:prices:manage') || canManageCrmBase;
+  const canManageSchedules = can('schedule:manage') || canManageCrmBase;
+  const crmView = ['crm-schedules', 'crm-qualifications', 'crm-prices', 'crm-name-mappings'].includes(view);
+  const canOpenCrmView = view === 'crm-prices' ? canWriteCrmPrices
+    : view === 'crm-schedules' ? canManageSchedules : canManageCrmBase;
+  const servicePermissions = {
+    registrations: 'customer-service:registration:review',
+    orders: 'customer-service:order:review',
+    'quote-inquiries': 'customer-service:quote:manage',
+    conversations: 'customer-service:conversation:manage',
+  };
+  const canOpenServiceView = Boolean(servicePermissions[view] && can(servicePermissions[view]));
+  if (!canManageUsers && view !== 'config' && !(crmView && canOpenCrmView) && !canOpenServiceView) view = 'config';
   state.adminView = view;
   $$('#adminTabs button').forEach((button) => {
-    button.classList.toggle('hidden', !canManageUsers && button.dataset.adminView !== 'config');
+    const tab = button.dataset.adminView;
+    const visible = canManageUsers || (tab === 'config' && can('config:read'))
+      || (tab === 'crm-schedules' && canManageSchedules)
+      || (tab === 'crm-prices' && canWriteCrmPrices)
+      || (['crm-qualifications', 'crm-name-mappings'].includes(tab) && canManageCrmBase)
+      || (servicePermissions[tab] && can(servicePermissions[tab]));
+    button.classList.toggle('hidden', !visible);
+    if (button.dataset.adminView === 'crm-schedules') button.classList.toggle('hidden', !canManageSchedules);
+    if (['crm-qualifications', 'crm-name-mappings'].includes(button.dataset.adminView)) button.classList.toggle('hidden', !canManageCrmBase);
+    if (button.dataset.adminView === 'crm-prices') button.classList.toggle('hidden', !canWriteCrmPrices);
     button.classList.toggle('active', button.dataset.adminView === view);
   });
   $('adminUsersView').classList.toggle('hidden', view !== 'users');
+  $('adminCrmSchedulesView').classList.toggle('hidden', view !== 'crm-schedules');
+  $('adminCrmQualificationsView').classList.toggle('hidden', view !== 'crm-qualifications');
+  $('adminCrmPricesView').classList.toggle('hidden', view !== 'crm-prices');
+  $('adminCrmNameMappingsView').classList.toggle('hidden', view !== 'crm-name-mappings');
+  $('adminRegistrationsView').classList.toggle('hidden', view !== 'registrations');
+  $('adminOrdersView').classList.toggle('hidden', view !== 'orders');
+  $('adminQuoteInquiriesView').classList.toggle('hidden', view !== 'quote-inquiries');
+  $('adminConversationsView').classList.toggle('hidden', view !== 'conversations');
   $('adminAuditView').classList.toggle('hidden', view !== 'audit');
   $('adminConfigView').classList.toggle('hidden', view !== 'config');
+  if (view === 'crm-schedules' && canManageSchedules) {
+    $('crmScheduleForm').classList.toggle('hidden', !can('schedule:manage') && !canManageCrmBase);
+    loadCrmSchedules();
+  }
+  if (view === 'crm-qualifications' && canManageCrmBase) loadCrmQualifications();
+  if (view === 'crm-prices' && canWriteCrmPrices) {
+    $('crmPriceForm').classList.toggle('hidden', !canWriteCrmPrices);
+    loadCrmPrices();
+  }
+  if (view === 'crm-name-mappings' && canManageCrmBase) loadCrmNameMappings();
+  if (view === 'registrations') loadCustomerRegistrations();
+  if (view === 'orders') loadCustomerOrders();
+  if (view === 'quote-inquiries') loadCustomerQuoteInquiries();
+  if (view === 'conversations') loadCustomerConversations();
   if (view === 'audit') loadAudit(true);
   if (view === 'config') adminConfigLoad = loadAdminConfig().catch(showError);
   syncAdminLocation(view, view === 'config' ? section : '');
+}
+
+function defaultAdminView() {
+  if (can('user:manage')) return 'users';
+  for (const [view, permission] of [
+    ['registrations', 'customer-service:registration:review'],
+    ['orders', 'customer-service:order:review'],
+    ['quote-inquiries', 'customer-service:quote:manage'],
+    ['conversations', 'customer-service:conversation:manage'],
+    ['crm-schedules', 'schedule:manage'],
+    ['crm-prices', 'crm:prices:manage'],
+  ]) {
+    if (can(permission)) return view;
+  }
+  return 'config';
 }
 async function openAdminConfig(section = '') {
   if (!canConfig(section)) return;
@@ -2368,6 +3864,182 @@ function bindEvents() {
       busy($('quoteBtn'), false);
     }
   });
+  $('quoteDemoPreviewBtn').addEventListener('click', async () => {
+    const button = $('quoteDemoPreviewBtn');
+    busy(button, true, '加载中…');
+    $('quoteDemoPreviewNotice').classList.add('hidden');
+    try {
+      const data = await jsonFetch('api/v1/customer-service/demo/quote-preview');
+      renderCustomerServicePreview(data);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy(button, false);
+    }
+  });
+  $('quoteFile').addEventListener('change', () => resetQuoteParseReview('文件已变化，请重新解析并复核。'));
+  $('quoteDemoProject').addEventListener('input', () => {
+    if (parsedQuoteReview && parsedQuoteReview.projectName !== $('quoteDemoProject').value.trim()) {
+      resetQuoteParseReview('项目已变化，请重新解析并复核。');
+    }
+  });
+  $('quoteParseReviewBtn').addEventListener('click', async () => {
+    const button = $('quoteParseReviewBtn');
+    busy(button, true, '解析中…');
+    try {
+      await beginQuoteParseReview();
+      toast(`已解析 ${parsedQuoteReview.lines.length} 行；请核对来源行与字段后确认`);
+    } catch (error) { showError(error); }
+    finally { busy(button, false); }
+  });
+  $('quoteParseReview').addEventListener('input', (event) => {
+    if (!event.target.matches('[data-parse-index][data-parse-field]') || !parsedQuoteReview) return;
+    parsedQuoteReview.editRevision += 1;
+    parsedQuoteReview.reviewedPayload = null;
+    const confirmButton = $('quoteParseReviewConfirmBtn');
+    if (confirmButton) confirmButton.disabled = false;
+    const status = $('quoteParseReviewStatus');
+    if (status) status.textContent = '复核表已修改，需再次提交并留痕后才能进行来源预览。';
+  });
+  $('quoteParseReview').addEventListener('click', async (event) => {
+    const button = event.target.closest('#quoteParseReviewConfirmBtn');
+    if (!button) return;
+    busy(button, true, '记录复核…');
+    try {
+      const reviewed = await saveQuoteParseReview();
+      toast(`解析复核已记录：${reviewed.review_id}`);
+    } catch (error) {
+      const status = $('quoteParseReviewStatus');
+      if (status) status.textContent = error.message;
+      showError(error);
+    } finally {
+      busy(button, false);
+      if (parsedQuoteReview && parsedQuoteReview.reviewedPayload) button.disabled = true;
+    }
+  });
+  $('quoteParsedPreviewBtn').addEventListener('click', async () => {
+    const button = $('quoteParsedPreviewBtn');
+    const projectName = $('quoteDemoProject').value.trim();
+    if (!projectName) { toast('请填写检测项目名称', 'info'); return; }
+    busy(button, true, '解析并匹配中…');
+    $('quoteDemoPreviewNotice').classList.add('hidden');
+    try {
+      const payload = await parseSelectedQuoteLines(projectName);
+      const data = await jsonFetch('api/v1/customer-service/demo/quote-preview/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      renderCustomerServicePreview(data);
+      toast(`已解析 ${payload.lines.length} 行并完成合成目录比对；不生成报价`);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy(button, false);
+    }
+  });
+  $('quoteCrmPreviewBtn').addEventListener('click', async () => {
+    const button = $('quoteCrmPreviewBtn');
+    const projectName = $('quoteDemoProject').value.trim();
+    if (!projectName) { toast('请填写检测项目名称', 'info'); return; }
+    busy(button, true, '解析并匹配 CRM 中…');
+    $('quoteDemoPreviewNotice').classList.add('hidden');
+    try {
+      const payload = await parseSelectedQuoteLines(projectName);
+      const data = await jsonFetch('api/v1/customer-service/quote-preview/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      renderCustomerServicePreview(data);
+      toast(`已解析 ${payload.lines.length} 行并匹配当前 CRM 只读数据；不生成报价`);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy(button, false);
+    }
+  });
+  $('quoteCrmExportBtn').addEventListener('click', async () => {
+    const button = $('quoteCrmExportBtn');
+    const projectName = $('quoteDemoProject').value.trim();
+    try {
+      const payload = await parseSelectedQuoteLines(projectName);
+      busy(button, true, '重新匹配并生成中…');
+      const response = await fetch('api/v1/customer-service/quote-preview/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        let detail = `请求失败（${response.status}）`;
+        try { detail = (await response.json()).detail || detail; } catch (_) { /* Keep the status message. */ }
+        throw new Error(detail);
+      }
+      const type = response.headers.get('content-type') || '';
+      if (!type.includes('spreadsheetml.sheet')) throw new Error('服务端返回的文件类型无效，已拒绝下载');
+      const blob = await response.blob();
+      if (!blob.size) throw new Error('服务端返回空文件，已拒绝下载');
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'CRM内部复核草稿.xlsx';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('已下载内部 CRM 复核草稿；未生成正式报价或写回 CRM');
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy(button, false);
+    }
+  });
+  $('quoteDemoPreview').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-cs-price-review]');
+    if (!button) return;
+    const preview = customerServicePreviewData;
+    const line = preview && preview.lines && preview.lines[Number(button.dataset.lineIndex)];
+    if (!line || preview.environment !== 'internal' || !preview.source_mode || !preview.source_revision) {
+      toast('当前预览状态已失效，请重新加载 CRM 预览', 'error');
+      return;
+    }
+    const request = line.request || {};
+    const evidence = line.input_evidence || {};
+    const payload = {
+      project_name: request.project_name || '',
+      source_mode: preview.source_mode,
+      source_revision: preview.source_revision,
+      line_id: line.line_id || '',
+      selected_record_id: button.dataset.candidateId || '',
+      item_name: request.item_name || '',
+      standard: request.standard || '',
+      sample_name: request.sample_name || '',
+      quantity: request.quantity ?? null,
+      unit: request.unit || '',
+      source_row: evidence.source_row ?? null,
+      confidence: evidence.parse_confidence ?? null,
+    };
+    let reviewRecorded = false;
+    busy(button, true, '记录中…');
+    try {
+      const result = await jsonFetch('api/v1/customer-service/quote-preview/price-reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      reviewRecorded = true;
+      toast(`审核意见已记录（${result.review_id}）；未确认报价，也未写回 CRM`);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy(button, false);
+      if (reviewRecorded) {
+        button.disabled = true;
+        button.textContent = '已记录内部审核意见';
+      }
+    }
+  });
   $('quoteResult').addEventListener('click', (event) => {
     const button = event.target.closest('[data-download]');
     if (!button) return;
@@ -2379,6 +4051,53 @@ function bindEvents() {
     if (!button) return;
     const kind = button.dataset.kind === 'crm' ? 'crm' : 'sales';
     window.location = `api/v1/quotes/${encodeURIComponent(button.dataset.quoteDownload)}/${kind}.xlsx`;
+  });
+  $('inquirySaveDraft').addEventListener('click', async () => {
+    try {
+      const inquiry = await saveQuoteInquiryDraft();
+      $('inquiryStatus').textContent = `草稿已保存：${inquiry.inquiry_id}`;
+      toast('内部询价草稿已保存');
+    } catch (error) {
+      $('inquiryStatus').textContent = error.message;
+      toast(error.message, 'error');
+    }
+  });
+  $('inquirySubmit').addEventListener('click', submitQuoteInquiry);
+  $('inquiryRefresh').addEventListener('click', loadMyQuoteInquiries);
+  $('inquiryNew').addEventListener('click', async () => {
+    const actor = String(state.me?.username || '');
+    const pendingKey = actor ? `p0-quote-inquiry-create:${actor}` : '';
+    if (pendingKey) {
+      let pending = null;
+      try { pending = JSON.parse(sessionStorage.getItem(pendingKey) || 'null'); }
+      catch (error) { toast('询价重试记录不可读取，已保留当前资料', 'error'); return; }
+      if (pending && pending.confirmedInquiryId) {
+        try { sessionStorage.removeItem(pendingKey); }
+        catch (error) { toast('旧询价已确认，但本机重试记录无法清理；请稍后重试新建', 'error'); return; }
+      } else if (pending) {
+        try {
+          state.quoteInquiryId = '';
+          restoreQuoteInquiryPayload(pending.payload);
+          const confirmed = await saveQuoteInquiryDraft();
+          if (!confirmed || confirmed.inquiry_id !== state.quoteInquiryId) {
+            toast('旧询价未能确认，原资料已保留', 'error');
+            return;
+          }
+        } catch (error) {
+          $('inquiryStatus').textContent = error.message;
+          toast('旧询价未能确认，原资料已保留', 'error');
+          return;
+        }
+      }
+    }
+    state.quoteInquiryId = '';
+    ['inquiryProject', 'inquiryItem', 'inquirySample', 'inquiryStandard', 'inquiryQuantity', 'inquiryUnit', 'inquiryContext'].forEach((id) => { $(id).value = ''; });
+    $('inquiryStatus').textContent = '新建草稿';
+    $('inquiryPreview').classList.add('hidden');
+  });
+  $('myQuoteInquiries').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-my-inquiry]');
+    if (button) openMyQuoteInquiry(button.dataset.myInquiry);
   });
 
   $('askBtn').addEventListener('click', askQuestion);
@@ -2444,10 +4163,94 @@ function bindEvents() {
     const button = event.target.closest('[data-admin-view]');
     if (button) switchAdminView(button.dataset.adminView);
   });
+  $('crmScheduleRefresh').addEventListener('click', loadCrmSchedules);
+  $('crmScheduleParse').addEventListener('click', parseCrmScheduleCandidates);
+  $('crmScheduleSourceText').addEventListener('input', () => {
+    crmScheduleCandidates = [];
+    crmScheduleDraftGuard.sourceChanged();
+    $('crmScheduleCandidates').innerHTML = `${scheduleCandidateStaleNotice()}<p class="muted">文本已变化，请重新解析。</p>`;
+    $('crmScheduleParseStatus').textContent = crmScheduleDraftGuard.isStale() ? '旧草稿已锁定' : '';
+  });
+  $('crmScheduleCandidates').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-crm-schedule-adopt]');
+    if (button) { adoptCrmScheduleCandidate(Number(button.dataset.crmScheduleAdopt)); return; }
+    if (event.target.closest('[data-crm-schedule-manualize]')) manualizeCrmScheduleDraft();
+  });
+  $('crmScheduleForm').addEventListener('submit', saveCrmSchedule);
+  window.ScheduleCandidate.bindFormReset($('crmScheduleForm'), crmScheduleDraftGuard, () => {
+    crmScheduleCandidates = [];
+    $('crmScheduleParseStatus').textContent = '';
+    $('crmScheduleCandidates').innerHTML = '<p class="muted">表单已清空。需要候选时请重新解析。</p>';
+  });
+  $('crmScheduleBody').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-crm-schedule-delete]');
+    if (button) deleteCrmSchedule(Number(button.dataset.crmScheduleDelete));
+  });
+  $('crmQualificationRefresh').addEventListener('click', loadCrmQualifications);
+  $('crmQualificationForm').addEventListener('submit', saveCrmQualification);
+  $('crmQualificationBody').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-crm-qualification-delete]');
+    if (button) deleteCrmQualification(Number(button.dataset.crmQualificationDelete));
+  });
+  $('crmPriceRefresh').addEventListener('click', loadCrmPrices);
+  $('crmPriceForm').addEventListener('submit', saveCrmPrice);
+  $('crmPriceBody').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-crm-price-delete]');
+    if (button) deleteCrmPrice(Number(button.dataset.crmPriceDelete));
+  });
+  $('crmNameMappingRefresh').addEventListener('click', loadCrmNameMappings);
+  $('crmNameMappingForm').addEventListener('submit', saveCrmNameMapping);
+  $('crmNameMappingBody').addEventListener('click', (event) => {
+    const approve = event.target.closest('[data-crm-name-mapping-approve]');
+    if (approve) { approveCrmNameMapping(Number(approve.dataset.crmNameMappingApprove)); return; }
+    const remove = event.target.closest('[data-crm-name-mapping-delete]');
+    if (remove) deleteCrmNameMapping(Number(remove.dataset.crmNameMappingDelete));
+  });
+  $('registrationRefresh').addEventListener('click', loadCustomerRegistrations);
+  $('registrationStatusFilter').addEventListener('change', loadCustomerRegistrations);
+  $('registrationBody').addEventListener('click', (event) => {
+    const retry = event.target.closest('[data-registration-review-retry]');
+    if (retry) { decideCustomerRegistration(retry.dataset.registrationReviewRetry, ''); return; }
+    const button = event.target.closest('[data-registration-decision]');
+    if (!button) return;
+    decideCustomerRegistration(
+      button.dataset.registrationId,
+      button.dataset.registrationDecision,
+      button.dataset.registrationRuleRevision || null,
+      Number(button.dataset.registrationRevision) || null,
+    );
+  });
+  $('orderRefresh').addEventListener('click', loadCustomerOrders);
+  $('orderStatusFilter').addEventListener('change', loadCustomerOrders);
+  $('orderBody').addEventListener('click', (event) => {
+    const retry = event.target.closest('[data-order-review-retry]');
+    if (retry) { decideCustomerOrder(retry.dataset.orderReviewRetry, ''); return; }
+    const button = event.target.closest('[data-order-decision]');
+    if (button) decideCustomerOrder(button.dataset.orderId, button.dataset.orderDecision, Number(button.dataset.orderRevision));
+  });
+  $('quoteInquiryRefresh').addEventListener('click', loadCustomerQuoteInquiries);
+  $('quoteInquiryStatusFilter').addEventListener('change', loadCustomerQuoteInquiries);
+  $('quoteInquiryBody').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-inquiry-action]');
+    if (button) handleCustomerQuoteInquiryAction(button);
+  });
+  $('conversationRefresh').addEventListener('click', loadCustomerConversations);
+  $('conversationStatusFilter').addEventListener('change', loadCustomerConversations);
+  $('conversationCompanyFilter').addEventListener('input', loadCustomerConversations);
+  $('conversationPriorityFilter').addEventListener('change', loadCustomerConversations);
+  $('conversationUnreadFilter').addEventListener('change', loadCustomerConversations);
+  $('conversationBody').addEventListener('click', (event) => {
+    const button = event.target.closest('[data-conversation-action]');
+    if (button) handleCustomerConversationAction(button).catch((error) => toast(error.message, 'error'));
+  });
   $('reportConfigSave').addEventListener('click', () => saveConfigSection('report', $('reportConfigSave'), collectReportConfig));
   $('standardConfigSave').addEventListener('click', () => saveConfigSection('standard', $('standardConfigSave'), collectStandardConfig));
   $('quoteConfigSave').addEventListener('click', () => saveConfigSection('quote', $('quoteConfigSave'), collectQuoteConfig));
   $('businessConfigSave').addEventListener('click', () => saveConfigSection('business', $('businessConfigSave'), collectBusinessConfig));
+  $('cfgBizBlacklistImport').addEventListener('click', importBusinessBlacklist);
+  $('cfgBizBlacklistExport').addEventListener('click', () => {
+    window.location = 'api/v1/admin/config/business/blacklist.csv';
+  });
   $('reportConfigReset').addEventListener('click', () => resetConfigSection('report', '审核规则'));
   $('standardConfigReset').addEventListener('click', () => resetConfigSection('standard', '解析规则'));
   $('quoteConfigReset').addEventListener('click', () => resetConfigSection('quote', '报价规则'));
@@ -2480,7 +4283,59 @@ function bindEvents() {
     const button = event.target.closest('button[data-act]');
     if (!button) return;
     const username = button.dataset.user;
-    if (button.dataset.act === 'projects') {
+    if (button.dataset.act === 'oidc') {
+      const issuers = (button.dataset.issuers || '').split('|').filter(Boolean);
+      const currentIssuer = issuers[0] || '';
+      const issuer = window.prompt('OIDC 身份提供方 issuer 地址', currentIssuer);
+      if (issuer === null || !issuer.trim()) return;
+      if (issuers.includes(issuer.trim().replace(/\/$/, ''))) {
+        const remove = await confirmDialog({
+          title: '解除 SSO 绑定？',
+          message: `确认解除 ${username} 在该身份提供方的唯一身份绑定吗？解除后该账号不能通过该提供方登录。`,
+          confirmText: '解除绑定',
+          tone: 'danger',
+        });
+        if (remove) {
+          await jsonFetch(`api/v1/auth/users/${encodeURIComponent(username)}/oidc-identity`, {
+            method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ issuer: issuer.trim() }),
+          });
+          toast(`已解除 ${username} 的 SSO 绑定`);
+          await loadAdmin();
+        }
+        return;
+      }
+      const subject = window.prompt('输入 IdP 已核验的稳定 subject（不能用邮箱代替）');
+      if (subject === null || !subject.trim()) return;
+      try {
+        await jsonFetch(`api/v1/auth/users/${encodeURIComponent(username)}/oidc-identity`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issuer: issuer.trim(), subject: subject.trim() }),
+        });
+        toast(`已更新 ${username} 的 SSO 身份绑定`);
+        await loadAdmin();
+      } catch (error) { showError(error); }
+    } else if (button.dataset.act === 'review-permissions') {
+      const choices = ['report:read', 'report:audit', 'standard:review'];
+      const current = button.dataset.permissions || '';
+      const selected = window.prompt(`逐账号设置审核权限，输入逗号分隔的权限代码；留空撤销。\n可选：${choices.join(', ')}`, current);
+      if (selected === null) return;
+      const permissions = selected.split(/[,，\s]+/).filter(Boolean);
+      if (permissions.some((permission) => !choices.includes(permission))) {
+        toast('仅可设置列出的报告审核/标准复核权限', 'error');
+        return;
+      }
+      const reason = window.prompt('填写逐账号确认依据（必填）');
+      if (reason === null) return;
+      try {
+        await jsonFetch(`api/v1/auth/users/${encodeURIComponent(username)}/review-permissions`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ permissions, reason }),
+        });
+        toast(`已更新 ${username} 的审核权限`);
+        await loadAdmin();
+      } catch (error) { showError(error); }
+    } else if (button.dataset.act === 'projects') {
       openProjectModal(username, button.dataset.projects || '');
     } else if (button.dataset.act === 'reset') {
       openResetModal(username);
@@ -2501,7 +4356,7 @@ function bindEvents() {
     $('nuPassword').value = '';
     $('nuDept').value = '';
     $('nuProjects').value = '';
-    $('nuRole').value = 'viewer';
+    $('nuRole').value = 'business_manager';
     $('nuStatus').textContent = '';
     openModal('modalCreateUser');
   });
@@ -2641,7 +4496,7 @@ function boot() {
   const wanted = params.get('tab');
   const initialTab = ['report', 'standards', 'quote', 'knowledge', 'admin'].includes(wanted) ? wanted : 'report';
   const wantedView = params.get('view');
-  const initialAdminView = ['users', 'audit', 'config'].includes(wantedView) ? wantedView : 'users';
+  const initialAdminView = ['users', 'crm-schedules', 'crm-qualifications', 'crm-prices', 'crm-name-mappings', 'audit', 'config'].includes(wantedView) ? wantedView : 'users';
   const wantedSection = params.get('section') || '';
   const initialConfigSection = initialAdminView === 'config' && adminConfigSection(wantedSection) ? wantedSection : '';
   if (initialTab === 'admin') state.adminView = initialAdminView;

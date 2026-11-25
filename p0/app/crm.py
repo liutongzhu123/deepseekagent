@@ -12,12 +12,16 @@ business contract stable:
 from __future__ import annotations
 
 import csv
+import fcntl
 import json
 import os
 import re
 import threading
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from contextlib import contextmanager
+from dataclasses import MISSING, dataclass, field
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
+import math
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,10 @@ MODES = ("off", "excel", "csv", "api", "base")
 
 class CrmUnavailable(RuntimeError):
     """CRM data source is missing, unreadable, or the API seam is not wired."""
+
+
+class BaseDataConflict(ValueError):
+    """A same-key base row differs and requires an explicit replacement."""
 
 
 def _text(value: Any) -> str:
@@ -100,6 +108,10 @@ class CrmNameMapping:
     alias: str
     canonical: str
     note: str = ""
+    review_status: str = "pending"
+    approved_by: str = ""
+    approved_at: str = ""
+    source: str = ""
 
 
 @dataclass
@@ -233,19 +245,19 @@ def _find_header(rows: list[list[Any]], required: set[str]) -> tuple[int, dict[s
 
 
 def _project_from_prices(prices: list[CrmPrice]) -> list[CrmProject]:
-    seen: dict[str, CrmProject] = {}
+    seen: dict[tuple[str, str], CrmProject] = {}
     for price in prices:
-        key = price.project_id or price.project_name
-        if not key:
+        project_id = _text(price.project_id)
+        project_name = _text(price.project_name)
+        if not project_id and not project_name:
             continue
-        seen.setdefault(
-            key,
-            CrmProject(project_id=price.project_id, name=price.project_name or price.project_id),
-        )
+        key = (project_id, project_name or project_id)
+        seen.setdefault(key, CrmProject(project_id=project_id, name=project_name or project_id))
     return list(seen.values())
 
 
-# F1 kind, F2 field, F3 number, F4 corrupt JSON (report, never overwrite); F5 duplicate key update, F6 delete missing False, F7 off sync error, F9 locked writes.
+# F1 kind, F2 field, F3 number, F4 corrupt JSON (report, never overwrite); F5 duplicate key update, F6 delete missing False, F7 off sync error, F9 same-host concurrent writes are serialized; multi-host storage requires a transactional database.
+# F10 changed approved mappings must return to pending; F11 approvals must CAS against the version/name shown to reviewer; F12 source and reason are mandatory; F13 write-side price numbers reject partial/non-finite text and persist normalized numbers; F14 numeric conversion must not silently underflow, lose decimal precision, or raise an uncaught overflow.
 BASE_KINDS = ("prices", "schedules", "qualifications", "name_mappings")
 _BASE_LOCK = threading.RLock()
 _BASE_REQUIRED = {"prices": ("item_name", "project_name"), "schedules": ("project_name",),
@@ -259,34 +271,138 @@ def _base_path() -> Path:
     return Path(explicit).expanduser() if explicit else default / "crm" / "base_data.json"
 
 
+@contextmanager
+def _base_locked(path: Path):
+    """Protect CRM read-modify-write operations across local server workers."""
+    with _BASE_LOCK:
+        lock_path = path.with_name(path.name + ".lock")
+        descriptor = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(path.parent, 0o700)
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except OSError as exc:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            raise CrmUnavailable("CRM 基础数据锁不可用") from exc
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            finally:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+
 def _check_kind(kind: str) -> None:
     if kind not in BASE_KINDS:
         raise ValueError(f"未知基础数据库：{kind}，可选 {BASE_KINDS}")
 
 
 def _base_row(cls, item: dict) -> dict:
-    data = {name: item.get(name, "") for name in cls.__dataclass_fields__}
+    data = {
+        name: item.get(name, definition.default if definition.default is not MISSING else "")
+        for name, definition in cls.__dataclass_fields__.items()
+    }
     for name, default in _BASE_NUMERIC.get(cls, {}).items():
         number = _number(item.get(name))
         if _text(item.get(name)) and number is None:
             raise ValueError(f"{name} 必须是数字：{item.get(name)!r}")
+        if number is not None and not math.isfinite(number):
+            raise ValueError(f"{name} 必须是有限数字")
         data[name] = default if number is None else number
+    if cls is CrmPrice:
+        if data["quantity"] <= 0 or data["unit_price"] < 0 or not 0 <= data["discount"] <= 100:
+            raise ValueError("数量必须大于 0，单价不能小于 0，折扣必须在 0 到 100 之间")
+        _validate_iso_date(data.get("valid_until"), "valid_until")
+    elif cls is CrmQualification:
+        _validate_iso_date(data.get("valid_until"), "valid_until")
+    elif cls is CrmSchedule:
+        _validate_iso_date(data.get("start_date"), "start_date")
+        _validate_iso_date(data.get("end_date"), "end_date")
+        start, end = _text(data.get("start_date")), _text(data.get("end_date"))
+        if start and end and end < start:
+            raise ValueError("排期结束日期不能早于开始日期")
     return data
 
 
+def _validate_iso_date(value: Any, field_name: str) -> None:
+    text = _text(value)
+    if not text:
+        return
+    try:
+        date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} 必须使用 YYYY-MM-DD 日期") from exc
+
+
 def _coerce_base_item(kind: str, item: dict) -> dict:
-    """Validate one row and fill its project id (F1-F3)."""
+    """Validate one row and fill its project id (F1-F3, F10-F14)."""
     _check_kind(kind)
     if not isinstance(item, dict):
         raise ValueError("基础数据条目必须是对象")
     for field in _BASE_REQUIRED[kind]:
         if not _text(item.get(field)):
             raise ValueError(f"{field} 不能为空")
-    data = dict(item)
+    # Control fields are consumed by the store and never persisted as business data.
+    row_type = {"prices": CrmPrice, "schedules": CrmSchedule,
+                "qualifications": CrmQualification, "name_mappings": CrmNameMapping}[kind]
+    data = {key: value for key, value in item.items() if key in row_type.__dataclass_fields__}
+    if kind == "name_mappings":
+        data.update(review_status="pending", approved_by="", approved_at="", source="")
     if kind in ("prices", "schedules") and not _text(data.get("project_id")):
         data["project_id"] = _text(data.get("project_name"))
     if kind == "prices":
-        _base_row(CrmPrice, data)
+        # F13: base-library writes must not use the forgiving CRM import parser,
+        # which intentionally accepts currency-formatted spreadsheet values.
+        for field_name, default in _BASE_NUMERIC[CrmPrice].items():
+            raw = data.get(field_name)
+            if raw is None or _text(raw) == "":
+                raw = default
+            if isinstance(raw, bool):
+                raise ValueError(f"{field_name} 必须是有限数字")
+            if isinstance(raw, (int, float)):
+                try:
+                    number = float(raw)
+                except (OverflowError, ValueError):
+                    raise ValueError(f"{field_name} 必须是有限数字") from None
+                if isinstance(raw, int) and int(number) != raw:
+                    raise ValueError(f"{field_name} 精度超过可安全保存范围")
+            elif isinstance(raw, str) and re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", raw.strip()):
+                try:
+                    exact = Decimal(raw.strip())
+                    number = float(exact)
+                except (InvalidOperation, OverflowError, ValueError):
+                    raise ValueError(f"{field_name} 必须是有限数字") from None
+                if exact != 0 and number == 0:
+                    raise ValueError(f"{field_name} 数值过小，无法安全保存")
+                if math.isfinite(number) and exact != Decimal(str(number)):
+                    raise ValueError(f"{field_name} 精度超过可安全保存范围")
+            else:
+                raise ValueError(f"{field_name} 必须是有限数字")
+            if not math.isfinite(number):
+                raise ValueError(f"{field_name} 必须是有限数字")
+            data[field_name] = number
+        data = _base_row(CrmPrice, data)
+        _validate_iso_date(data.get("valid_until"), "valid_until")
+    if kind == "schedules":
+        _validate_iso_date(data.get("start_date"), "start_date")
+        _validate_iso_date(data.get("end_date"), "end_date")
+        start, end = _text(data.get("start_date")), _text(data.get("end_date"))
+        if start and end and end < start:
+            raise ValueError("排期结束日期不能早于开始日期")
+    if kind == "qualifications":
+        _validate_iso_date(data.get("valid_until"), "valid_until")
     return data
 
 
@@ -321,52 +437,153 @@ class BaseDataStore:
                 raise CrmUnavailable(f"基础数据 {kind} 必须是列表：{self.path}")
         return document
 
-    def _save(self, document: dict, updated_by: str) -> None:
-        document.update(version=1, updated_by=updated_by,
-                        updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    @staticmethod
+    def _snapshot(document: dict) -> dict:
+        return {kind: [dict(row) for row in document.get(kind, [])] for kind in BASE_KINDS}
+
+    def _save(self, document: dict, updated_by: str, *, action: str, kind: str,
+              source: str = "", reason: str = "", rollback_to_version: int | None = None) -> None:
+        previous_version = int(document.get("version", 0) or 0)
+        history = list(document.get("_history", []))
+        if not history and previous_version:
+            history.append({
+                "version": previous_version, "previous_version": max(0, previous_version - 1),
+                "updated_at": _text(document.get("updated_at")),
+                "updated_by": _text(document.get("updated_by")), "action": "legacy_baseline",
+                "kind": "all", "source": "legacy_file", "reason": "迁移前基础库状态",
+                "rollback_to_version": None, "snapshot": self._snapshot(document),
+            })
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        version = previous_version + 1
+        document.update(version=version, updated_by=updated_by, updated_at=timestamp)
+        history.append({
+            "version": version, "previous_version": previous_version,
+            "updated_at": timestamp, "updated_by": updated_by, "action": action,
+            "kind": kind, "source": source, "reason": reason,
+            "rollback_to_version": rollback_to_version, "snapshot": self._snapshot(document),
+        })
+        document["_history"] = history
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_text(json.dumps(document, ensure_ascii=False, indent=1), encoding="utf-8")
         os.chmod(tmp, 0o600)
         tmp.replace(self.path)
 
-    def upsert(self, kind: str, item: dict, updated_by: str = "") -> dict:
+    def upsert(self, kind: str, item: dict, updated_by: str = "", *, source: str = "", reason: str = "") -> dict:
         data = _coerce_base_item(kind, item)
+        if kind == "name_mappings" and source:
+            data["source"] = _text(source)
+        force_replace = item.get("force_replace") is True
         key = _base_key(kind, data)
-        with _BASE_LOCK:
+        with _base_locked(self.path):
             document = self.read()
             for position, row in enumerate(document[kind]):
                 if _base_key(kind, row) == key:
+                    if kind == "name_mappings" and all(
+                        row.get(field) == data.get(field) for field in ("alias", "canonical", "note", "source")
+                    ):
+                        data.update({
+                            "review_status": row.get("review_status", "pending"),
+                            "approved_by": row.get("approved_by", ""),
+                            "approved_at": row.get("approved_at", ""),
+                        })
+                        data["source"] = _text(source) or _text(row.get("source"))
+                    changed = any(row.get(field) != data.get(field) for field in set(row) | set(data))
+                    if changed and not force_replace:
+                        raise BaseDataConflict(f"{kind} 存在同主键但内容不同的记录；请确认后显式传入 force_replace")
                     document[kind][position] = data
                     action = "updated"
                     break
             else:
                 document[kind].append(data)
                 action = "created"
-            self._save(document, updated_by)
+            self._save(document, updated_by, action=action, kind=kind, source=source, reason=reason)
         return {"action": action, "kind": kind, "item": data}
 
-    def delete(self, kind: str, item: dict, updated_by: str = "") -> bool:
+    def delete(self, kind: str, item: dict, updated_by: str = "", *, source: str = "", reason: str = "") -> bool:
         _check_kind(kind)
         if not isinstance(item, dict):
             raise ValueError("基础数据条目必须是对象")
         key = _base_key(kind, item)
-        with _BASE_LOCK:
+        with _base_locked(self.path):
             document = self.read()
             kept = [row for row in document[kind] if _base_key(kind, row) != key]
             if len(kept) == len(document[kind]):
                 return False
             document[kind] = kept
-            self._save(document, updated_by)
+            self._save(document, updated_by, action="deleted", kind=kind, source=source, reason=reason)
         return True
+
+    def history(self) -> list[dict]:
+        """Return audit metadata without embedding row snapshots."""
+        document = self.read()
+        return [{key: value for key, value in event.items() if key != "snapshot"}
+                for event in document.get("_history", [])]
+
+    def approve_name_mapping(
+        self, alias: str, reviewer: str, *, expected: dict, source: str, reason: str
+    ) -> dict:
+        # F12: do not approve without a fresh decision and traceable evidence.
+        if not isinstance(source, str) or not isinstance(reason, str):
+            raise ValueError("映射审批来源和原因必须是文本")
+        source_text, reason_text = _text(source), _text(reason)
+        if not source_text or not reason_text:
+            raise ValueError("映射审批来源和原因不能为空")
+        if len(source_text) > 256 or len(reason_text) > 500:
+            raise ValueError("映射审批来源最多 256 字，原因最多 500 字")
+        # F11: the UI must identify the exact pending row it displayed. Compare
+        # all review-relevant fields while holding the same write lock.
+        if not isinstance(expected, dict):
+            raise ValueError("缺少审批时的映射快照")
+        expected_fields = ("alias", "canonical", "note", "source", "review_status")
+        if any(field not in expected for field in expected_fields):
+            raise ValueError("审批映射快照字段不完整")
+        if any(not isinstance(expected.get(field), str) for field in expected_fields):
+            raise ValueError("审批映射快照字段类型无效")
+        if _norm(expected.get("alias")) != _norm(alias) or expected.get("review_status") != "pending":
+            raise ValueError("审批映射快照无效或状态已变化")
+        with _base_locked(self.path):
+            document = self.read()
+            matches = [row for row in document["name_mappings"] if _norm(row.get("alias")) == _norm(alias)]
+            if len(matches) != 1:
+                raise ValueError("名称映射不存在或别名不唯一")
+            row = matches[0]
+            if row.get("review_status", "pending") != "pending" or any(
+                _text(row.get(field)) != _text(expected.get(field)) for field in expected_fields[:-1]
+            ):
+                raise BaseDataConflict("名称映射内容或审批状态已变化，请刷新后重新审核")
+            row.update(review_status="approved", approved_by=reviewer,
+                       approved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       source=source_text)
+            self._save(document, reviewer, action="mapping_approved", kind="name_mappings",
+                       source=source_text, reason=reason_text)
+            return dict(row)
+
+    def rollback(self, version: int, updated_by: str, *, reason: str) -> int:
+        if not _text(reason):
+            raise ValueError("回滚原因不能为空")
+        with _base_locked(self.path):
+            document = self.read()
+            target = next((event for event in document.get("_history", [])
+                           if int(event.get("version", -1)) == int(version) and event.get("snapshot")), None)
+            if target is None:
+                raise ValueError(f"找不到可回滚的版本：{version}")
+            for kind in BASE_KINDS:
+                document[kind] = [dict(row) for row in target["snapshot"].get(kind, [])]
+            self._save(document, updated_by, action="rollback", kind="all", source="base_data_history",
+                       reason=reason, rollback_to_version=int(version))
+            return int(document["version"])
 
     def snapshot(self) -> CrmSnapshot:
         document = self.read()
         try:
+            prices = [CrmPrice(**_base_row(CrmPrice, row)) for row in document["prices"]]
+            schedules = [CrmSchedule(**_base_row(CrmSchedule, row)) for row in document["schedules"]]
             return CrmSnapshot(
                 mode="base", source=str(self.path),
-                prices=[CrmPrice(**_base_row(CrmPrice, row)) for row in document["prices"]],
-                schedules=[CrmSchedule(**_base_row(CrmSchedule, row)) for row in document["schedules"]],
+                projects=_project_from_prices([*prices, *schedules]),
+                prices=prices,
+                schedules=schedules,
                 qualifications=[CrmQualification(**_base_row(CrmQualification, row)) for row in document["qualifications"]],
                 name_mappings=[CrmNameMapping(**_base_row(CrmNameMapping, row)) for row in document["name_mappings"]],
             )
@@ -607,13 +824,118 @@ def read_projects(snapshot: CrmSnapshot) -> list[dict]:
     return [project.__dict__ for project in snapshot.projects]
 
 
+def authorized_projects(snapshot: CrmSnapshot, grants: list[str]) -> list[CrmProject]:
+    """Resolve exact project ID/name grants only when they map uniquely."""
+    visible: list[CrmProject] = []
+    for grant in dict.fromkeys(_text(item) for item in grants if _text(item)):
+        matches = [
+            project for project in snapshot.projects
+            if grant in {_text(project.project_id), _text(project.name)}
+        ]
+        if len(matches) != 1:
+            continue
+        project = matches[0]
+        if project.project_id and sum(_text(row.project_id) == _text(project.project_id) for row in snapshot.projects) != 1:
+            continue
+        if project.name and sum(_text(row.name) == _text(project.name) for row in snapshot.projects) != 1:
+            continue
+        if project not in visible:
+            visible.append(project)
+    return visible
+
+
+def project_row_visible(
+    snapshot: CrmSnapshot,
+    row: Any,
+    allowed_projects: list[CrmProject],
+) -> bool:
+    """Fail closed on missing, duplicate, or conflicting row project identity."""
+    if isinstance(row, dict):
+        project_id = _text(row.get("project_id"))
+        project_name = _text(row.get("project_name"))
+    else:
+        project_id = _text(getattr(row, "project_id", ""))
+        project_name = _text(getattr(row, "project_name", ""))
+
+    if project_id:
+        matches = [project for project in snapshot.projects if _text(project.project_id) == project_id]
+    elif project_name:
+        matches = [project for project in snapshot.projects if _text(project.name) == project_name]
+    else:
+        return False
+    if len(matches) != 1:
+        return False
+    project = matches[0]
+    if project_name and project_name != _text(project.name):
+        return False
+    return any(
+        _text(project.project_id) == _text(allowed.project_id)
+        and _text(project.name) == _text(allowed.name)
+        for allowed in allowed_projects
+    )
+
+
+def scope_snapshot(snapshot: CrmSnapshot, grants: list[str]) -> CrmSnapshot:
+    """Filter every CRM snapshot collection to uniquely granted projects.
+
+    Qualifications and name mappings do not currently carry reliable project
+    scope, so restricted users receive neither collection.
+    """
+    allowed = authorized_projects(snapshot, grants)
+    return CrmSnapshot(
+        mode=snapshot.mode,
+        source="CRM project-scoped view",
+        projects=allowed,
+        prices=[row for row in snapshot.prices if project_row_visible(snapshot, row, allowed)],
+        qualifications=[],
+        schedules=[row for row in snapshot.schedules if project_row_visible(snapshot, row, allowed)],
+        task_orders=[
+            row for row in snapshot.task_orders
+            if project_row_visible(snapshot, {"project_id": row.project_id}, allowed)
+        ],
+        samples=[
+            row for row in snapshot.samples
+            if project_row_visible(snapshot, {"project_id": row.project_id}, allowed)
+        ],
+        name_mappings=[],
+        warnings=list(snapshot.warnings),
+    )
+
+
+def scope_base_document(document: dict, grants: list[str]) -> dict:
+    """Filter the local maintenance library using its own unique project rows."""
+    project_records = [*document.get("prices", []), *document.get("schedules", [])]
+    projects_by_identity: dict[tuple[str, str], CrmProject] = {}
+    for row in project_records:
+        project_id = _text(row.get("project_id"))
+        project_name = _text(row.get("project_name"))
+        if not project_id and not project_name:
+            continue
+        key = (project_id, project_name or project_id)
+        projects_by_identity.setdefault(key, CrmProject(project_id, project_name or project_id))
+    snapshot = CrmSnapshot(
+        mode="base", source="", projects=list(projects_by_identity.values())
+    )
+    allowed = authorized_projects(snapshot, grants)
+    scoped_document = {
+        **document,
+        "prices": [row for row in document.get("prices", []) if project_row_visible(snapshot, row, allowed)],
+        "schedules": [row for row in document.get("schedules", []) if project_row_visible(snapshot, row, allowed)],
+        "qualifications": [],
+        "name_mappings": [],
+    }
+    scoped_document.pop("updated_by", None)
+    scoped_document.pop("_history", None)
+    return scoped_document
+
+
 def resolve_project(snapshot: CrmSnapshot, name: str) -> str:
     """Resolve a project name through the CS-1.4 mapping library (one hop)."""
     wanted = _norm(name)
     if not wanted:
         return ""
     for mapping in snapshot.name_mappings:
-        if _norm(mapping.alias) == wanted:
+        if _norm(mapping.alias) == wanted and mapping.review_status == "approved":
             return mapping.canonical
     return _text(name)
 
@@ -623,6 +945,8 @@ def read_prices(snapshot: CrmSnapshot, project: str = "", query: str = "") -> li
     wanted_query = _norm(query)
     rows = []
     for price in snapshot.prices:
+        if price.valid_until and price.valid_until < date.today().isoformat():
+            continue
         names = {
             _norm(resolve_project(snapshot, name))
             for name in (price.project_id, price.project_name)
@@ -638,7 +962,9 @@ def read_prices(snapshot: CrmSnapshot, project: str = "", query: str = "") -> li
 
 
 def read_qualifications(snapshot: CrmSnapshot) -> list[dict]:
-    return [item.__dict__ for item in snapshot.qualifications]
+    today = date.today().isoformat()
+    return [item.__dict__ for item in snapshot.qualifications
+            if not item.valid_until or item.valid_until >= today]
 
 
 def read_schedules(snapshot: CrmSnapshot) -> list[dict]:
@@ -661,7 +987,7 @@ def lookup_sample(snapshot: CrmSnapshot, sample_no: str) -> dict | None:
     return None
 
 
-def reconcile_quote(result: Any) -> dict:
+def reconcile_quote(result: Any, project_scope: str | None = None) -> dict:
     """Compare parsed quote lines against the CRM price snapshot (read-only)."""
     mode = os.getenv("P0_CRM_MODE", "off").strip().lower() or "off"
     if mode == "off":
@@ -680,12 +1006,14 @@ def reconcile_quote(result: Any) -> dict:
             "enabled": True,
             "mode": mode,
             "reconciled": False,
-            "error": str(exc),
+            "error": "CRM 只读数据不可用" if project_scope is not None else str(exc),
             "total": len(result.lines),
             "matched": 0,
             "missing": [],
             "price_mismatch": [],
         }
+    if project_scope is not None:
+        snapshot = scope_snapshot(snapshot, [project_scope])
     index: dict[tuple[str, str, str], CrmPrice] = {}
     loose: dict[tuple[str, str], CrmPrice] = {}
     for price in snapshot.prices:
@@ -756,18 +1084,29 @@ def sync_base_data(
     if snapshot.mode == "off":
         raise CrmUnavailable("P0_CRM_MODE=off，未启用 CRM 数据源")
     store = store or BaseDataStore()
-    counts = {"created": 0, "updated": 0, "skipped": 0}
-    for mapping in snapshot.name_mappings:
-        counts[store.upsert("name_mappings", mapping.__dict__, updated_by)["action"]] += 1
+    counts = {"created": 0, "updated": 0, "skipped": 0, "conflicts": 0}
+    errors: list[dict] = []
+    for index, mapping in enumerate(snapshot.name_mappings, start=1):
+        try:
+            counts[store.upsert("name_mappings", mapping.__dict__, updated_by, source=snapshot.source,
+                                reason="CRM 同步")["action"]] += 1
+        except (ValueError, CrmUnavailable) as exc:
+            counts["skipped"] += 1
+            counts["conflicts"] += isinstance(exc, BaseDataConflict)
+            errors.append({"kind": "name_mappings", "row": index, "key": mapping.alias, "error": str(exc)})
     for kind in ("prices", "schedules", "qualifications"):
         before = {_base_key(kind, row) for row in store.read()[kind]}
-        for row in getattr(snapshot, kind):
+        for index, row in enumerate(getattr(snapshot, kind), start=1):
             try:
-                item = store.upsert(kind, dict(row.__dict__), updated_by)["item"]
-            except ValueError:
+                item = store.upsert(kind, dict(row.__dict__), updated_by, source=snapshot.source,
+                                    reason="CRM 同步")["item"]
+            except (ValueError, CrmUnavailable) as exc:
                 counts["skipped"] += 1
+                errors.append({"kind": kind, "row": index, "key": str(_base_key(kind, row.__dict__)),
+                               "error": str(exc)})
+                counts["conflicts"] += isinstance(exc, BaseDataConflict)
                 continue
             key = _base_key(kind, item)
             counts["updated" if key in before else "created"] += 1
             before.add(key)
-    return {"mode": snapshot.mode, "source": snapshot.source, **counts}
+    return {"mode": snapshot.mode, "source": snapshot.source, **counts, "errors": errors}

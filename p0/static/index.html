@@ -59,7 +59,7 @@
       </div>
       <div class="nav-section hidden" id="adminNavSection">
         <div class="nav-label">系统治理</div>
-        <button class="nav-item" data-tab="admin"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span>权限、审计与规则</span><span class="nav-tag">P1</span></button>
+        <button class="nav-item" data-tab="admin"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg><span>业务工作区</span><span class="nav-tag">P1</span></button>
       </div>
     </nav>
     <div class="side-foot">
@@ -423,6 +423,64 @@
           </div>
           <div id="quoteResult" class="hidden"></div>
         </section>
+        <section class="card card-pad" id="quoteInquiryClientCard">
+          <div class="card-head">
+            <div><h2>内部询价与人工接手</h2><p>按 CRM 授权项目读取只读来源；缺项、冲突或数据不可用时转人工，不生成正式报价。服务端需显式设置 P0_CS_QUOTE_FLOW_ENABLED=1 与 P0_CS_CRM_PREVIEW_ENABLED=1。</p></div>
+            <span class="pill warn">内部流程演示</span>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label for="inquiryProject">项目标识 <span class="req">必填</span></label><input id="inquiryProject" maxlength="300" placeholder="填写已授权的 CRM 项目名称或编号"></div>
+            <div class="field"><label for="inquiryItem">检验项目</label><input id="inquiryItem" maxlength="300" placeholder="例如：外观检查"></div>
+            <div class="field"><label for="inquirySample">样品名称</label><input id="inquirySample" maxlength="300" placeholder="例如：样品 A"></div>
+            <div class="field"><label for="inquiryStandard">标准号</label><input id="inquiryStandard" maxlength="300" placeholder="例如：标准编号"></div>
+            <div class="field"><label for="inquiryQuantity">数量</label><input id="inquiryQuantity" type="number" min="0" step="any" placeholder="未知可留空"></div>
+            <div class="field"><label for="inquiryUnit">单位</label><input id="inquiryUnit" maxlength="80" placeholder="例如：件"></div>
+            <div class="field field-full"><label for="inquiryContext">补充说明</label><textarea id="inquiryContext" maxlength="2000" rows="3" placeholder="只填写本次内部询价所需的业务上下文"></textarea></div>
+          </div>
+          <div class="row mt-16">
+            <button type="button" class="btn btn-secondary" id="inquirySaveDraft">保存草稿</button>
+            <button type="button" class="btn btn-primary" id="inquirySubmit">提交并生成内部预览</button>
+            <button type="button" class="btn btn-secondary" id="inquiryNew">新建</button>
+            <span class="muted" id="inquiryStatus"></span>
+          </div>
+          <div id="inquiryPreview" class="hidden mt-16"></div>
+          <div class="card-head mt-16"><div><h3>我的询价工单</h3><p>仅显示本人创建或已分配给本人的记录。</p></div><button type="button" class="btn btn-secondary btn-sm" id="inquiryRefresh">刷新</button></div>
+          <div id="myQuoteInquiries" class="quote-history"><div class="muted">尚未加载</div></div>
+        </section>
+        <section class="card card-pad" id="quoteDemoPreviewCard">
+          <div class="card-head">
+            <div><h2>S1 报价来源预览</h2><p>仅供内部比对来源与缺失状态；不计算总价、不生成客户报价、不写回 CRM。</p></div>
+            <span class="pill warn">合成数据</span>
+          </div>
+          <div class="row">
+            <button type="button" class="btn btn-secondary" id="quoteDemoPreviewBtn">加载合成预览</button>
+            <span class="muted">服务端需显式设置 P0_CS_DEMO_ENABLED=1</span>
+          </div>
+          <div class="field mt-16">
+            <label for="quoteDemoProject">检测项目名称或编号</label>
+            <input type="text" id="quoteDemoProject" maxlength="300" placeholder="需与所选数据源中的项目名称或编号一致">
+            <span class="hint">用于匹配合成目录或 CRM 只读数据；CRM 预览还会校验项目授权，请填写当前账号获授权且与数据源一致的项目名称或编号。</span>
+          </div>
+          <div class="row mt-16">
+            <button type="button" class="btn btn-secondary" id="quoteParseReviewBtn">解析文件并复核明细</button>
+            <span class="muted">复核只编辑项目/标准/样品/数量/单位；来源行、置信度与价格不可改。</span>
+          </div>
+          <div id="quoteParseReview" class="hidden mt-16"></div>
+          <div class="row">
+            <button type="button" class="btn btn-secondary" id="quoteParsedPreviewBtn">解析已选文件并匹配 S1 合成目录</button>
+            <span class="muted">必须先确认解析复核；使用留痕后的行/字段进入只读预览。</span>
+          </div>
+          <div class="row mt-16">
+            <button type="button" class="btn btn-primary" id="quoteCrmPreviewBtn">解析已选文件并匹配当前 CRM 只读数据</button>
+            <span class="muted">需设置 P0_CS_CRM_PREVIEW_ENABLED=1，且 P0_CRM_MODE 为 excel/csv/base；不回退到合成目录。</span>
+          </div>
+          <div class="row mt-16">
+            <button type="button" class="btn btn-secondary" id="quoteCrmExportBtn">导出当前复核明细为内部 Excel</button>
+            <span class="muted">仅导出当前用户已留痕复核的明细与重新读取的 CRM 只读匹配结果；不是客户模板、正式报价或 CRM 写入。</span>
+          </div>
+          <div id="quoteDemoPreviewNotice" class="banner warn hidden mt-16"></div>
+          <div id="quoteDemoPreview" class="hidden mt-16"></div>
+        </section>
         <section class="card card-pad" id="quoteHistoryCard">
           <div class="card-head">
             <div><h2>报价历史</h2><p>生成的报价保留在服务端；可回看金额与对账结果，并重新下载 CRM 草稿 / 销售报价表。</p></div>
@@ -496,13 +554,21 @@
         <div class="page-head">
           <div>
             <div class="eyebrow">Governance</div>
-            <h1 id="adminPageTitle">权限、审计与规则</h1>
+            <h1 id="adminPageTitle">业务工作区</h1>
             <p id="adminPageDesc">管理账号、角色与项目授权，配置各业务链路的规则与字段；每一次登录、复核、发布、报价、导出和规则变更都会留下可查询的审计记录。</p>
           </div>
           <div class="page-actions"><span class="pill success"><svg class="icon" aria-hidden="true"><use href="#i-shield"/></svg>P1 · 治理与规则</span></div>
         </div>
         <div class="segmented" id="adminTabs">
           <button type="button" data-admin-view="users" class="active">用户与角色</button>
+          <button type="button" data-admin-view="crm-schedules">排期库</button>
+          <button type="button" data-admin-view="crm-qualifications">资质库</button>
+          <button type="button" data-admin-view="crm-prices">价格库</button>
+          <button type="button" data-admin-view="crm-name-mappings">名称映射</button>
+          <button type="button" data-admin-view="registrations">演示注册审核</button>
+          <button type="button" data-admin-view="orders">演示委托审核</button>
+          <button type="button" data-admin-view="quote-inquiries">询价人工队列</button>
+          <button type="button" data-admin-view="conversations">客服会话队列</button>
           <button type="button" data-admin-view="audit">审计日志</button>
           <button type="button" data-admin-view="config">规则配置</button>
         </div>
@@ -525,6 +591,199 @@
               <table>
                 <thead><tr><th>用户</th><th>角色</th><th>部门</th><th>项目授权</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody id="userBody"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="adminCrmSchedulesView" class="hidden">
+          <div class="banner warn">管理员维护的本地排期库。状态字段按来源原文保存；客户确认状态口径前，报价预览始终要求人工复核，不承诺交期。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head">
+              <div><h2>维护试验排期</h2><p>每次变更记录来源和原因；同项目、开始日、结束日重复但内容不同会要求明确覆盖。</p></div>
+              <div class="row"><span class="config-meta" id="crmScheduleVersion">版本 —</span><button type="button" class="btn btn-secondary" id="crmScheduleRefresh">刷新</button></div>
+            </div>
+            <div class="banner info">演示候选解析器（非 AI）：只识别下方列出的字段格式，请只输入合成示例。解析过程在当前浏览器内完成；采纳候选时会将完整原文放入备注，点击保存后写入本地排期库。候选不会自动保存。</div>
+            <div class="field mt-16">
+              <label for="crmScheduleSourceText">合成排期文本</label>
+              <textarea id="crmScheduleSourceText" rows="7" maxlength="12000" placeholder="项目编号：DEMO-01&#10;项目名称：合成示例项目&#10;计划开始：2099-02-01&#10;计划结束：2099-02-15&#10;状态原文：待业务确认&#10;备注：合成演示数据"></textarea>
+              <small class="muted">每条候选用空行或 --- 分隔。字段：项目编号、项目名称、计划开始、计划结束、状态原文、备注。原文异常、日期不合法、重复或未知字段均需先修正；识别仅为确定性字段提取，不代表 AI 能力。</small>
+            </div>
+            <div class="row mt-16"><button type="button" class="btn btn-secondary" id="crmScheduleParse">解析候选</button><span class="config-meta" id="crmScheduleParseStatus" aria-live="polite"></span></div>
+            <div id="crmScheduleCandidates" class="mt-16" aria-live="polite"></div>
+            <form id="crmScheduleForm" class="form-grid config-numbers">
+              <div class="field"><label for="crmScheduleProjectId">项目编号（可选）</label><input id="crmScheduleProjectId" type="text" maxlength="128" autocomplete="off"></div>
+              <div class="field"><label for="crmScheduleProjectName">项目名称（必填）</label><input id="crmScheduleProjectName" type="text" maxlength="128" required autocomplete="off"></div>
+              <div class="field"><label for="crmScheduleStart">计划开始</label><input id="crmScheduleStart" type="date"></div>
+              <div class="field"><label for="crmScheduleEnd">计划结束</label><input id="crmScheduleEnd" type="date"></div>
+              <div class="field"><label for="crmScheduleStatus">状态原文</label><input id="crmScheduleStatus" type="text" maxlength="64" placeholder="按来源填写，不代表系统已确认语义"></div>
+              <div class="field"><label for="crmScheduleSource">来源</label><input id="crmScheduleSource" type="text" maxlength="256" required placeholder="如：排期表名称 / 维护记录"></div>
+              <div class="field"><label for="crmScheduleReason">变更原因</label><input id="crmScheduleReason" type="text" maxlength="500" required></div>
+              <div class="field"><label for="crmScheduleNote">备注</label><textarea id="crmScheduleNote" rows="3" maxlength="500"></textarea></div>
+              <div class="row"><button type="submit" class="btn btn-primary" id="crmScheduleSave">保存排期</button><button type="reset" class="btn btn-secondary">清空表单</button></div>
+            </form>
+          </section>
+          <section class="card card-pad mt-16">
+            <div class="table-wrap"><table><thead><tr><th>项目编号</th><th>项目名称</th><th>计划日期</th><th>状态原文</th><th>备注</th><th>操作</th></tr></thead>
+              <tbody id="crmScheduleBody"><tr><td colspan="6" class="muted">尚未加载</td></tr></tbody></table></div>
+          </section>
+        </div>
+
+        <div id="adminCrmQualificationsView" class="hidden">
+          <div class="banner warn">管理员维护的本地资质资料。这里仅保存来源记录中的名称、证书号、范围、有效期和状态原文；不会据此宣称客户认可或标准级能力已通过。正式匹配口径需客户确认。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head">
+              <div><h2>维护资质记录</h2><p>每次变更记录来源与原因；重复证书号或名称只有在确认后才覆盖。</p></div>
+              <div class="row"><span class="config-meta" id="crmQualificationVersion">版本 —</span><button type="button" class="btn btn-secondary" id="crmQualificationRefresh">刷新</button></div>
+            </div>
+            <form id="crmQualificationForm" class="form-grid config-numbers">
+              <div class="field"><label for="crmQualificationName">资质名称（必填）</label><input id="crmQualificationName" type="text" maxlength="256" required autocomplete="off"></div>
+              <div class="field"><label for="crmQualificationCertificate">证书编号</label><input id="crmQualificationCertificate" type="text" maxlength="128" autocomplete="off"></div>
+              <div class="field"><label for="crmQualificationScope">范围原文</label><input id="crmQualificationScope" type="text" maxlength="500" placeholder="按来源原文记录"></div>
+              <div class="field"><label for="crmQualificationValidUntil">有效期至</label><input id="crmQualificationValidUntil" type="date"></div>
+              <div class="field"><label for="crmQualificationStatus">状态原文</label><input id="crmQualificationStatus" type="text" maxlength="64" placeholder="不代表系统已确认语义"></div>
+              <div class="field"><label for="crmQualificationSource">来源（必填）</label><input id="crmQualificationSource" type="text" maxlength="256" required placeholder="资料名称 / 维护记录"></div>
+              <div class="field"><label for="crmQualificationReason">变更原因（必填）</label><input id="crmQualificationReason" type="text" maxlength="500" required></div>
+              <div class="row"><button type="submit" class="btn btn-primary" id="crmQualificationSave">保存资质记录</button><button type="reset" class="btn btn-secondary">清空表单</button></div>
+            </form>
+          </section>
+          <section class="card card-pad mt-16">
+            <div class="table-wrap"><table><thead><tr><th>资质名称</th><th>证书编号</th><th>范围原文</th><th>有效期</th><th>状态原文</th><th>操作</th></tr></thead>
+              <tbody id="crmQualificationBody"><tr><td colspan="6" class="muted">尚未加载</td></tr></tbody></table></div>
+          </section>
+        </div>
+
+        <div id="adminCrmPricesView" class="hidden">
+          <div class="banner warn">管理员维护的本地价格资料。此页只登记来源中的单价、数量、单位与折扣原文，不计算对客报价，不自动套用客户价格规则；真实币种、税率、有效范围需客户确认。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head"><div><h2>维护价格记录</h2><p>每次变更记录来源与原因；重复项目/样品/试验项目/标准需确认后才覆盖。</p></div><div class="row"><span class="config-meta" id="crmPriceVersion">版本 —</span><button type="button" class="btn btn-secondary" id="crmPriceRefresh">刷新</button></div></div>
+            <form id="crmPriceForm" class="form-grid config-numbers">
+              <div class="field"><label for="crmPriceProjectId">项目编号</label><input id="crmPriceProjectId" type="text" maxlength="128"></div>
+              <div class="field"><label for="crmPriceProjectName">项目名称（必填）</label><input id="crmPriceProjectName" type="text" maxlength="256" required></div>
+              <div class="field"><label for="crmPriceSample">样品名称</label><input id="crmPriceSample" type="text" maxlength="256"></div>
+              <div class="field"><label for="crmPriceItem">试验项目（必填）</label><input id="crmPriceItem" type="text" maxlength="256" required></div>
+              <div class="field"><label for="crmPriceStandard">标准号</label><input id="crmPriceStandard" type="text" maxlength="128"></div>
+              <div class="field"><label for="crmPriceDepartment">部门</label><input id="crmPriceDepartment" type="text" maxlength="128"></div>
+              <div class="field"><label for="crmPriceUnit">单位</label><input id="crmPriceUnit" type="text" maxlength="32"></div>
+              <div class="field"><label for="crmPriceQuantity">数量</label><input id="crmPriceQuantity" type="number" min="0.000001" step="any" value="1" required></div>
+              <div class="field"><label for="crmPriceUnitPrice">单价</label><input id="crmPriceUnitPrice" type="number" min="0" step="any" value="0" required></div>
+              <div class="field"><label for="crmPriceDiscount">折扣</label><input id="crmPriceDiscount" type="number" min="0" max="100" step="any" value="60" required></div>
+              <div class="field"><label for="crmPriceValidUntil">有效期至</label><input id="crmPriceValidUntil" type="date"></div>
+              <div class="field"><label for="crmPriceSource">来源（必填）</label><input id="crmPriceSource" type="text" maxlength="256" required></div>
+              <div class="field"><label for="crmPriceReason">变更原因（必填）</label><input id="crmPriceReason" type="text" maxlength="500" required></div>
+              <div class="row"><button type="submit" class="btn btn-primary" id="crmPriceSave">保存价格记录</button><button type="reset" class="btn btn-secondary">清空表单</button></div>
+            </form>
+          </section>
+          <section class="card card-pad mt-16"><div class="table-wrap"><table><thead><tr><th>项目</th><th>样品 / 项目</th><th>标准 / 部门</th><th>数量 / 单位</th><th>单价 / 折扣</th><th>有效期</th><th>操作</th></tr></thead><tbody id="crmPriceBody"><tr><td colspan="7" class="muted">尚未加载</td></tr></tbody></table></div></section>
+        </div>
+
+        <div id="adminCrmNameMappingsView" class="hidden">
+          <div class="banner warn">项目名称映射默认待审批；只有管理员明确批准的映射参与匹配。名称相似本身不会自动建立映射，项目归属或客户原始项目名需按客户规则确认。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head"><div><h2>维护项目名称映射</h2><p>新建映射始终为待审批；审批、删除和变更均要求来源/原因。</p></div><div class="row"><span class="config-meta" id="crmNameMappingVersion">版本 —</span><button type="button" class="btn btn-secondary" id="crmNameMappingRefresh">刷新</button></div></div>
+            <form id="crmNameMappingForm" class="form-grid config-numbers">
+              <div class="field"><label for="crmNameMappingAlias">来源名称（必填）</label><input id="crmNameMappingAlias" type="text" maxlength="256" required></div>
+              <div class="field"><label for="crmNameMappingCanonical">标准名称（必填）</label><input id="crmNameMappingCanonical" type="text" maxlength="256" required></div>
+              <div class="field"><label for="crmNameMappingNote">说明</label><input id="crmNameMappingNote" type="text" maxlength="500"></div>
+              <div class="field"><label for="crmNameMappingSource">来源（必填）</label><input id="crmNameMappingSource" type="text" maxlength="256" required></div>
+              <div class="field"><label for="crmNameMappingReason">变更原因（必填）</label><input id="crmNameMappingReason" type="text" maxlength="500" required></div>
+              <div class="row"><button type="submit" class="btn btn-primary" id="crmNameMappingSave">保存待审批映射</button><button type="reset" class="btn btn-secondary">清空表单</button></div>
+            </form>
+          </section>
+          <section class="card card-pad mt-16"><div class="table-wrap"><table><thead><tr><th>来源名称</th><th>标准名称</th><th>说明</th><th>审批状态</th><th>来源</th><th>操作</th></tr></thead><tbody id="crmNameMappingBody"><tr><td colspan="6" class="muted">尚未加载</td></tr></tbody></table></div></section>
+        </div>
+
+        <div id="adminRegistrationsView" class="hidden">
+          <div class="banner warn">仅显示本地演示注册；审核不会创建真实客户账号。服务端须显式开启演示模式。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head">
+              <div><h2>演示注册队列</h2><p>补件、批准或拒绝时必须填写原因，所有状态变化写入服务端历史。</p></div>
+              <div class="row">
+                <select id="registrationStatusFilter" aria-label="按审核状态筛选">
+                  <option value="">全部状态</option><option value="submitted">待审核</option>
+                  <option value="needs_info">待补件</option><option value="approved">已批准</option>
+                  <option value="rejected">已拒绝</option><option value="customer_confirmed">客户已确认</option>
+                  <option value="customer_declined">客户暂不接受</option>
+                </select>
+                <button type="button" class="btn btn-secondary" id="registrationRefresh">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>登记编号</th><th>企业</th><th>联系人</th><th>地区</th><th>说明</th><th>规则复核提示</th><th>经理匹配候选</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+                <tbody id="registrationBody"><tr><td colspan="10" class="muted">尚未加载</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="adminOrdersView" class="hidden">
+          <div class="banner warn">仅处理本地演示委托；批准/拒绝不会创建真实检测任务、安排样品或发送邮件。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head">
+              <div><h2>演示委托审核队列</h2><p>补件、批准或拒绝必须填写原因；所用模板版本随委托一并保留。</p></div>
+              <div class="row">
+                <select id="orderStatusFilter" aria-label="按委托状态筛选">
+                  <option value="">全部状态</option><option value="submitted">待审核</option>
+                  <option value="needs_info">待补件</option><option value="approved">已批准</option>
+                  <option value="rejected">已拒绝</option>
+                </select>
+                <button type="button" class="btn btn-secondary" id="orderRefresh">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>委托编号</th><th>企业 / 联系人</th><th>项目 / 样品</th><th>模板版本</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+                <tbody id="orderBody"><tr><td colspan="7" class="muted">尚未加载</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="adminQuoteInquiriesView" class="hidden">
+          <div class="banner warn">内部演示工作队列。价格、排期和资质仅作只读事实预览，不生成正式报价或写回 CRM。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head">
+              <div><h2>询价人工接手</h2><p>接单、转派和关闭均需填写原因；负责人和历史记录写入服务端。</p></div>
+              <div class="row">
+                <select id="quoteInquiryStatusFilter" aria-label="按询价状态筛选">
+                  <option value="">全部状态</option><option value="draft">草稿</option>
+                  <option value="submitted">已提交</option><option value="need_info">待补信息</option>
+                  <option value="preview">内部预览</option><option value="needs_human">待人工处理</option>
+                  <option value="resolved">已关闭</option>
+                </select>
+                <button type="button" class="btn btn-secondary" id="quoteInquiryRefresh">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>工单</th><th>项目</th><th>申请人</th><th>询价行</th><th>状态</th><th>负责人</th><th>更新时间</th><th>操作</th></tr></thead>
+                <tbody id="quoteInquiryBody"><tr><td colspan="8" class="muted">尚未加载</td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div id="adminConversationsView" class="hidden">
+          <div class="banner warn">只读本地演示会话。消息未发送给微信客服或外部人员；当前队列仅管理员可操作。</div>
+          <section class="card card-pad mt-16">
+            <div class="card-head">
+              <div><h2>客服会话与人工接手</h2><p>查看上下文、接单、转交或归档。每项状态操作都需要填写原因。</p></div>
+              <div class="row">
+                <input id="conversationCompanyFilter" type="search" placeholder="筛选企业" aria-label="按企业名称筛选会话">
+                <select id="conversationPriorityFilter" aria-label="按重点客户候选筛选"><option value="">全部重点状态</option><option value="yes">重点客户候选</option><option value="no">其他/不可用</option></select>
+                <select id="conversationUnreadFilter" aria-label="按未读状态筛选"><option value="">全部已读状态</option><option value="unread">有未读</option><option value="read">无未读</option></select>
+                <select id="conversationStatusFilter" aria-label="按会话状态筛选">
+                  <option value="">全部状态</option><option value="open">待接手</option>
+                  <option value="assigned">已接手</option><option value="archived">已归档</option>
+                </select>
+                <button type="button" class="btn btn-secondary" id="conversationRefresh">刷新</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>会话编号</th><th>企业</th><th>最新消息</th><th>未读</th><th>状态</th><th>负责人</th><th>更新时间</th><th>操作</th></tr></thead>
+                <tbody id="conversationBody"><tr><td colspan="8" class="muted">尚未加载</td></tr></tbody>
               </table>
             </div>
           </section>
@@ -739,8 +998,13 @@
               <div class="field"><label for="cfgBizRushLead">加急提前天数</label><input type="number" id="cfgBizRushLead" step="1" min="0" max="365"><span class="hint">要求交期短于该天数时按加急处理。</span></div>
             </div>
             <div class="form-grid config-numbers">
-              <div class="field"><label for="cfgBizBlacklist">黑名单企业</label><textarea id="cfgBizBlacklist" rows="4" placeholder="每行一个企业全称"></textarea><span class="hint">黑名单企业询价需人工复核；每行一个名称。</span></div>
-              <div class="field"><label for="cfgBizWhitelist">白名单企业</label><textarea id="cfgBizWhitelist" rows="4" placeholder="每行一个企业全称"></textarea><span class="hint">重点客户命中白名单时通知业务经理。</span></div>
+              <div class="field"><label for="cfgBizBlacklist">黑名单企业</label><textarea id="cfgBizBlacklist" rows="4" placeholder="每行一个企业全称"></textarea><div class="row mt-8"><input id="cfgBizBlacklistFile" type="file" accept=".csv,text/csv" aria-label="选择黑名单 CSV"><select id="cfgBizBlacklistImportMode" aria-label="黑名单 CSV 导入方式"><option value="merge">合并导入</option><option value="replace">替换现有名单</option></select><button type="button" class="btn btn-secondary btn-sm" id="cfgBizBlacklistImport">导入 CSV</button><button type="button" class="btn btn-secondary btn-sm" id="cfgBizBlacklistExport">导出 CSV</button></div><span class="hint">名单修改和导入会记录操作者、变更数量与配置版本；导入前会校验，替换会覆盖当前名单。</span></div>
+              <div class="field"><label for="cfgBizWhitelist">重点客户白名单企业</label><textarea id="cfgBizWhitelist" rows="4" placeholder="每行一个企业全称"></textarea><span class="hint">企业名称精确匹配；命中只作内部人工复核候选，不自动放行或通知。</span></div>
+            </div>
+            <div class="field mt-16"><label for="cfgBizWhitelistKeywords">重点客户关键词</label><textarea id="cfgBizWhitelistKeywords" rows="3" placeholder="每行一个关键词"></textarea><span class="hint">企业名称包含关键词时显示重点客户候选；关键词可能误命中，需人工核验。</span></div>
+            <div class="form-grid config-numbers">
+              <div class="field"><label for="cfgBizRegionManagers">注册地区→经理候选</label><textarea id="cfgBizRegionManagers" rows="5" placeholder="每行一条：客户确认的地区=内部账号"></textarea><span class="hint">仅管理员可见和配置。仅按地区文本精确匹配（忽略空白）；不自动更改指派，不发送通知。客户未确认地区口径和经理名单前保持关闭。</span></div>
+              <div class="field"><label for="cfgBizBackupManager">备用经理账号</label><input type="text" id="cfgBizBackupManager" maxlength="120" placeholder="客户确认的备用账号"><span class="hint"><input type="checkbox" id="cfgBizRegionRoutingEnabled" aria-label="启用地区经理候选路由"> 启用本地候选预览；未命中时显示备用候选。生产指派与通知仍未接入。</span></div>
             </div>
           </section>
         </div>
@@ -758,13 +1022,13 @@
   </div>
   <div class="modal-body">
     <div class="form-grid">
-      <div class="field"><label for="nuUsername">用户名 <span class="req">必填</span></label><input type="text" id="nuUsername" autocomplete="off" placeholder="例如 reviewer2"></div>
+      <div class="field"><label for="nuUsername">用户名 <span class="req">必填</span></label><input type="text" id="nuUsername" autocomplete="off" placeholder="例如 staff001"></div>
       <div class="field"><label for="nuName">姓名</label><input type="text" id="nuName" autocomplete="off" placeholder="例如 张复核"></div>
       <div class="field"><label for="nuRole">角色</label><select id="nuRole">
-        <option value="viewer">viewer · 只读</option>
-        <option value="reviewer">reviewer · 复核人</option>
-        <option value="sales">sales · 销售</option>
-        <option value="admin">admin · 管理员</option>
+        <option value="customer" disabled>新客户/小微客户（由小程序账号管理）</option>
+        <option value="business_manager">业务经理</option>
+        <option value="admin">系统管理员</option>
+        <option value="technical">技术部门</option>
       </select></div>
       <div class="field"><label for="nuDept">部门</label><input type="text" id="nuDept" autocomplete="off" placeholder="例如 质量部"></div>
     </div>
@@ -915,6 +1179,10 @@
   </div>
 </dialog>
 
+<script src="static/operation-id.js"></script>
+<script src="static/review-queue.js"></script>
+<script src="static/schedule-candidate.js"></script>
+<script src="static/crm-price-input.js"></script>
 <script src="static/ui.js"></script>
 </body>
 </html>

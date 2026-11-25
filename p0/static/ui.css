@@ -278,6 +278,7 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospac
 
 /* ---------------------------------------------------------------- forms */
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.field-full { grid-column: 1 / -1; }
 .field:last-child { margin-bottom: 0; }
 .field label, .field-label { color: var(--ink-2); font-size: 11.5px; font-weight: 600; }
 .field-label { display: block; margin: 0 0 6px; }

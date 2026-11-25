@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/zhongqi/customer-service/quote-preview.schema.json",
+  "title": "Customer Service Quote Preview",
+  "description": "Internal quote preview contract. This schema does not authorize customer-facing quotes.",
+  "type": "object",
+  "required": ["preview_id", "environment", "demo_only", "status", "lines", "suggested_action"],
+  "properties": {
+    "preview_id": {"type": "string", "minLength": 1},
+    "environment": {"type": "string", "enum": ["synthetic", "internal", "production"]},
+    "input_origin": {"type": "string", "enum": ["synthetic_fixture", "parsed_quote"]},
+    "demo_only": {"type": "boolean"},
+    "source_mode": {"type": ["string", "null"], "enum": ["excel", "csv", "base", null]},
+    "source_revision": {"type": ["string", "null"]},
+    "status": {"type": "string", "enum": ["preview_only", "needs_information", "manual_review", "source_unavailable"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "rule_snapshot": {
+      "type": "object",
+      "required": ["rule_set_id", "approved"],
+      "properties": {
+        "rule_set_id": {"type": "string"},
+        "version": {"type": "string"},
+        "approved": {"type": "boolean"},
+        "threshold_policy": {"type": "string", "enum": ["unconfirmed", "approved"]}
+      },
+      "additionalProperties": false
+    },
+    "suggested_action": {"type": "string", "enum": ["collect_information", "manual_review", "internal_preview_only", "unavailable"]},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["line_id", "request", "price_status", "schedule_status", "qualification_status", "missing_fields", "action"],
+        "properties": {
+          "line_id": {"type": "string"},
+          "matched_item_name": {"type": ["string", "null"]},
+          "request": {
+            "type": "object",
+            "required": ["project_name", "item_name", "standard", "quantity", "unit"],
+            "properties": {
+              "project_name": {"type": "string"},
+              "item_name": {"type": "string"},
+              "sample_name": {"type": "string"},
+              "standard": {"type": "string"},
+              "quantity": {"type": ["number", "null"], "minimum": 0},
+              "unit": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "price_status": {"type": "string", "enum": ["matched", "missing", "expired", "ambiguous", "source_unavailable"]},
+          "price_candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["sample_name", "unit_price", "currency", "tax_inclusive", "reference_quantity", "valid_until", "record_id"],
+              "properties": {
+                "sample_name": {"type": "string"},
+                "unit_price": {"type": ["number", "null"], "minimum": 0},
+                "currency": {"type": ["string", "null"]},
+                "tax_inclusive": {"type": ["boolean", "null"]},
+                "reference_quantity": {"type": ["number", "null"]},
+                "valid_until": {"type": ["string", "null"], "format": "date"},
+                "record_id": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "price_preview": {
+            "type": ["object", "null"],
+            "properties": {
+              "unit_price": {"type": "number", "minimum": 0},
+              "currency": {"type": ["string", "null"]},
+              "tax_inclusive": {"type": ["boolean", "null"]},
+              "valid_until": {"type": ["string", "null"], "format": "date"},
+              "reference_quantity": {"type": ["number", "null"]},
+              "sample_match_level": {"type": "string", "enum": ["exact", "fallback", "not_provided"]}
+            },
+            "additionalProperties": false
+          },
+          "schedule_status": {"type": "string", "enum": ["matched", "unknown", "expired", "ambiguous", "source_unavailable"]},
+          "schedule_preview": {"type": ["object", "null"]},
+          "qualification_status": {"type": "string", "enum": ["standard_scope", "project_scope_only", "not_found", "expired", "ambiguous", "source_unavailable"]},
+          "qualification_preview": {"type": ["object", "null"]},
+          "source_refs": {"type": "array", "items": {"$ref": "#/$defs/sourceRef"}},
+          "missing_fields": {"type": "array", "items": {"type": "string"}},
+          "match_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+          "input_evidence": {
+            "type": "object",
+            "properties": {
+              "source_row": {"type": ["integer", "null"], "minimum": 0},
+              "parse_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+            },
+            "additionalProperties": false
+          },
+          "action": {"type": "string", "enum": ["preview_only", "ask_customer", "manual_review", "block"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "decision_summary": {
+      "type": "object",
+      "properties": {
+        "total_preview": {"type": ["number", "null"], "minimum": 0},
+        "currency": {"type": ["string", "null"]},
+        "calculation_status": {"type": "string", "enum": ["not_calculated", "synthetic_only", "approved_rule_calculation"]},
+        "threshold_result": {"type": "string", "enum": ["not_evaluated", "manual_review", "below_threshold"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "sourceRef": {
+      "type": "object",
+      "required": ["source_type", "record_id", "revision", "synthetic"],
+      "properties": {
+        "source_type": {"type": "string", "enum": ["crm_price", "schedule", "qualification", "name_mapping", "rule"]},
+        "record_id": {"type": "string"},
+        "revision": {"type": "string"},
+        "valid_until": {"type": ["string", "null"], "format": "date"},
+        "synthetic": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

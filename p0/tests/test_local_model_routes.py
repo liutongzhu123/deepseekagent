@@ -5,7 +5,7 @@ import urllib.request
 
 import pytest
 
-from app import embeddings, model_endpoint, query_rewrite, semantic_audit, weknora
+from app import embeddings, model_endpoint, model_readiness, query_rewrite, semantic_audit, weknora
 
 
 @pytest.mark.parametrize("url", [
@@ -33,6 +33,7 @@ def test_f77_internal_host_requires_exact_allowlist(monkeypatch):
 
 
 def test_f75_public_mode_preserves_existing_endpoint(monkeypatch):
+    monkeypatch.setenv("P0_ENV", "test")
     monkeypatch.delenv("P0_LOCAL_MODEL_ONLY", raising=False)
     assert model_endpoint.endpoint_allowed("https://api.deepseek.com")
 
@@ -107,3 +108,53 @@ def test_f80_local_only_disables_proxy_and_redirects(monkeypatch):
     assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies == {} for h in handlers)
     redirect = next(h for h in handlers if isinstance(h, model_endpoint._NoRedirect))
     assert redirect.redirect_request(None, None, 307, "redirect", {}, "https://example.com") is None
+
+
+def test_f81_production_cannot_disable_local_model_routing(monkeypatch):
+    monkeypatch.setenv("P0_ENV", "production")
+    monkeypatch.setenv("P0_LOCAL_MODEL_ONLY", "0")
+    assert model_endpoint.local_only()
+    assert not model_endpoint.endpoint_allowed("https://api.deepseek.com")
+    assert model_endpoint.endpoint_allowed("http://127.0.0.1:11434/v1")
+
+    semantic = semantic_audit.SemanticConfig(
+        enabled=True, api_key="key", base_url="https://api.deepseek.com"
+    )
+    result = semantic_audit.audit_semantics(
+        "客户资料", semantic, post=lambda *_: pytest.fail("public semantic request")
+    )
+    assert (result["status"], result["reason"]) == ("error", "non_local_model_endpoint")
+
+    rewrite = query_rewrite.rewrite(
+        "客户问题",
+        config=query_rewrite.RewriteConfig(
+            enabled=True, api_key="key", base_url="https://api.deepseek.com"
+        ),
+        transport=lambda *_: pytest.fail("public rewrite request"),
+    )
+    assert (rewrite.applied, rewrite.reason) == (False, "non_local_model_endpoint")
+
+    monkeypatch.setenv("P0_WEKNORA_BASE_URL", "https://models.example.test")
+    monkeypatch.setenv("P0_WEKNORA_API_KEY", "key")
+    monkeypatch.setenv("P0_WEKNORA_KB_ID", "kb")
+    monkeypatch.setattr(weknora.httpx, "Client", lambda **_: pytest.fail("public WeKnora request"))
+    with pytest.raises(weknora.WeKnoraUnavailable, match="本地模型"):
+        weknora._client(weknora.config_from_env())
+
+    monkeypatch.setattr(model_endpoint, "open_model_request", lambda *_args, **_kwargs: pytest.fail("public embedding request"))
+    with pytest.raises(embeddings.EmbeddingUnavailable, match="本地模型"):
+        embeddings.OllamaEmbedder(base_url="https://models.example.test").embed(["客户资料"])
+
+    monkeypatch.setenv("P0_SEMANTIC_ENABLED", "1")
+    monkeypatch.setenv("P0_SEMANTIC_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "key")
+    monkeypatch.setenv("P0_QUERY_REWRITE", "1")
+    monkeypatch.setenv("P0_QUERY_REWRITE_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setenv("P0_QUERY_REWRITE_API_KEY", "key")
+    monkeypatch.setenv("P0_EMBEDDING_URL", "https://models.example.test")
+    readiness = model_readiness.snapshot()
+    assert readiness["local_only"] is True
+    assert readiness["semantic_review"]["state"] == "blocked_non_local_endpoint"
+    assert readiness["query_rewrite"]["state"] == "blocked_non_local_endpoint"
+    assert readiness["weknora"]["state"] == "blocked_non_local_endpoint"
+    assert readiness["embeddings"]["state"] == "blocked_non_local_endpoint"

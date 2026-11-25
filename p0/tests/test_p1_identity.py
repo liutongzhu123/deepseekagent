@@ -39,8 +39,8 @@ def test_password_policy(env):
         auth.create_user("weak", "short1!")
     with pytest.raises(ValueError, match="至少两类"):
         auth.create_user("weak2", "abcdefghij")
-    user = auth.create_user("strong", "abcdefgh12", role="reviewer")
-    assert user["role"] == "reviewer"
+    user = auth.create_user("strong", "abcdefgh12", role="technical")
+    assert user["role"] == "technical"
     assert user["projects"] == []
     assert auth.authenticate("strong", "abcdefgh12")["username"] == "strong"
 
@@ -106,10 +106,10 @@ def test_admin_updates_user_and_guards_last_admin(env):
 
     updated = admin.patch(
         "/api/v1/auth/users/carol",
-        json={"role": "reviewer", "projects": ["P-A"], "department": "质量部"},
+        json={"role": "technical", "projects": ["P-A"], "department": "质量部"},
     )
     assert updated.status_code == 200
-    assert updated.json()["user"]["role"] == "reviewer"
+    assert updated.json()["user"]["role"] == "technical"
     assert updated.json()["user"]["projects"] == ["P-A"]
     assert updated.json()["user"]["restricted"] is True
 
@@ -199,7 +199,7 @@ def test_project_isolation_for_standards_and_quotes(env):
     missing_project = alice.post(
         "/api/v1/standards/parse", files={"file": ("a.pdf", b"x")}
     )
-    assert missing_project.status_code == 400
+    assert missing_project.status_code == 403
 
     quotes = env.tmp / "quotes" / "q_20260101000000_abcdef"
     quotes.mkdir(parents=True)
@@ -229,7 +229,7 @@ def test_password_change_invalidates_existing_sessions(env):
     assert _login(TestClient(main.app), "dana", "dana-pass-2").status_code == 200
 
 
-def test_kb_stats_filters_projects(env):
+def test_kb_stats_are_admin_only_and_cover_all_projects(env):
     auth.create_user("root", "root-pass-1", role="admin")
     auth.create_user("alice", "alice-pass-1", role="reviewer", projects=["P-A"])
     parsed = {
@@ -248,9 +248,12 @@ def test_kb_stats_filters_projects(env):
 
     alice = TestClient(main.app)
     assert _login(alice, "alice", "alice-pass-1").status_code == 200
-    stats = alice.get("/api/v1/kb/stats").json()
-    assert stats["standard_count"] == 1
-    assert [item["id"] for item in stats["standards"]] == [record_a["id"]]
+    assert alice.get("/api/v1/kb/stats").status_code == 403
+    root = TestClient(main.app)
+    assert _login(root, "root", "root-pass-1").status_code == 200
+    stats = root.get("/api/v1/kb/stats").json()
+    assert stats["standard_count"] == 2
+    assert {item["id"] for item in stats["standards"]} == {record_a["id"], record_b["id"]}
 
 
 def test_provider_seam(env, monkeypatch):
