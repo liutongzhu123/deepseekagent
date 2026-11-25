@@ -976,7 +976,7 @@ tasks:
       - 有 Go 测试、镜像构建、健康检查、合成知识样例检索/引用、OIDC 账号绑定与权限拒绝、备份恢复和回滚验收证据
       - 四角色名称保持新客户/小微客户、业务经理、系统管理员、技术部门；reviewer 的历史权限逐账号确认前不自动映射
     files: [weknora/, ci/upstream-v0.9.1.json, scripts/prepare_weknora_source.py, .github/workflows/p0-ci.yml, docs/weknora-source-baseline-and-web-unification-2026-11-24.md]
-    note: PR #238/#239/#240（OIDC 身份、apt 顺序、Rustup 镜像）、PR #241（testkb 首次部署器）、PR #242（release staging 路径）、PR #243（安全失败阶段标记）、PR #244（构建镜像代理）、PR #245（GitHub API main 校验回退）及 PR #246（Redis healthcheck/失败后卷复用）已合并。testkb 上锁定的 v0.9.1 app/frontend/docreader 镜像成功构建；首次启动 app/API 和 UI 返回 200，但 Redis 无 healthcheck 导致 F8 门禁失败，已按脚本停止 CNZ 服务并保留四个独立卷；yunan-persist 五个服务健康且未变更。PR #246 后 main SHA 改变暴露同 SHA 重试限制，当前 PR 用源文件路径/类型/内容/权限指纹匹配失败 release，只有指纹一致、无 CNZ 容器、精确四卷和 Compose 标签匹配时才复用；不同源码、异常卷或 active 指针存在都拒绝。
+    note: PR #238/#239/#240（OIDC 身份、apt 顺序、Rustup 镜像）、PR #241（testkb 首次部署器）、PR #242（release staging 路径）、PR #243（安全失败阶段标记）、PR #244（构建镜像代理）、PR #245（GitHub API main 校验回退）及 PR #246（Redis healthcheck/失败后卷复用）已合并。testkb 上锁定的 v0.9.1 app/frontend/docreader 镜像成功构建；首次启动 app/API 和 UI 返回 200，但 Redis 无 healthcheck 导致 F8 门禁失败，已按脚本停止 CNZ 服务并保留四个独立卷；yunan-persist 五个服务健康且未变更。PR #246 后 main SHA 改变暴露同 SHA 重试限制，部署器已改为按源码指纹和卷所有权安全重试。后续 PR #247/#248/#250 已合并，CNZ 前端操作面精简和登录页文案已部署；截至 2026-11-26 只读回读 CNZ API/UI 均为 200、四个 CNZ 卷存在、yunan-persist 五个服务健康。OIDC 仍关闭，没有管理员/员工账号迁移或合成资料上传；CNZ 整栈冷恢复副本曾启动健康，但数据库/Redis 一致性断言未完成，重复运行被自动审批拒绝，因此恢复验收仍未通过。新增关键词合成基线为 9/14 命中、8/8 库外拒答，不代表 WeKnora 实际检索；需在获得受控管理员和合成知识库后用显式 WeKnora 模式复测，并完成恢复数据一致性、OIDC 绑定拒绝、登录后菜单/API、业务工作台跳转和双端退出验收。历史 reviewer 权限仍按账号待确认，不自动映射。
 
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）
