@@ -43,6 +43,7 @@ def test_f1_fetch_failure_stops_before_any_remote_action(monkeypatch, tmp_path):
     answers = [
         subprocess.CompletedProcess([], 0, "main", ""),
         subprocess.CompletedProcess([], 1, "", "network down"),
+        subprocess.CompletedProcess([], 0, "local-commit-sha", ""),
         subprocess.CompletedProcess([], 0, "https://github.com/acme/repo.git", ""),
         subprocess.CompletedProcess([], 1, "", "API unavailable"),
     ]
@@ -69,6 +70,7 @@ def test_f1_github_api_fallback_requires_exact_main_tree(monkeypatch, tmp_path):
     answers = [
         subprocess.CompletedProcess([], 0, "main", ""),
         subprocess.CompletedProcess([], 1, "", "network down"),
+        subprocess.CompletedProcess([], 0, "local-commit-sha", ""),
         subprocess.CompletedProcess([], 0, "https://github.com/acme/repo.git", ""),
         subprocess.CompletedProcess([], 0, "a" * 40 + "\t" + "tree-sha", ""),
         subprocess.CompletedProcess([], 0, "tree-sha", ""),
@@ -84,6 +86,7 @@ def test_f1_github_api_fallback_rejects_tree_mismatch(monkeypatch, tmp_path):
     answers = [
         subprocess.CompletedProcess([], 0, "main", ""),
         subprocess.CompletedProcess([], 1, "", "network down"),
+        subprocess.CompletedProcess([], 0, "local-commit-sha", ""),
         subprocess.CompletedProcess([], 0, "git@github.com:acme/repo.git", ""),
         subprocess.CompletedProcess([], 0, "a" * 40 + "\tremote-tree", ""),
         subprocess.CompletedProcess([], 0, "different-tree", ""),
