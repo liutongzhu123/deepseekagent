@@ -45,7 +45,7 @@ new file mode 100644
 index 0000000..cef179a
 --- /dev/null
 +++ b/internal/application/repository/user_oidc_identity_test.go
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,45 @@
 +package repository
 +
 +import (
@@ -90,6 +90,7 @@ index 0000000..cef179a
 +	if _, err := repo.GetUserByOIDCIdentity(ctx, issuer, subject); err != ErrUserNotFound {
 +		t.Fatalf("unbound identity lookup error = %v, want ErrUserNotFound", err)
 +	}
++}
 +}
 diff --git a/internal/application/service/user.go b/internal/application/service/user.go
 index eaa86a7..e54d8b5 100644
