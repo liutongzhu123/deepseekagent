@@ -77,17 +77,18 @@ WeKnora 是 P0 的唯一知识底座。本轮处理计划中的四件事：
 
 P0 是 WeKnora 业务知识库的唯一写入方；权限映射：
 
-| P0 角色 | 业务操作 | WeKnora 侧权限 |
+| 中汽角色 | 业务操作 | WeKnora 侧权限 |
 | --- | --- | --- |
-| admin | 发布、清理、摘要模型、审计 | KB 管理 + API key manage |
-| reviewer | 复核后发布 | 由 P0 服务 API key 代写，个人不直接持有 KB 写权限 |
-| sales / viewer | 检索/问答（只读） | 由 P0 服务 API key 代查；不发个人 key |
-| 运维 | 状态/清理 | 独立 ops key，限制来源 IP，定期轮换 |
+| 系统管理员（`admin`） | 通过 P0 管理知识库、标准发布和授权范围 | 不向浏览器发 WeKnora key；知识写入由 P0 服务端执行。WeKnora 管理凭据仅限受控运维任务 |
+| 业务经理（`business_manager`） | 按客户/项目范围查询知识、使用报价与委托流程 | 经 P0 服务端代理检索；不持有 WeKnora 个人 key 或管理权限 |
+| 技术部门（`technical`） | 按项目范围查询知识，并维护业务定义的排期/加急数据 | 经 P0 服务端代理检索；不因技术角色获得 WeKnora 管理或写入权限 |
+| 新客户/小微客户（`customer`） | 仅经小程序使用获准的客服/报价能力 | 不直接登录 WeKnora；服务端按客户身份和资源范围代理检索 |
 
 - P0 侧发布/问答/审计事件写 `audit_events`（或 JSONL）：`standard_published`、
   `standard_asked`、`task_failed` 等；WeKnora 直接访问只给运维/管理员。
 - 生产建议给 ops 脚本单独 API key（需要清理时临时启用 `ingest/manage_kbs`），
   P0 服务 key 只保留发布与检索所需权限。
+- 历史 `admin/reviewer/sales/viewer` 是旧 P0 权限名，不是中汽角色。历史 reviewer 的报告审核/标准复核授权逐账号确认，确认前不迁移、不自动映射；该项审核授权不等同于 WeKnora 知识管理权限。新账号只使用上述四个角色，数据范围另行授权。
 - 知识库权限映射先以本文为准；后续若开放客户直接访问，再按 WeKnora 空间/租户权限实现。
 
 ## 5. 问答评测
