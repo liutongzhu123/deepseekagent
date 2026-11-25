@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""Initial main-only deployment of CNZ WeKnora to the isolated testkb stack.
+
+F1 fetch/main/clean-tree error: no SSH.
+F2 pinned upstream hash, manifest, or patch failure: no SSH.
+F3 backup/persistence/disk/resource preflight failure: no upload.
+F4 release already exists: never overwrite it.
+F5 transfer/extraction failure: no build/start.
+F6 Compose isolation contract fails: no build/start.
+F7 image build failure: no startup.
+F8 startup health fails: stop only this project with compose down, preserving volumes.
+F9 active pointer is changed only after all checks pass.
+Unit tests must cover each failure. First-install only: existing CNZ containers or
+volumes abort; database upgrade/rollback is intentionally out of scope.
+"""
+from __future__ import annotations
+import argparse, re, subprocess, sys, tarfile, tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+ARCHIVE_URL = "https://github.com/Tencent/WeKnora/archive/refs/tags/v0.9.1.tar.gz"
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SERVICES = {"app", "frontend", "docreader", "postgres", "redis"}
+CONTAINERS = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend",
+              "docreader":"cnz-weknora-docreader", "postgres":"cnz-weknora-postgres",
+              "redis":"cnz-weknora-redis"}
+REMOTE_ROOT = "/opt/cnz-weknora"
+
+PREFLIGHT = r'''set -euo pipefail
+sha="$1"; root=/opt/cnz-weknora; release="$root/releases/$sha"; incoming="$root/.incoming-$sha"
+test -f /opt/cnz-weknora/active/WeKnora-0.9.1/.env
+test "$(stat -c %a /opt/cnz-weknora/active/WeKnora-0.9.1/.env)" = 600
+(cd /var/backups/testkb-yunan-persist-20261124 && sha256sum -c SHA256SUMS >/dev/null)
+test "$(docker ps -aq --filter name='^cnz-weknora-' | wc -l)" -eq 0
+test -z "$(docker volume ls -q --filter name=cnz-weknora)"
+test ! -e "$root/active-release" && test ! -L "$root/active-release"
+test ! -e "$incoming" && test ! -L "$incoming"
+if [ -e "$release" ] || [ -L "$release" ]; then
+  test -d "$release" && test ! -L "$release"
+  grep -Fxq "$sha" "$release/DEPLOYED_FROM_MAIN"
+  test "$(stat -c %a "$release/source/WeKnora-0.9.1/.env")" = 600
+  echo RELEASE_PRESENT
+else
+  echo RELEASE_NEW
+fi
+test "$(docker ps --filter name=yunan-persist --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 5
+test "$(df -Pk /opt | awk 'NR==2 {print $4}')" -ge 31457280
+docker compose version >/dev/null
+echo PREFLIGHT_OK
+'''
+
+CONFIGURE = r'''set -euo pipefail
+sha="$1"; root=/opt/cnz-weknora; incoming="$root/.incoming-$sha"; release="$root/releases/$sha"
+project="$incoming/source/WeKnora-0.9.1"; env_file="$project/.env"
+test -f "$project/docker-compose.yml"
+test -f "$release/docker-compose.testkb.override.yml"
+grep -Fxq "$sha" "$release/DEPLOYED_FROM_MAIN"
+cp -- /opt/cnz-weknora/active/WeKnora-0.9.1/.env "$env_file"
+chmod 0600 "$env_file"
+test "$(grep -c '^WEKNORA_VERSION=' "$env_file")" -eq 1
+sed -i "s/^WEKNORA_VERSION=.*/WEKNORA_VERSION=cnz-main-$sha/" "$env_file"
+if grep -q '^RUSTUP_MIRROR_ARG=' "$env_file"; then
+  sed -i 's@^RUSTUP_MIRROR_ARG=.*@RUSTUP_MIRROR_ARG=https://rsproxy.cn@' "$env_file"
+else
+  printf '\nRUSTUP_MIRROR_ARG=https://rsproxy.cn\n' >> "$env_file"
+fi
+set_env() {
+  key="$1"; value="$2"
+  if grep -q "^$key=" "$env_file"; then
+    sed -i "s@^$key=.*@$key=$value@" "$env_file"
+  else
+    printf '\n%s=%s\n' "$key" "$value" >> "$env_file"
+  fi
+}
+set_env VERSION_ARG "cnz-main-$sha"
+set_env COMMIT_ID_ARG "$sha"
+set_env BUILD_TIME_ARG "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+test "$(stat -c %a "$env_file")" = 600
+mv -T "$incoming" "$release"
+echo RELEASE_EXTRACTED
+'''
+
+DEPLOY = r'''set -Eeuo pipefail
+sha="$1"; release="/opt/cnz-weknora/releases/$sha"; project="$release/source/WeKnora-0.9.1"
+compose() { docker compose -p cnz-weknora --project-directory "$project" --env-file "$project/.env" -f "$project/docker-compose.yml" -f "$release/docker-compose.testkb.override.yml" "$@"; }
+STARTED=0
+rollback() {
+  code=$?
+  if [ "$code" -ne 0 ] && [ "$STARTED" = 1 ]; then
+    compose down --remove-orphans >/dev/null 2>&1 || true
+    echo ROLLBACK_STOPPED_CNZ_VOLUMES_PRESERVED
+  fi
+  exit "$code"
+}
+trap rollback EXIT
+compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"'
+echo COMPOSE_CONTRACT_OK
+compose build app frontend docreader
+echo IMAGES_BUILT
+STARTED=1
+compose up -d
+ready=0
+for _ in $(seq 1 90); do
+  app="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
+  pg="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-postgres 2>/dev/null || true)"
+  redis="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-redis 2>/dev/null || true)"
+  api="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39301/health 2>/dev/null || true)"
+  ui="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18082/ 2>/dev/null || true)"
+  if [ "$app" = healthy ] && [ "$pg" = healthy ] && [ "$redis" = healthy ] && [ "$api" = 200 ] && [ "$ui" = 200 ]; then ready=1; break; fi
+  sleep 2
+done
+test "$ready" -eq 1
+for c in cnz-weknora-frontend cnz-weknora-docreader; do test "$(docker inspect -f '{{.State.Status}}' "$c")" = running; done
+ln -s "$project" "/opt/cnz-weknora/active-release.new.$sha"
+mv -Tf "/opt/cnz-weknora/active-release.new.$sha" /opt/cnz-weknora/active-release
+echo HEALTH_OK
+echo "ACTIVE_RELEASE=$sha"
+STARTED=0
+trap - EXIT
+'''
+
+def run(args: list[str], timeout: int = 300) -> subprocess.CompletedProcess:
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+
+def main_sha(repo: Path = ROOT) -> str:
+    if run(["git","-C",str(repo),"fetch","origin","main"],120).returncode:
+        raise RuntimeError("F1: fetch main failed")
+    head=run(["git","-C",str(repo),"rev-parse","HEAD"])
+    main=run(["git","-C",str(repo),"rev-parse","origin/main"])
+    dirty=run(["git","-C",str(repo),"status","--porcelain","--untracked-files=normal"])
+    if head.returncode or main.returncode or head.stdout.strip()!=main.stdout.strip() or dirty.returncode or dirty.stdout.strip():
+        raise RuntimeError("F1: require clean checkout exactly at origin/main")
+    sha=main.stdout.strip()
+    if not SHA_RE.fullmatch(sha): raise RuntimeError("F1: invalid SHA")
+    return sha
+
+def validate_compose(config: dict) -> None:
+    s=config.get("services",{})
+    if set(s)!=SERVICES: raise ValueError("F6: unexpected services")
+    if any(s[k].get("container_name")!=v for k,v in CONTAINERS.items()): raise ValueError("F6: unexpected container")
+    def has_port(service,target,published):
+        return any(p.get("host_ip")=="127.0.0.1" and int(p.get("target",0))==target and str(p.get("published"))==published for p in s[service].get("ports",[]))
+    if not has_port("frontend",80,"18082") or not has_port("app",8080,"39301"): raise ValueError("F6: port mapping")
+    if set(config.get("volumes",{}))!={"data-files","docreader-tmp","postgres-data","redis-data"}: raise ValueError("F6: volume mapping")
+    if any("/var/run/docker.sock" in str(m) for svc in s.values() for m in svc.get("volumes",[])): raise ValueError("F6: docker socket forbidden")
+    app_env=s["app"].get("environment",{})
+    if app_env.get("DISABLE_REGISTRATION") != "true" or app_env.get("OIDC_AUTH_ENABLE") != "false":
+        raise ValueError("F6: registration must be disabled and OIDC must stay off")
+
+def remote(target,script,sha,timeout=300):
+    return subprocess.run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",target,"bash","-s","--",sha],
+                          input=script.encode(),capture_output=True,timeout=timeout,check=False)
+
+def make_bundle(sha,upstream,work):
+    prepared=work/"prepared"
+    p=run([sys.executable,str(ROOT/"scripts/prepare_weknora_source.py"),str(upstream),str(prepared)],600)
+    if p.returncode: raise RuntimeError("F2: pinned upstream verification or project patch failed")
+    source=prepared/"WeKnora-0.9.1"
+    if (source/".env").exists(): raise RuntimeError("F2: unexpected .env in prepared source")
+    meta=work/"DEPLOYED_FROM_MAIN"; meta.write_text(sha+"\n",encoding="ascii")
+    result=work/"release.tar.gz"
+    def exclude_git(entry):
+        return None if ".git" in Path(entry.name).parts else entry
+    with tarfile.open(result,"w:gz") as tar:
+        tar.add(source,arcname="source/WeKnora-0.9.1",filter=exclude_git)
+        tar.add(ROOT/"weknora/docker-compose.testkb.override.yml",arcname="docker-compose.testkb.override.yml")
+        tar.add(meta,arcname="DEPLOYED_FROM_MAIN")
+    return result
+
+def stream_bundle(target,sha,path):
+    incoming=f"{REMOTE_ROOT}/.incoming-{sha}"
+    command=f"tar -xzf - -C {incoming!r} --no-same-owner"
+    args=["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",target,command]
+    proc=subprocess.Popen(args,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    assert proc.stdin is not None
+    try:
+        with path.open("rb") as f:
+            for chunk in iter(lambda:f.read(1024*1024),b""): proc.stdin.write(chunk)
+        proc.stdin.close(); proc.stdin=None; out,err=proc.communicate(timeout=600)
+    except Exception:
+        proc.kill(); proc.communicate(); raise
+    return subprocess.CompletedProcess(args,proc.returncode,out,err)
+
+def cleanup_incoming(target,sha):
+    incoming=f"{REMOTE_ROOT}/.incoming-{sha}"
+    script=f"set -euo pipefail; if [ -d {incoming!r} ] && [ ! -L {incoming!r} ]; then rm -rf -- {incoming!r}; fi"
+    remote(target,script,sha,60)
+
+def deploy(target,upstream=None):
+    sha=main_sha()
+    with tempfile.TemporaryDirectory(prefix="cnz-weknora-") as name:
+        work=Path(name)
+        if upstream is None:
+            upstream=work/"weknora-v0.9.1.tar.gz"
+            dl=run(["curl","--fail","--location","--silent","--show-error","--connect-timeout","15","--max-time","300",ARCHIVE_URL,"--output",str(upstream)],320)
+            if dl.returncode: raise RuntimeError("F2: official source download failed")
+        packed=make_bundle(sha,upstream,work)
+        check=remote(target,PREFLIGHT,sha,60)
+        if check.returncode or b"PREFLIGHT_OK" not in check.stdout: raise RuntimeError("F3/F4: safety preflight failed")
+        if b"PREFLIGHT_OK" not in check.stdout: raise RuntimeError("F3: preflight completion marker missing")
+        if b"RELEASE_PRESENT" not in check.stdout:
+            incoming=f"{REMOTE_ROOT}/.incoming-{sha}"
+            create=f"set -euo pipefail; test ! -e {incoming!r} && test ! -L {incoming!r}; install -d -m 0755 {incoming!r}"
+            if remote(target,create,sha,60).returncode: raise RuntimeError("F4: incoming release path already exists")
+            if stream_bundle(target,sha,packed).returncode:
+                cleanup_incoming(target,sha)
+                raise RuntimeError("F5: archive transfer failed")
+            configured=remote(target,CONFIGURE,sha,60)
+            if configured.returncode or b"RELEASE_EXTRACTED" not in configured.stdout:
+                cleanup_incoming(target,sha)
+                raise RuntimeError("F5: release verification/environment setup failed")
+        done=remote(target,DEPLOY,sha,7200)
+        if done.returncode: raise RuntimeError("F6/F7/F8: build/start/health failed; volumes preserved")
+        markers=(b"COMPOSE_CONTRACT_OK",b"IMAGES_BUILT",b"HEALTH_OK",f"ACTIVE_RELEASE={sha}".encode())
+        if any(m not in done.stdout for m in markers): raise RuntimeError("F9: completion marker missing")
+        print(f"deployed main={sha} target={target}; app/UI/PostgreSQL/Redis healthy")
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target",required=True,help="authorized testkb SSH alias")
+    parser.add_argument("--upstream-archive",type=Path)
+    args=parser.parse_args()
+    try: deploy(args.target,args.upstream_archive)
+    except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired,tarfile.TarError) as exc:
+        print(f"deployment stopped safely: {exc}",file=sys.stderr); return 1
+    return 0
+
+if __name__=="__main__": raise SystemExit(main())
