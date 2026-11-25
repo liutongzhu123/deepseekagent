@@ -4218,6 +4218,15 @@ def _require_crm_base_write(request: Request, kind: str = "") -> dict:
     raise HTTPException(status_code=403, detail=f"需要权限：{required}")
 
 
+def _assert_crm_price_project_access(user: dict, payload: dict) -> None:
+    if not auth.is_restricted(user):
+        return
+    snapshot = _crm_snapshot()
+    allowed = crm.authorized_projects(snapshot, auth.normalize_projects(user.get("projects")))
+    if not crm.project_row_visible(snapshot, payload, allowed):
+        raise HTTPException(status_code=403, detail="无权维护该项目的价格数据")
+
+
 @app.get("/api/v1/crm/base-data/schedules")
 def crm_base_schedules(request: Request) -> dict:
     user = _require_user(request)
@@ -4300,10 +4309,8 @@ def crm_base_data_rollback(request: Request, payload: dict) -> dict:
 @app.post("/api/v1/crm/base-data/{kind}")
 def crm_base_data_upsert(kind: str, request: Request, payload: dict) -> dict:
     user = _require_crm_base_write(request, kind)
-    if kind == "prices" and auth.is_restricted(user):
-        project = str(payload.get("project_id") or payload.get("project_name") or "").strip()
-        if not auth.can_access_project(user, project):
-            raise HTTPException(status_code=403, detail="无权维护该项目的价格数据")
+    if kind == "prices":
+        _assert_crm_price_project_access(user, payload)
     try:
         if kind == "prices":
             # JSON numbers are decoded to binary floats before this handler;
@@ -4323,10 +4330,8 @@ def crm_base_data_upsert(kind: str, request: Request, payload: dict) -> dict:
 @app.delete("/api/v1/crm/base-data/{kind}")
 def crm_base_data_delete(kind: str, request: Request, payload: dict) -> dict:
     user = _require_crm_base_write(request, kind)
-    if kind == "prices" and auth.is_restricted(user):
-        project = str(payload.get("project_id") or payload.get("project_name") or "").strip()
-        if not auth.can_access_project(user, project):
-            raise HTTPException(status_code=403, detail="无权维护该项目的价格数据")
+    if kind == "prices":
+        _assert_crm_price_project_access(user, payload)
     try:
         deleted = crm.BaseDataStore().delete(kind, payload, updated_by=user.get("username", ""),
                                              source=str(payload.get("source", "")),

@@ -329,6 +329,10 @@ def test_project_scoped_crm_endpoints_filter_rows_counts_and_lookups(tmp_path, m
         "/api/v1/crm/base-data/prices",
         json={"project_id": "P2", "project_name": "项目B", "item_name": "越权写", "unit_price": "100"},
     ).status_code == 403
+    assert client.post(
+        "/api/v1/crm/base-data/prices",
+        json={"project_id": "P1", "project_name": "项目B", "item_name": "冲突项目身份", "unit_price": "100"},
+    ).status_code == 403
     assert client.get("/api/v1/crm/base-data/history").status_code == 403
     assert client.post("/api/v1/crm/base-data/rollback", json={"version": 1, "reason": "no"}).status_code == 403
 
