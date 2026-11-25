@@ -8,7 +8,9 @@
 - commit：`71c32af9273482e0dad013d0e3bea2f4d719516c`
 - 官方归档 SHA-256：`183b0538d895b85906da030b8b62a93bd884cd1967d10bcb38020b549b3bc5cd`
 - 来源清单：[`ci/upstream-v0.9.1.json`](../ci/upstream-v0.9.1.json)
-- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)、[`patches/0002-rustup-mirror.patch`](patches/0002-rustup-mirror.patch)、[`patches/0003-cnz-testkb-build-mirrors.patch`](patches/0003-cnz-testkb-build-mirrors.patch)
+- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)、[`patches/0002-rustup-mirror.patch`](patches/0002-rustup-mirror.patch)、[`patches/0003-cnz-testkb-build-mirrors.patch`](patches/0003-cnz-testkb-build-mirrors.patch)、[`patches/0004-cnz-knowledge-workspace-profile.patch`](patches/0004-cnz-knowledge-workspace-profile.patch)
+
+CNZ 专用前端只保留知识库管理、平台设置和退出入口；通用聊天、Agent、自动化、工具箱、组织与制品页面从导航中隐藏，并由路由白名单阻止直接打开。设置里仅保留模型、解析器、空间与系统管理、任务队列、审计、账号及成员配置；其他设置入口隐藏，直接设置链接也回退到模型页。业务工作台仍是报价、客服与业务知识问答的统一入口；WeKnora 继续承担知识存储、解析和检索。前端隐藏/路由限制只用于精简操作面，后端 API 授权仍是最终安全边界。
 
 ## 准备源码
 
@@ -18,7 +20,7 @@
 python3 scripts/prepare_weknora_source.py /path/to/v0.9.1.tar.gz /path/to/new-build-dir
 ```
 
-脚本拒绝不匹配的归档、损坏或内容不同的清单、危险归档路径，以及非空目标目录；它逐个验证 6,441 个文件后，按顺序检查并应用三个项目补丁。GitHub Actions 也会运行这条准备路径及 OIDC 测试。
+脚本拒绝不匹配的归档、损坏或内容不同的清单、危险归档路径，以及非空目标目录；它逐个验证 6,441 个文件后，按顺序检查并应用四个项目补丁。GitHub Actions 也会运行这条准备路径、OIDC 测试和 CNZ 前端功能档测试。
 
 ### 构建网络
 
@@ -45,5 +47,7 @@ docker compose -p cnz-weknora \
 `scripts/deploy_cnz_weknora_testkb.py --target yunan-101` 只支持首次安装和同一 WeKnora 源码指纹的失败后重试，只能从干净的 `main` 检出运行。脚本优先 fetch `origin/main`；Git smart-HTTP 故障时使用已登录的 `gh` 读取 GitHub main SHA/tree，并要求本地 HEAD 的完整 Git tree 与远端 main tree 完全相同后才继续。脚本会重新校验 WeKnora 官方归档和逐文件清单、应用本仓补丁，再通过 SSH 流式传输到新的版本目录；它不会复制或读取客户知识库资料。运行前目标机必须能以 SSH alias `yunan-101` 登录并使用 Docker，已有的 `/opt/cnz-weknora/active/WeKnora-0.9.1/.env` 必须为 `0600`，testkb 备份校验必须通过，五个 `yunan-persist` 容器必须健康，`/opt` 至少空余 30 GiB。
 
 脚本拒绝覆盖已有版本、运行中的/残留 CNZ 容器或已存在的 active 指针。首次运行时不允许已有 CNZ 数据卷；无容器且未切换 active 指针时，只有当待部署源码与某个 release 中的 WeKnora 源文件指纹完全一致、四个精确卷名齐全且每个卷带有 `cnz-weknora` Compose 所有权标签时，才允许在失败后复用数据卷。源码指纹覆盖相对路径、类型、内容和权限位，排除本地 `.env` 与 `.git`；任何缺卷、多卷、标签不符、源码不同或 active 指针存在都会停止。构建镜像通过后才启动 CNZ Compose 服务；app、PostgreSQL、Redis、docreader 均须 healthy，API/UI 须返回 200 后才原子切换 `/opt/cnz-weknora/active-release`。失败时只停止 `cnz-weknora` 项目并保留其数据卷；任何时候都不执行 `down -v`，不触碰 `yunan-persist`。该脚本支持首次安装与同一 WeKnora 源码指纹的失败后重试，**不能用于升级或数据库回滚**。
+
+已安装 CNZ 栈的纯前端升级使用 `scripts/upgrade_cnz_weknora_frontend.py --target yunan-101`。它重新验证当前 release、备份校验、五个 CNZ 容器/四个卷所有权与健康状态，只构建并替换 frontend。旧前端镜像保留为 `cnz-weknora-ui:rollback-<old-sha>`；新 UI 与 API 检查通过后才切换 active-release，失败时恢复旧镜像和旧指针。该路径不迁移数据库或资料、不重建 app/PostgreSQL/Redis/docreader，也不删除任何卷；仅覆盖前端补丁发布，不是通用版本升级或数据库回滚工具。
 
 部署后仍需按合成资料完成登录/管理员初始化、上传解析、检索引用、OIDC 显式账号绑定及越权拒绝、容器/数据卷隔离核验和备份恢复演练。注册保持关闭，未配置可信 IdP 前 OIDC 保持关闭；因此健康检查成功仅表示运行栈启动，不代表 SSO 或业务端到端验收完成。reviewer 逐账号确认前不迁移任何历史审核权限。

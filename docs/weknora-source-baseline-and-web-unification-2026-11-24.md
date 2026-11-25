@@ -98,15 +98,27 @@ v0.9.0 的官方 commit 对象不在该 Git 对象库，不能直接在该目录
 - 仅由 SystemAdmin 路由组提供绑定/解绑接口，绑定需要给出已有 `user_id` 和 IdP `subject`；没有自动建号逻辑，原有 WeKnora 用户角色不被改写。
 - OIDC 登录返回的 `is_new_user` 恒为 false；现有系统不应对客户客户端开放自助注册。中汽四角色到 WeKnora 角色的映射仍由业务工作台授权层实现，不把两边角色直接等同。
 
-当前改动仍是**源码适配与可复现构建准备**，尚未部署至 `testkb`，也未迁移账号、变更注册配置或接收资料。历史 reviewer 的报告审核/标准复核能力按用户决定逐账号确认；确认前维持原权限隔离，不自动并入业务经理、技术人员或管理员。准备部署时使用新的 Compose 项目名、数据库、Redis、原文卷、容器名和端口，严禁挂接或迁移 `yunan-persist` 的既有存储。
+截至 2026-11-26，身份适配补丁已随 CNZ 专属栈部署至 testkb；没有迁移账号、开放注册或接收资料。历史 reviewer 的报告审核/标准复核能力按用户决定逐账号确认；确认前维持原权限隔离，不自动并入业务经理、技术人员或管理员。CNZ 使用新的 Compose 项目名、数据库、Redis、原文卷、容器名和端口，没有挂接或迁移 `yunan-persist` 的既有存储。
 
-### 6.1 testkb 首次部署与构建网络复核（2026-11-26）
+### 6.1 testkb 首次部署尝试与失败恢复（2026-11-26）
 
 PR #241 的首次安装部署器、PR #242 的 incoming/release 路径修正、PR #243 的失败阶段标记、PR #244 的项目级镜像参数及 PR #245 的 main tree 校验回退已合并 main，Agent/Python/Go CI 均通过。部署器校验了 `/var/backups/testkb-yunan-persist-20261124/SHA256SUMS`、5 个 `yunan-persist` 容器健康、端口和磁盘余量；基于官方 6,441 文件清单准备的 v0.9.1 源码已上传。以 main `41b55a4d95836edecc9c6fa7913501d5ff04d8f4` 构建的 app、frontend、docreader 镜像均成功。
 
-首次启动后 app/PostgreSQL/Redis/docreader 与前端均运行，app/API 和 UI 返回 200，但 F8 检查发现 Redis 镜像没有健康检查定义，等待门禁未能成立；部署器随后只停止 CNZ 项目，未切换 active 指针，保留了四个带正确 `cnz-weknora` Compose 所有权标签的项目卷。当前没有 CNZ 容器，5 个 `yunan-persist` 容器仍健康；`/opt` 可用空间约 36 GiB。PR #246 已为 Redis 添加 `redis-cli ping` 健康检查。合并后 main SHA 改变，暴露出仅允许“同 main SHA”重试会卡住失败 release 的问题；当前 PR 改为计算 WeKnora 源码指纹（路径、类型、内容、权限位；排除 `.env`/`.git`），只有发现与待部署源码指纹一致的 release、且无 CNZ 容器、四个卷名和 Compose 所有权标签均准确时才允许重试。源码不同、卷异常或 active 指针存在均拒绝。
+首次启动后 app/PostgreSQL/Redis/docreader 与前端均运行，app/API 和 UI 返回 200，但 F8 检查发现 Redis 镜像没有健康检查定义，等待门禁未能成立；部署器随后只停止 CNZ 项目，未切换 active 指针，保留了四个带正确 `cnz-weknora` Compose 所有权标签的项目卷。该次回滚后没有 CNZ 容器，5 个 `yunan-persist` 容器仍健康；`/opt` 可用空间约 36 GiB。PR #246 为 Redis 添加 `redis-cli ping` 健康检查。合并后 main SHA 改变，暴露出仅允许“同 main SHA”重试会卡住失败 release；PR #247 改为计算 WeKnora 源码指纹（路径、类型、内容、权限位；排除 `.env`/`.git`），仅当与待部署源码指纹一致、没有 CNZ 容器、四个卷名和 Compose 所有权标签均准确时才允许重试。源码不同、卷异常或 active 指针存在均拒绝。
 
-网络只读探测确认 testkb 可达 `https://goproxy.cn`、`docker.m.daocloud.io`、`https://rsproxy.cn` 和 Debian 清华镜像。PR #244 将 Go migrate 安装改为主项目 `go.mod` / `go.sum` 锁定的版本，并对 app/frontend/docreader 使用项目级 Docker Hub 镜像参数；已锁定 digest 的 Node 与 nginx 保持原 digest。此次实际构建进一步验证这些镜像可用，未修改 Docker daemon 的全局 registry 配置。接下来通过源码指纹重试门禁 CI 后，使用同源代码卷重试启动并完成合成知识检索、OIDC 显式绑定/拒绝、恢复与回滚验收。
+网络只读探测确认 testkb 可达 `https://goproxy.cn`、`docker.m.daocloud.io`、`https://rsproxy.cn` 和 Debian 清华镜像。PR #244 将 Go migrate 安装改为主项目 `go.mod` / `go.sum` 锁定的版本，并对 app/frontend/docreader 使用项目级 Docker Hub 镜像参数；已锁定 digest 的 Node 与 nginx 保持原 digest。此次实际构建进一步验证这些镜像可用，未修改 Docker daemon 的全局 registry 配置。
+
+### 6.2 CNZ 栈部署结果（2026-11-26）
+
+PR #246（Redis 健康检查与安全重试）和 PR #247（按 WeKnora 源码指纹允许失败部署重试）均已合并。以 `9cb69e89ffc953bbc3f9bb86c2c7bf5c533fe39e` 从干净 main 部署到 `/opt/cnz-weknora` 成功，active release 指向官方 v0.9.1 加本项目补丁。部署器确认 app、frontend、docreader、PostgreSQL、Redis 启动；app/API 与 UI 返回 200。CNZ 端口仅监听 `127.0.0.1:39301` 和 `127.0.0.1:18082`；`.env` 权限为 `0600`；四个卷均带有 `cnz-weknora` Compose 所有权标签。
+
+同日只读复核再次对 `/var/backups/testkb-yunan-persist-20261124/SHA256SUMS` 执行校验，数据库、文件、Redis、部署配置、镜像和环境清单全部为 `OK`。五个 `yunan-persist` 容器仍 healthy；CNZ 与旧栈使用不同项目、容器名、网络、数据库、Redis、文件卷和端口。磁盘余量约 34 GiB。以上证明部署隔离与备份完整性，不代表已完成从备份恢复演练。
+
+部署配置中 `DISABLE_REGISTRATION=true`、`OIDC_AUTH_ENABLE=false`；管理员开户交付尚未完成，也未从旧库导入用户或资料。未配置可信 IdP，故没有运行真实登录联调。当前没有把 yunan-persist 的真实客户数据用于验证。**待完成验收**：临时合成管理员开户与关闭注册复核、合成知识上传/解析/检索及引用、OIDC 显式绑定/未绑定拒绝联调、CNZ 合成数据库和文件数据的恢复演练、业务工作台到 WeKnora 的浏览器单点跳转与退出验证。缺少真实 IdP、正式管理员指定账号及项目工作台部署地址时，只能完成模拟/隔离验证，不能宣称客户级 SSO 或双 Web 生产验收。
+
+### 6.3 WeKnora 操作面精简（代码待合并）
+
+针对“业务工作台为主平台、WeKnora 负责知识服务与高级资料维护”的已确认设计，新增前端配置档补丁 `0004-cnz-knowledge-workspace-profile.patch`：CNZ 侧栏仅保留知识库、设置和退出；通用聊天、Agent、自动化、工具箱、组织、制品入口隐藏；路由白名单同时拒绝直接访问这些页面。设置只保留模型、解析器、空间/系统管理、任务队列、审计、账号和成员；隐藏设置的 query 链接回退到模型页。补丁对 testkb active release 的 v0.9.1 前端执行 `git apply --check` 通过；在 `/tmp` 独立副本上生成 CNZ 前端镜像成功，5 项菜单、路由与设置 allowlist 单测通过，构建完成后已删除临时源码副本和镜像。另新增仅更新前端的安全升级器：发布前复核备份、容器、卷归属、服务健康、空间和 Compose 隔离；失败自动恢复旧前端；成功要求 API/UI 返回 200 且四个其他容器 ID 和全部数据卷保持不变。升级器代码与自动化安全测试仍在当前分支，尚未进入 main 或 testkb 运行镜像；构建失败不会重启旧前端。代码合并和部署后仍需做浏览器视觉与导航回归。此精简是操作面约束，不替代 API 服务端授权；业务用户经工作台访问知识检索。
 
 ## 4. 两个 Web 端能否合并
 
@@ -149,11 +161,11 @@ PR #241 的首次安装部署器、PR #242 的 incoming/release 路径修正、P
 
 ### 5.1 现有实现的兼容缺口
 
-P0 的 `oidc.py`、`main.py` 使用 code+PKCE、nonce、ID token 校验，回调后按 preferred_username/email 查找已存在的启用账户，不自动建号。没有基于稳定 subject 的正式账户关联；退出仅清本地会话。
+P0 的 `oidc.py`、`main.py` 使用 code+PKCE、nonce、ID token 校验；当前实现按显式绑定的 `(issuer, sub)` 查找已存在且启用的账号，不使用邮箱/用户名作为身份主键，也不自动建号。绑定需逐账号审批。P0 的真实 IdP 登录/退出尚未连接客户身份提供方联调。
 
-WeKnora 官方 `internal/application/service/user.go` 中 LoginWithOIDC 按 email 查找账户；未找到时会调用 provisionOIDCUser；服务内部有空间初始化模式。虽然会读取 Subject，但此处未用 `(issuer, sub)` 作为主关联。默认授权 URL 逻辑与 P0 也不同，应对齐组织的 IdP 要求后联调。现网 OIDC 当前关闭。
+WeKnora 官方 `internal/application/service/user.go` 原本按 email 查找账户并可自动建号；CNZ 补丁改为已验证的 `(issuer, sub)` 显式绑定、拒绝未绑定身份，并要求 UserInfo subject 与已验证 ID Token subject 一致。该补丁已部署到 testkb 的 CNZ 独立栈，但运行配置仍关闭 OIDC。两端均需等客户 IdP 的 issuer、client、redirect URI 与测试账号后才能完成真实授权码登录和单点退出联调。
 
-因此两套 OIDC 代码可以复用，但还不能宣称已单点登录。尤其不能用“同邮箱自动合并 + 首次登录自动建个人空间”作为中汽人员开通机制。
+因此两端已有安全边界与身份绑定实现，但当前不能宣称已实现可用的单点登录。不得用“同邮箱自动合并 + 首次登录自动建个人空间”开通中汽人员。
 
 ### 5.2 统一身份模型
 

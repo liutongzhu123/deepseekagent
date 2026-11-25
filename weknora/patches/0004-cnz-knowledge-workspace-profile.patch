@@ -1,0 +1,166 @@
+diff --git a/frontend/src/config/cnzFeatureProfile.ts b/frontend/src/config/cnzFeatureProfile.ts
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/frontend/src/config/cnzFeatureProfile.ts
+@@ -0,0 +1,43 @@
++/**
++ * CNZ uses the business workbench as the primary product surface. WeKnora
++ * remains the knowledge administration service, so generic agent, automation,
++ * artifact, toolbox, organization and standalone chat pages are hidden here.
++ * Backend authorization remains authoritative; this only scopes the CNZ UI.
++ */
++export const CNZ_ALLOWED_MENU_PATHS = new Set(['knowledge-bases', 'settings', 'logout'])
++
++export const CNZ_ALLOWED_ROUTE_NAMES = new Set([
++  'login',
++  'registerByInvite',
++  'workspaceOnboarding',
++  'knowledgeBaseList',
++  'knowledgeBaseDetail',
++  'settings',
++  'systemSettings',
++  'systemAdmins',
++])
++
++export const CNZ_ALLOWED_SETTING_SECTIONS = new Set([
++  'models',
++  'parser',
++  'system',
++  'system-global',
++  'model-catalog',
++  'runtime-queues',
++  'system-audit-log',
++  'userprofile',
++  'tenant',
++  'members',
++])
++
++export function isCnzFeatureMenuPathEnabled(path: string): boolean {
++  return CNZ_ALLOWED_MENU_PATHS.has(path)
++}
++
++export function isCnzFeatureRouteEnabled(routeName: unknown): boolean {
++  return typeof routeName === 'string' && CNZ_ALLOWED_ROUTE_NAMES.has(routeName)
++}
++
++export function isCnzFeatureSettingSectionEnabled(section: string): boolean {
++  return CNZ_ALLOWED_SETTING_SECTIONS.has(section)
++}
+diff --git a/frontend/src/config/cnzFeatureProfile.test.ts b/frontend/src/config/cnzFeatureProfile.test.ts
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/frontend/src/config/cnzFeatureProfile.test.ts
+@@ -0,0 +1,40 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import {
++  isCnzFeatureMenuPathEnabled,
++  isCnzFeatureRouteEnabled,
++  isCnzFeatureSettingSectionEnabled,
++} from './cnzFeatureProfile'
++
++test('CNZ navigation keeps knowledge administration and account settings', () => {
++  assert.equal(isCnzFeatureMenuPathEnabled('knowledge-bases'), true)
++  assert.equal(isCnzFeatureMenuPathEnabled('settings'), true)
++  assert.equal(isCnzFeatureMenuPathEnabled('logout'), true)
++})
++
++test('CNZ navigation hides generic platform modules', () => {
++  for (const path of ['creatChat', 'artifacts', 'agents', 'automations', 'toolbox', 'organizations']) {
++    assert.equal(isCnzFeatureMenuPathEnabled(path), false, path)
++  }
++})
++
++test('CNZ route filter preserves login and knowledge administration only', () => {
++  for (const route of ['login', 'registerByInvite', 'workspaceOnboarding', 'knowledgeBaseList', 'knowledgeBaseDetail', 'settings', 'systemSettings', 'systemAdmins']) {
++    assert.equal(isCnzFeatureRouteEnabled(route), true, route)
++  }
++  for (const route of ['globalCreatChat', 'kbCreatChat', 'artifactLibrary', 'agentList', 'automationList', 'toolbox', 'organizationList', undefined]) {
++    assert.equal(isCnzFeatureRouteEnabled(route), false, String(route))
++  }
++})
++
++test('CNZ settings keep model, parser, workspace and system operations', () => {
++  for (const section of ['models', 'parser', 'system', 'system-global', 'model-catalog', 'runtime-queues', 'system-audit-log', 'userprofile', 'tenant', 'members']) {
++    assert.equal(isCnzFeatureSettingSectionEnabled(section), true, section)
++  }
++})
++
++test('CNZ settings hide unrelated extensions and reject direct links', () => {
++  for (const section of ['ollama', 'weknoracloud', 'websearch', 'chathistory', 'defaults', 'memory', 'vectorstore', 'storage', 'sandbox', 'platform-api-keys', 'assistant', 'envvars', 'credentialvault', 'integrations.api', 'unknown']) {
++    assert.equal(isCnzFeatureSettingSectionEnabled(section), false, section)
++  }
++})
+diff --git a/frontend/src/stores/menu.ts b/frontend/src/stores/menu.ts
+--- a/frontend/src/stores/menu.ts
++++ b/frontend/src/stores/menu.ts
+@@ -4,5 +4,6 @@ import { useAuthStore } from '@/stores/auth'
+ import { useDeploymentCapabilitiesStore } from '@/stores/deploymentCapabilities'
+ import type { DeploymentCapabilityKey } from '@/config/deploymentCapabilities'
+ import type { QuestionOrigin } from '@/utils/questionOrigin'
++import { isCnzFeatureMenuPathEnabled } from '@/config/cnzFeatureProfile'
+ 
+ type MenuChild = Record<string, any>
+@@ -78,6 +79,9 @@ export const useMenuStore = defineStore('menuStore', () => {
+     const authStore = useAuthStore()
+     const deploymentCapabilities = useDeploymentCapabilitiesStore()
+     return menuArr.filter(item => {
++      if (!isCnzFeatureMenuPathEnabled(item.path)) {
++        return false
++      }
+       if (authStore.isLiteMode && liteHiddenPaths.has(item.path)) {
+         return false
+       }
+diff --git a/frontend/src/router/index.ts b/frontend/src/router/index.ts
+--- a/frontend/src/router/index.ts
++++ b/frontend/src/router/index.ts
+@@ -10,4 +10,5 @@ import { normalizeSettingsSection } from '@/config/settingsRoute'
+ import { isToolboxSection, toolboxLocation } from '@/config/toolbox'
++import { isCnzFeatureRouteEnabled } from '@/config/cnzFeatureProfile'
+ 
+ /** Lite /桌面 WebView 硬刷新时可能只打开 `/`，用 session 记住上次页面以便恢复 */
+ const LITE_LAST_PATH_KEY = 'weknora_lite_last_path'
+@@ -381,4 +381,11 @@ router.beforeEach(async (to, from, next) => {
++  // Keep the WeKnora surface focused on knowledge administration for CNZ.
++  // This route filter complements the menu; API authorization remains server-side.
++  if (!isCnzFeatureRouteEnabled(to.name)) {
++    next('/platform/knowledge-bases')
++    return
++  }
++
+   if (to.meta.requiresTenant !== false && !authStore.hasValidTenant) {
+     next('/onboarding/workspace')
+     return
+   }
+diff --git a/frontend/src/views/settings/Settings.vue b/frontend/src/views/settings/Settings.vue
+--- a/frontend/src/views/settings/Settings.vue
++++ b/frontend/src/views/settings/Settings.vue
+@@ -243,6 +243,7 @@
+ import TenantMembers from './TenantMembers.vue'
+ import SystemSettings from '@/views/system/SystemSettings.vue'
+ import RuntimeQueues from '@/views/system/RuntimeQueues.vue'
++import { isCnzFeatureSettingSectionEnabled } from '@/config/cnzFeatureProfile'
+ import PlatformAPIKeys from '@/views/system/PlatformAPIKeys.vue'
+ import SystemAuditLog from '@/views/system/SystemAuditLog.vue'
+ import IntegrationSettingsSection from '@/views/integrations/IntegrationSettingsSection.vue'
+@@ -319,7 +320,8 @@
+ const SYSTEM_ADMIN_SECTIONS = SYSTEM_ADMIN_SETTINGS_SECTIONS
+ 
+ const normalizeSettingsSection = (section: string) => {
+-  return normalizeSettingsSectionFromQuery(section, route.query.tab as string | undefined)
++  const normalized = normalizeSettingsSectionFromQuery(section, route.query.tab as string | undefined)
++  return isCnzFeatureSettingSectionEnabled(normalized) ? normalized : 'models'
+ }
+ 
+ const syncSettingsRoute = (sectionKey: string) => {
+@@ -405,7 +407,7 @@
+   if (!authStore.currentTenantRole && !authStore.canAccessAllTenants) {
+     return [] as NavItem[]
+   }
+-  return all.filter((it) => canSeeSection(it.key) && isSectionSupported(it.key))
++  return all.filter((it) => isCnzFeatureSettingSectionEnabled(it.key) && canSeeSection(it.key) && isSectionSupported(it.key))
+ })
+ 
+ const navGroups = computed<NavGroup[]>(() => {
