@@ -45,11 +45,12 @@ new file mode 100644
 index 0000000..cef179a
 --- /dev/null
 +++ b/internal/application/repository/user_oidc_identity_test.go
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,44 @@
 +package repository
 +
 +import (
 +	"context"
++	"os"
 +	"path/filepath"
 +	"testing"
 +
@@ -63,6 +64,10 @@ index 0000000..cef179a
 +	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "users.db")), &gorm.Config{})
 +	require.NoError(t, err)
 +	require.NoError(t, db.AutoMigrate(&types.User{}))
++	require.NoError(t, db.Exec("DROP INDEX IF EXISTS idx_users_oidc_identity").Error)
++	migration, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "sqlite", "000054_users_oidc_identity.up.sql"))
++	require.NoError(t, err)
++	require.NoError(t, db.Exec(string(migration)).Error)
 +	repo := NewUserRepository(db).(*userRepository)
 +	ctx := context.Background()
 +	for _, id := range []string{"user-a", "user-b"} {

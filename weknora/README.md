@@ -30,4 +30,4 @@ python3 scripts/prepare_weknora_source.py /path/to/v0.9.1.tar.gz /path/to/new-bu
 
 ## 发布门槛
 
-当前已可通过 Git 凭据助手访问 GitHub，PR #238 的 Python/Go CI 正在修复验证；本机 Docker daemon 不可用，`testkb.yunanht.com` 在本地 DNS 解析失败，且本轮没有可核验的 testkb SSH 目标，因此尚未构建或部署。进入部署前须完成官方 Go 测试/CI、Docker Compose 渲染与镜像构建、loopback 健康检查、独立 PostgreSQL/文件/Redis 数据卷验证、样例资料导入/检索/引用、OIDC 账号绑定和权限拒绝测试，以及停止与回滚演练。绝不以 `docker compose down -v` 清理现存 `yunan-persist`。
+PR #238 是草稿，最新一轮远端 CI 报告了 2 个问题（业务配置回归用例错误提交了受版本保护的客户名单字段；OIDC SQLite 测试夹具未执行正式迁移）。修复已在本地完成；P0 全量回归为 1137 passed、41 skipped，WeKnora 锁定源校验与补丁应用为 6,441 个文件通过，等待修复提交后的远端 CI 复核。本机没有 Go 工具链或可用 Docker daemon，`testkb.yunanht.com` 本地 DNS 解析失败，且尚无可核验的 testkb SSH 目标，因此未构建或部署。部署前仍须完成官方 Go 测试/CI、Docker Compose 渲染与镜像构建、loopback 健康检查、独立 PostgreSQL/文件/Redis 数据卷验证、样例资料导入/检索/引用、OIDC 账号绑定和权限拒绝测试，以及停止与回滚演练。绝不以 `docker compose down -v` 清理现存 `yunan-persist`。
