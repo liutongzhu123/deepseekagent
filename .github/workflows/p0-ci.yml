@@ -108,7 +108,7 @@ jobs:
         working-directory: ${{ runner.temp }}/cnz-weknora/WeKnora-0.9.1/frontend
         run: |
           npm ci
-          npm test -- src/config/cnzFeatureProfile.test.ts
+          npm test -- src/config/cnzFeatureProfile.test.ts src/config/cnzLoginProfile.test.ts
           npm run build
 
       - name: Run identity-binding and OIDC verification tests
