@@ -42,8 +42,8 @@ docker compose -p cnz-weknora \
 
 ## testkb 专用部署器
 
-`scripts/deploy_cnz_weknora_testkb.py --target yunan-101` 只支持首次安装和同一 main SHA 的失败后重试，只能从干净的 `main` 检出运行。脚本优先 fetch `origin/main`；Git smart-HTTP 故障时使用已登录的 `gh` 读取 GitHub main SHA/tree，并要求本地 HEAD 的完整 Git tree 与远端 main tree 完全相同后才继续。脚本会重新校验 WeKnora 官方归档和逐文件清单、应用本仓补丁，再通过 SSH 流式传输到新的版本目录；它不会复制或读取客户知识库资料。运行前目标机必须能以 SSH alias `yunan-101` 登录并使用 Docker，已有的 `/opt/cnz-weknora/active/WeKnora-0.9.1/.env` 必须为 `0600`，testkb 备份校验必须通过，五个 `yunan-persist` 容器必须健康，`/opt` 至少空余 30 GiB。
+`scripts/deploy_cnz_weknora_testkb.py --target yunan-101` 只支持首次安装和同一 WeKnora 源码指纹的失败后重试，只能从干净的 `main` 检出运行。脚本优先 fetch `origin/main`；Git smart-HTTP 故障时使用已登录的 `gh` 读取 GitHub main SHA/tree，并要求本地 HEAD 的完整 Git tree 与远端 main tree 完全相同后才继续。脚本会重新校验 WeKnora 官方归档和逐文件清单、应用本仓补丁，再通过 SSH 流式传输到新的版本目录；它不会复制或读取客户知识库资料。运行前目标机必须能以 SSH alias `yunan-101` 登录并使用 Docker，已有的 `/opt/cnz-weknora/active/WeKnora-0.9.1/.env` 必须为 `0600`，testkb 备份校验必须通过，五个 `yunan-persist` 容器必须健康，`/opt` 至少空余 30 GiB。
 
-脚本拒绝覆盖已有版本、运行中的/残留 CNZ 容器或已存在的 active 指针。首次运行时不允许已有 CNZ 数据卷；同一 main SHA 的部署若曾在健康检查前失败，则只允许在 release 完整标记匹配、无 CNZ 容器、四个精确卷名齐全且每个卷均带有 `cnz-weknora` Compose 所有权标签时复用这些卷。任意缺卷、多卷、标签不符、release 不同或 active 指针存在都会停止。构建镜像通过后才启动 CNZ Compose 服务；app、PostgreSQL、Redis、docreader 均须 healthy，API/UI 须返回 200 后才原子切换 `/opt/cnz-weknora/active-release`。失败时只停止 `cnz-weknora` 项目并保留其数据卷；任何时候都不执行 `down -v`，不触碰 `yunan-persist`。该脚本支持首次安装与同一 main SHA 的失败后重试，**不能用于升级或数据库回滚**。
+脚本拒绝覆盖已有版本、运行中的/残留 CNZ 容器或已存在的 active 指针。首次运行时不允许已有 CNZ 数据卷；无容器且未切换 active 指针时，只有当待部署源码与某个 release 中的 WeKnora 源文件指纹完全一致、四个精确卷名齐全且每个卷带有 `cnz-weknora` Compose 所有权标签时，才允许在失败后复用数据卷。源码指纹覆盖相对路径、类型、内容和权限位，排除本地 `.env` 与 `.git`；任何缺卷、多卷、标签不符、源码不同或 active 指针存在都会停止。构建镜像通过后才启动 CNZ Compose 服务；app、PostgreSQL、Redis、docreader 均须 healthy，API/UI 须返回 200 后才原子切换 `/opt/cnz-weknora/active-release`。失败时只停止 `cnz-weknora` 项目并保留其数据卷；任何时候都不执行 `down -v`，不触碰 `yunan-persist`。该脚本支持首次安装与同一 WeKnora 源码指纹的失败后重试，**不能用于升级或数据库回滚**。
 
 部署后仍需按合成资料完成登录/管理员初始化、上传解析、检索引用、OIDC 显式账号绑定及越权拒绝、容器/数据卷隔离核验和备份恢复演练。注册保持关闭，未配置可信 IdP 前 OIDC 保持关闭；因此健康检查成功仅表示运行栈启动，不代表 SSO 或业务端到端验收完成。reviewer 逐账号确认前不迁移任何历史审核权限。

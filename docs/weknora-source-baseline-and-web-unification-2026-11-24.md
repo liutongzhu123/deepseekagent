@@ -104,9 +104,9 @@ v0.9.0 的官方 commit 对象不在该 Git 对象库，不能直接在该目录
 
 PR #241 的首次安装部署器、PR #242 的 incoming/release 路径修正、PR #243 的失败阶段标记、PR #244 的项目级镜像参数及 PR #245 的 main tree 校验回退已合并 main，Agent/Python/Go CI 均通过。部署器校验了 `/var/backups/testkb-yunan-persist-20261124/SHA256SUMS`、5 个 `yunan-persist` 容器健康、端口和磁盘余量；基于官方 6,441 文件清单准备的 v0.9.1 源码已上传。以 main `41b55a4d95836edecc9c6fa7913501d5ff04d8f4` 构建的 app、frontend、docreader 镜像均成功。
 
-首次启动后 app/PostgreSQL/Redis/docreader 与前端均运行，app/API 和 UI 返回 200，但 F8 检查发现 Redis 镜像没有健康检查定义，等待门禁未能成立；部署器随后只停止 CNZ 项目，未切换 active 指针，保留了四个带正确 `cnz-weknora` Compose 所有权标签的项目卷。当前没有 CNZ 容器，5 个 `yunan-persist` 容器仍健康；`/opt` 可用空间约 36 GiB。代码修复为 Redis 添加 `redis-cli ping` 健康检查，并只允许同一 main SHA、同一已验证 release、无 CNZ 容器且精确卷名/标签均匹配时安全重试；卷异常、release 不同或 active 指针存在均拒绝。
+首次启动后 app/PostgreSQL/Redis/docreader 与前端均运行，app/API 和 UI 返回 200，但 F8 检查发现 Redis 镜像没有健康检查定义，等待门禁未能成立；部署器随后只停止 CNZ 项目，未切换 active 指针，保留了四个带正确 `cnz-weknora` Compose 所有权标签的项目卷。当前没有 CNZ 容器，5 个 `yunan-persist` 容器仍健康；`/opt` 可用空间约 36 GiB。PR #246 已为 Redis 添加 `redis-cli ping` 健康检查。合并后 main SHA 改变，暴露出仅允许“同 main SHA”重试会卡住失败 release 的问题；当前 PR 改为计算 WeKnora 源码指纹（路径、类型、内容、权限位；排除 `.env`/`.git`），只有发现与待部署源码指纹一致的 release、且无 CNZ 容器、四个卷名和 Compose 所有权标签均准确时才允许重试。源码不同、卷异常或 active 指针存在均拒绝。
 
-网络只读探测确认 testkb 可达 `https://goproxy.cn`、`docker.m.daocloud.io`、`https://rsproxy.cn` 和 Debian 清华镜像。PR #244 将 Go migrate 安装改为主项目 `go.mod` / `go.sum` 锁定的版本，并对 app/frontend/docreader 使用项目级 Docker Hub 镜像参数；已锁定 digest 的 Node 与 nginx 保持原 digest。此次实际构建进一步验证这些镜像可用，未修改 Docker daemon 的全局 registry 配置。接下来先合并 Redis 健康检查与安全重试门禁，再用同一项目卷重试启动并完成合成知识检索、OIDC 显式绑定/拒绝、恢复与回滚验收。
+网络只读探测确认 testkb 可达 `https://goproxy.cn`、`docker.m.daocloud.io`、`https://rsproxy.cn` 和 Debian 清华镜像。PR #244 将 Go migrate 安装改为主项目 `go.mod` / `go.sum` 锁定的版本，并对 app/frontend/docreader 使用项目级 Docker Hub 镜像参数；已锁定 digest 的 Node 与 nginx 保持原 digest。此次实际构建进一步验证这些镜像可用，未修改 Docker daemon 的全局 registry 配置。接下来通过源码指纹重试门禁 CI 后，使用同源代码卷重试启动并完成合成知识检索、OIDC 显式绑定/拒绝、恢复与回滚验收。
 
 ## 4. 两个 Web 端能否合并
 
