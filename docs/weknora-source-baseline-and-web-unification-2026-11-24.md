@@ -112,11 +112,21 @@ PR #241 的首次安装部署器、PR #242 的 incoming/release 路径修正、P
 
 PR #246（Redis 健康检查与安全重试）和 PR #247（按 WeKnora 源码指纹允许失败部署重试）均已合并。以 `9cb69e89ffc953bbc3f9bb86c2c7bf5c533fe39e` 从干净 main 部署到 `/opt/cnz-weknora` 成功，active release 指向官方 v0.9.1 加本项目补丁。部署器确认 app、frontend、docreader、PostgreSQL、Redis 启动；app/API 与 UI 返回 200。CNZ 端口仅监听 `127.0.0.1:39301` 和 `127.0.0.1:18082`；`.env` 权限为 `0600`；四个卷均带有 `cnz-weknora` Compose 所有权标签。
 
-同日只读复核再次对 `/var/backups/testkb-yunan-persist-20261124/SHA256SUMS` 执行校验，数据库、文件、Redis、部署配置、镜像和环境清单全部为 `OK`。五个 `yunan-persist` 容器仍 healthy；CNZ 与旧栈使用不同项目、容器名、网络、数据库、Redis、文件卷和端口。磁盘余量约 34 GiB。2026-11-26 又完成隔离恢复往返：从 CNZ 数据库转储应用 schema 到随机临时库，加入一条 synthetic sentinel，再备份并恢复到第二个随机临时库；91 张应用表恢复成功，sentinel 内容一致。CNZ 文件卷当时为 0 个文件，以只读方式复制到临时卷后对 synthetic sentinel 做 tar 备份/恢复与 SHA-256 比较通过。临时数据库、卷和文件已全部清理，CNZ API/UI 与五个 `yunan-persist` 服务仍健康。此项验证了数据库/文件往返方法，不代表整栈冷恢复或从旧栈备份恢复已验收。
+同日只读复核再次对 `/var/backups/testkb-yunan-persist-20261124/SHA256SUMS` 执行校验，数据库、文件、Redis、部署配置、镜像和环境清单全部为 `OK`。五个 `yunan-persist` 容器仍 healthy；CNZ 与旧栈使用不同项目、容器名、网络、数据库、Redis、文件卷和端口。磁盘余量约 34 GiB。2026-11-26 完成隔离恢复往返：从 CNZ 数据库转储应用 schema 到随机临时库，加入一条 synthetic sentinel，再备份并恢复到第二个随机临时库；当时记录的 91 个应用 schema 对象恢复成功，sentinel 内容一致。CNZ 文件卷当时为 0 个文件，以只读方式复制到临时卷后对 synthetic sentinel 做 tar 备份/恢复与 SHA-256 比较通过。临时数据库、卷和文件已全部清理，CNZ API/UI 与五个 `yunan-persist` 服务仍健康。此项验证了数据库/文件往返方法，不代表整栈冷恢复或从旧栈备份恢复已验收。
 
-部署配置中 `DISABLE_REGISTRATION=true`、`OIDC_AUTH_ENABLE=false`；管理员开户交付尚未完成，也未从旧库导入用户或资料。未配置可信 IdP，故没有运行真实登录联调。当前没有把 yunan-persist 的真实客户数据用于验证。**待完成验收**：临时合成管理员开户与关闭注册复核、合成知识上传/解析/检索及引用、OIDC 显式绑定/未绑定拒绝联调、CNZ 完整发布包与数据卷的整栈冷恢复演练、业务工作台到 WeKnora 的浏览器单点跳转与退出验证。缺少真实 IdP、正式管理员指定账号及项目工作台部署地址时，只能完成模拟/隔离验证，不能宣称客户级 SSO 或双 Web 生产验收。
+2026-11-26 补做整栈冷恢复尝试：安全门回读 CNZ 数据库 `users/tenants/models/knowledge_bases/knowledges/messages` 均为 0，WeKnora 原文目录为空，Redis 有 8 个键；恢复包、数据库 dump、文件目录和 Redis RDB 均在同机 `0700` 临时目录中生成。恢复副本使用独立 Compose 名称/四个临时卷和 `internal=true` 网络，不发布主机端口；五个服务均启动并健康，容器内 API `/health` 与 UI `/` 均返回 200。由于宿主机探测器仍按 localhost 端口轮询，未进入最终的数据库对象/行数和 Redis 键数相等性断言；演练随后中止并显式删除了副本容器、卷、网络及快照目录。源 CNZ UI/API 为 200，五个 `yunan-persist` 服务仍 healthy。该次只证明恢复包可启动成完整服务副本，不算数据冷恢复验收。再次执行整栈副本被自动审批拒绝，原因是重复在共享主机启动恢复栈，且先前中断过临时操作；后续不得绕过审批，需按待批方案在容器网络内探测并确保信号中断也会执行清理。
 
-### 6.3 WeKnora 操作面精简（已合并并部署，登录后验收未完成）
+同日只读核对解释了 91/86 的差异：当前 WeKnora 数据库有 `public` schema 的 86 张基础表和 4 个视图，另有 `paradedb` schema 的 1 张基础表；因此应用范围对象共 91 个，而仅统计 `public` 基础表得到 86。该对象计数解释了历史记录口径，但冷恢复副本仍须完成按同一 schema 范围的对象数、指定业务表行数及 Redis 键数回读，才能通过恢复验收。
+
+部署配置中 `DISABLE_REGISTRATION=true`、`OIDC_AUTH_ENABLE=false`；管理员开户交付尚未完成，也未从旧库导入用户或资料。未配置可信 IdP，故没有运行真实登录联调。当前没有把 yunan-persist 的真实客户数据用于验证。**待完成验收**：临时合成管理员开户与关闭注册复核、合成知识上传/解析/检索及引用、OIDC 显式绑定/未绑定拒绝联调、整栈副本中断后的数据数量一致性与最终清理验收、业务工作台到 WeKnora 的浏览器单点跳转与退出验证。缺少真实 IdP、正式管理员指定账号及项目工作台部署地址时，只能完成模拟/隔离验证，不能宣称客户级 SSO 或双 Web 生产验收。
+
+### 6.3 合成问答评测基线（仅 P0 关键词兜底）
+
+用 `p0/eval/weknora_qa.demo.json` 的 22 条合成用例，以临时 Python 3.12 环境运行 `python p0/scripts/run_weknora_eval.py --dataset p0/eval/weknora_qa.demo.json --mode keyword --strict`。结果为：库内问题 **9/14** 正确（64.3%），库外拒答 **8/8**（100%），引用准确率 **9/14**；直接问法 **6/6**，改述问法 **3/8**。未通过的 5 条是 q08–q12，涉及保压时长、燃烧速度限值、浸泡后状态、雾化值和插拔力范围的改述。
+
+该结果来自 P0 本地关键词兜底，延迟约 0.1 ms，不是 CNZ WeKnora 的解析、混合检索或生产性能结果；它不能替代在 CNZ 测试库上传合成文件后以 `--mode weknora` 运行同一用例。机器报告和可读报告已归档为 [`weknora-keyword-baseline-2026-11-26.json`](../p0/eval/weknora-keyword-baseline-2026-11-26.json) 与 [`weknora-keyword-baseline-2026-11-26.md`](../p0/eval/weknora-keyword-baseline-2026-11-26.md)。后续验收应报告 WeKnora 模式的命中、拒答、引用和耗时，并与此关键词基线分开。
+
+### 6.4 WeKnora 操作面精简（已合并并部署，登录后验收未完成）
 
 针对“业务工作台为主平台、WeKnora 负责知识服务与高级资料维护”的已确认设计，PR #248 新增并合并前端配置档补丁 `0004-cnz-knowledge-workspace-profile.patch`：CNZ 侧栏仅保留知识库、设置和退出；通用聊天、Agent、自动化、工具箱、组织、制品入口隐藏；路由白名单同时拒绝直接访问这些页面。设置只保留模型、解析器、空间/系统管理、任务队列、审计、账号和成员；隐藏设置的 query 链接回退到模型页。5 项菜单、路由与设置 allowlist 单测、前端构建和完整 CI 均通过。PR 合并 SHA `cc1db5601cc784f68fc1427c027b321c0c7a04d0` 已部署到 `/opt/cnz-weknora`。安全升级器发布前复核备份、容器、卷归属、服务健康、空间和 Compose 隔离；失败自动恢复旧前端；成功要求 API/UI 返回 200 且四个其他容器 ID 和全部数据卷保持不变。部署后回读确认 UI/API 均 200、app/docreader/PostgreSQL/Redis ID 未变、四个 CNZ 卷完整、五个 `yunan-persist` 服务健康，原有备份校验清单全部为 OK。
 
