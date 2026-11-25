@@ -85,7 +85,11 @@ def test_f5_transfer_uses_temporary_release_then_cleans_failures():
         for value in deploy.stream_bundle.__code__.co_consts
         if isinstance(value, str)
     )
-    assert 'rm -rf --' in deploy.cleanup_incoming.__code__.co_consts
+    assert any(
+        "rm -rf --" in value
+        for value in deploy.cleanup_incoming.__code__.co_consts
+        if isinstance(value, str)
+    )
 
 
 def test_f6_compose_requires_loopback_isolated_contract():
