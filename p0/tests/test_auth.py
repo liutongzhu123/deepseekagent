@@ -89,6 +89,15 @@ def test_review_grants_are_account_specific_audited_and_removed_when_role_change
     ]
     assert auth.has_permission(auth.find_user("reviewer-one"), "report:audit")
     assert auth.has_permission(auth.find_user("reviewer-one"), "standard:review")
+    session_user = auth.read_session(auth.create_session(auth.find_user("reviewer-one")))
+    assert auth.has_permission(session_user, "report:audit")
+    assert auth.has_permission(session_user, "standard:review")
+    reviewer = TestClient(main.app)
+    _login_as(reviewer, "reviewer-one", "review-pass-1")
+    public_user = reviewer.get("/api/v1/auth/me").json()["user"]
+    assert public_user["review_permissions"] == ["report:audit", "report:read", "standard:review"]
+    assert "_approved_review_permissions" not in public_user
+    assert "permission_grants" not in public_user
     assert not auth.has_permission(auth.find_user("reviewer-one"), "standard:publish")
 
     changed = auth.update_user("reviewer-one", role="business_manager")

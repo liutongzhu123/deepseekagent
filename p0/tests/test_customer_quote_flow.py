@@ -289,9 +289,10 @@ def test_private_inquiries_and_manager_queue_permissions(monkeypatch, tmp_path):
     _enable_flow(monkeypatch, tmp_path)
     owner = _login_sales(monkeypatch, tmp_path, username="owner", projects=["项目甲"])
     inquiry = _create_inquiry(owner).json()["inquiry"]
-    other = _login_sales(monkeypatch, tmp_path, username="other", projects=["项目甲"])
+    other = _login_sales(monkeypatch, tmp_path, username="other", projects=["项目乙"])
     assert other.get(f"/api/v1/customer-service/quote-inquiries/{inquiry['inquiry_id']}").status_code == 404
-    assert other.get("/api/v1/customer-service/quote-inquiries/admin/queue").status_code == 403
+    queue = other.get("/api/v1/customer-service/quote-inquiries/admin/queue")
+    assert queue.status_code == 200 and queue.json()["inquiries"] == []
     assert [row["inquiry_id"] for row in other.get("/api/v1/customer-service/quote-inquiries").json()["inquiries"]] == []
 
 

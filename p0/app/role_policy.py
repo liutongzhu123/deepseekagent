@@ -72,6 +72,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     ),
     "technical": frozenset(
         {
+            "rules:read",
             "system:status",
             "schedule:read",
             "schedule:manage",
@@ -103,9 +104,15 @@ def valid_account_review_grants(user: Mapping[str, object] | None) -> frozenset[
     if user.get("role") == "customer":
         return frozenset()
     raw = user.get("permission_grants")
-    if not isinstance(raw, list):
-        return frozenset()
     permissions: set[str] = set()
+    session_grants = user.get("_approved_review_permissions")
+    if isinstance(session_grants, list):
+        permissions.update(
+            permission for permission in session_grants
+            if isinstance(permission, str) and permission in ACCOUNT_REVIEW_EXCEPTIONS
+        )
+    if not isinstance(raw, list):
+        return frozenset(permissions)
     for grant in raw:
         if not isinstance(grant, Mapping):
             continue

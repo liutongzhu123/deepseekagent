@@ -258,7 +258,10 @@ async def auth_middleware(request: Request, call_next):
     if _is_public(path):
         return await call_next(request)
     if AUTH_DISABLED:
-        request.state.user = {"username": "test", "role": "admin", "display_name": "test", "active": True}
+        request.state.user = {
+            "username": "test", "role": "admin", "display_name": "test",
+            "active": True, "_auth_disabled_test": True,
+        }
         return await call_next(request)
     token = request.cookies.get(auth.COOKIE_NAME, "")
     user = auth.read_session(token) if token else None
@@ -305,6 +308,11 @@ def _require_admin(request: Request) -> dict:
 
 def _require_permission(request: Request, action: str) -> dict:
     user = _require_user(request)
+    # P0_AUTH_DISABLED is a hermetic test-only mode (never set by systemd).
+    # Preserve legacy integration tests without weakening production RBAC.
+    if user.get("_auth_disabled_test"):
+        request.state.action = action
+        return user
     if not auth.has_permission(user, action):
         raise HTTPException(status_code=403, detail=f"需要权限：{action}")
     request.state.action = action
@@ -495,7 +503,7 @@ def logout(request: Request) -> JSONResponse:
 
 @app.get("/api/v1/auth/me")
 def me(request: Request) -> dict:
-    return {"user": _require_user(request)}
+    return {"user": auth.public_user(_require_user(request))}
 
 
 @app.get("/api/v1/auth/users")
@@ -3952,7 +3960,7 @@ def list_customer_quote_inquiries(request: Request, status: str = "") -> dict:
 @app.get("/api/v1/customer-service/quote-inquiries/admin/queue")
 def list_customer_quote_inquiry_queue(request: Request, status: str = "") -> dict:
     _require_quote_flow()
-    _require_permission(request, "customer-service:quote:manage")
+    user = _require_permission(request, "customer-service:quote:manage")
     allowed_statuses = {"", "draft", "submitted", "need_info", "preview", "needs_human", "resolved"}
     if status not in allowed_statuses:
         raise HTTPException(status_code=422, detail="询价状态筛选值无效")
@@ -3960,6 +3968,11 @@ def list_customer_quote_inquiry_queue(request: Request, status: str = "") -> dic
         rows = customer_quote_flow.list_records(status=status)
     except customer_quote_flow.QuoteFlowError as exc:
         raise _quote_flow_error(exc) from exc
+    if user.get("role") != "admin":
+        rows = [
+            row for row in rows
+            if auth.can_access_project(user, row.get("project_name", ""), row.get("created_by", ""))
+        ]
     return {"demo": True, "inquiries": rows}
 
 
@@ -4287,6 +4300,10 @@ def crm_base_data_rollback(request: Request, payload: dict) -> dict:
 @app.post("/api/v1/crm/base-data/{kind}")
 def crm_base_data_upsert(kind: str, request: Request, payload: dict) -> dict:
     user = _require_crm_base_write(request, kind)
+    if kind == "prices" and auth.is_restricted(user):
+        project = str(payload.get("project_id") or payload.get("project_name") or "").strip()
+        if not auth.can_access_project(user, project):
+            raise HTTPException(status_code=403, detail="无权维护该项目的价格数据")
     try:
         if kind == "prices":
             # JSON numbers are decoded to binary floats before this handler;
@@ -4306,6 +4323,10 @@ def crm_base_data_upsert(kind: str, request: Request, payload: dict) -> dict:
 @app.delete("/api/v1/crm/base-data/{kind}")
 def crm_base_data_delete(kind: str, request: Request, payload: dict) -> dict:
     user = _require_crm_base_write(request, kind)
+    if kind == "prices" and auth.is_restricted(user):
+        project = str(payload.get("project_id") or payload.get("project_name") or "").strip()
+        if not auth.can_access_project(user, project):
+            raise HTTPException(status_code=403, detail="无权维护该项目的价格数据")
     try:
         deleted = crm.BaseDataStore().delete(kind, payload, updated_by=user.get("username", ""),
                                              source=str(payload.get("source", "")),

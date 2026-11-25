@@ -703,7 +703,13 @@ def read_session(token: str) -> dict | None:
             return None
         if lock_remaining_seconds(user) > 0:
             return None
-        return public_user(user)
+        session_user = public_user(user)
+        # Keep only validated permission codes in the signed session; the
+        # complete grant metadata remains in the protected user store.
+        session_user["_approved_review_permissions"] = sorted(
+            role_policy.valid_account_review_grants(user)
+        )
+        return session_user
     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
         return None
 

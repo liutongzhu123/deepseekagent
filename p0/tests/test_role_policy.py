@@ -47,8 +47,9 @@ def test_business_manager_can_quote_and_manage_quote_data_but_not_global_rules()
     assert role_policy.has_permission(user, "customer-service:conversation:manage")
 
 
-def test_technical_role_is_limited_to_schedule_and_rush_rules():
+def test_technical_role_can_read_rules_and_manage_schedule_and_rush_rules():
     user = {"role": "technical", "active": True}
+    assert role_policy.has_permission(user, "rules:read")
     assert role_policy.has_permission(user, "schedule:manage")
     assert role_policy.has_permission(user, "rush-rule:manage")
     assert not role_policy.has_permission(user, "config:manage:discount")

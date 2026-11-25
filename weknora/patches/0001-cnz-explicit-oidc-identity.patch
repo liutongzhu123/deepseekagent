@@ -45,11 +45,12 @@ new file mode 100644
 index 0000000..cef179a
 --- /dev/null
 +++ b/internal/application/repository/user_oidc_identity_test.go
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,44 @@
 +package repository
 +
 +import (
 +	"context"
++	"os"
 +	"path/filepath"
 +	"testing"
 +
@@ -63,6 +64,9 @@ index 0000000..cef179a
 +	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "users.db")), &gorm.Config{})
 +	require.NoError(t, err)
 +	require.NoError(t, db.AutoMigrate(&types.User{}))
++	migration, err := os.ReadFile("../../../migrations/sqlite/000054_users_oidc_identity.up.sql")
++	require.NoError(t, err)
++	require.NoError(t, db.Exec(string(migration)).Error)
 +	repo := NewUserRepository(db).(*userRepository)
 +	ctx := context.Background()
 +	for _, id := range []string{"user-a", "user-b"} {
@@ -348,7 +352,7 @@ index 4ca0819..a0e6df3 100644
  	withOIDCSSRFWhitelist(t, "127.0.0.1")
  
  	userinfo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-@@ -338,14 +338,31 @@ func TestResolveOIDCUserInfo_NoJwksDoesNotTrustUnsignedIDToken(t *testing.T) {
+@@ -338,14 +338,32 @@ func TestResolveOIDCUserInfo_NoJwksDoesNotTrustUnsignedIDToken(t *testing.T) {
  		IDToken:     forged,
  		AccessToken: "access-token",
  	})
@@ -357,6 +361,7 @@ index 4ca0819..a0e6df3 100644
 +	if err == nil {
 +		t.Fatal("userinfo-only login accepted without a verified id_token")
  	}
++	_ = info
 -	if info.Email != "real@example.com" {
 -		t.Fatalf("email = %q, want userinfo email (not unsigned id_token)", info.Email)
 +}
