@@ -79,6 +79,8 @@ def test_f4_release_directory_is_never_overwritten():
 
 def test_f5_transfer_uses_temporary_release_then_cleans_failures():
     assert 'incoming="$root/.incoming-$sha"' in deploy.CONFIGURE
+    assert 'test -f "$incoming/docker-compose.testkb.override.yml"' in deploy.CONFIGURE
+    assert 'grep -Fxq "$sha" "$incoming/DEPLOYED_FROM_MAIN"' in deploy.CONFIGURE
     assert 'mv -T "$incoming" "$release"' in deploy.CONFIGURE
     assert any(
         "tar -xzf - -C" in value

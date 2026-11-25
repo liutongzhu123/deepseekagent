@@ -53,8 +53,8 @@ CONFIGURE = r'''set -euo pipefail
 sha="$1"; root=/opt/cnz-weknora; incoming="$root/.incoming-$sha"; release="$root/releases/$sha"
 project="$incoming/source/WeKnora-0.9.1"; env_file="$project/.env"
 test -f "$project/docker-compose.yml"
-test -f "$release/docker-compose.testkb.override.yml"
-grep -Fxq "$sha" "$release/DEPLOYED_FROM_MAIN"
+test -f "$incoming/docker-compose.testkb.override.yml"
+grep -Fxq "$sha" "$incoming/DEPLOYED_FROM_MAIN"
 cp -- /opt/cnz-weknora/active/WeKnora-0.9.1/.env "$env_file"
 chmod 0600 "$env_file"
 test "$(grep -c '^WEKNORA_VERSION=' "$env_file")" -eq 1
