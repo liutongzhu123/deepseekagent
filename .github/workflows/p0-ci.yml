@@ -94,5 +94,5 @@ jobs:
         run: >-
           go test ./internal/application/repository ./internal/application/service
           ./internal/handler ./internal/router ./internal/types
-          -run 'TestOIDCIdentityRequiresExplicitUniqueBinding|TestResolveOIDCUserInfo|TestModelCatalogRequiresSystemAdmin|TestAuditAction_SystemNamespacePrefix|TestAuditAction_SystemWireValues'
+          -run 'TestOIDCIdentityRequiresExplicitUniqueBinding|TestOIDCIdentityBindingRequiresAuditBeforeMutation|TestOIDCIdentityBindingAuditsRequestBeforeMutation|TestResolveOIDCUserInfo|TestModelCatalogRequiresSystemAdmin|TestAuditAction_SystemNamespacePrefix|TestAuditAction_SystemWireValues'
           -count=1

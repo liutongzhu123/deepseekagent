@@ -387,10 +387,41 @@ index 4ca0819..a0e6df3 100644
  }
  
 diff --git a/internal/handler/system.go b/internal/handler/system.go
-index e2d7368..236da00 100644
+index e2d7368..bb811c2 100644
 --- a/internal/handler/system.go
 +++ b/internal/handler/system.go
-@@ -1826,6 +1826,66 @@ func (h *SystemHandler) CreateSystemUser(c *gin.Context) {
+@@ -253,8 +253,20 @@ func (h *SystemHandler) emitAdminAudit(
+ 	target *types.User,
+ 	details map[string]any,
+ ) {
++	_ = h.writeAdminAudit(ctx, action, target, details)
++}
++
++// writeAdminAudit writes one system-admin lifecycle event and reports whether
++// the row was persisted. Sensitive identity changes use a durable request
++// event before mutating the account; the completed event remains best-effort.
++func (h *SystemHandler) writeAdminAudit(
++	ctx context.Context,
++	action types.AuditAction,
++	target *types.User,
++	details map[string]any,
++) error {
+ 	if h.auditSvc == nil {
+-		return
++		return errors.New("system audit service is unavailable")
+ 	}
+ 	actorID, _ := types.UserIDFromContext(ctx)
+ 	var detailsJSON types.JSON
+@@ -279,7 +291,7 @@ func (h *SystemHandler) emitAdminAudit(
+ 		entry.TargetID = target.ID
+ 		entry.TargetUserID = target.ID
+ 	}
+-	_ = h.auditSvc.Log(ctx, entry)
++	return h.auditSvc.Log(ctx, entry)
+ }
+ 
+ // GetSystemInfoResponse defines the response structure for system info
+@@ -1826,6 +1838,86 @@ func (h *SystemHandler) CreateSystemUser(c *gin.Context) {
  	})
  }
  
@@ -416,16 +447,26 @@ index e2d7368..236da00 100644
 +		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "OIDC identity binding is unavailable"})
 +		return
 +	}
++	ctx := logger.CloneContext(c.Request.Context())
++	userID := strings.TrimSpace(req.UserID)
++	target, err := h.userSvc.GetUserByID(ctx, userID)
++	if err != nil {
++		c.JSON(http.StatusConflict, gin.H{"error": "Failed to bind OIDC identity"})
++		return
++	}
++	if err := h.writeAdminAudit(ctx, types.AuditActionSystemUserOIDCIdentityBindingRequested, target, map[string]any{"provider": "configured_oidc"}); err != nil {
++		logger.Errorf(ctx, "Failed to audit OIDC identity binding request for user %s: %v", secutils.SanitizeForLog(userID), err)
++		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Unable to record identity binding request"})
++		return
++	}
 +	subject := strings.TrimSpace(req.Subject)
-+	if err := binder.SetOIDCIdentity(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID), &subject); err != nil {
++	if err := binder.SetOIDCIdentity(ctx, userID, &subject); err != nil {
 +		logger.Errorf(c.Request.Context(), "Failed to bind OIDC identity for user %s: %v", secutils.SanitizeForLog(req.UserID), err)
 +		c.JSON(http.StatusConflict, gin.H{"error": "Failed to bind OIDC identity"})
 +		return
 +	}
-+	if target, err := h.userSvc.GetUserByID(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID)); err == nil {
-+		h.emitAdminAudit(logger.CloneContext(c.Request.Context()), types.AuditActionSystemUserOIDCIdentityBound, target, map[string]any{"provider": "configured_oidc"})
-+	}
-+	c.JSON(http.StatusOK, gin.H{"success": true, "user_id": strings.TrimSpace(req.UserID)})
++	h.emitAdminAudit(ctx, types.AuditActionSystemUserOIDCIdentityBound, target, map[string]any{"provider": "configured_oidc"})
++	c.JSON(http.StatusOK, gin.H{"success": true, "user_id": userID})
 +}
 +
 +// UnbindOIDCIdentity removes the configured provider identity from an
@@ -443,20 +484,147 @@ index e2d7368..236da00 100644
 +		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "OIDC identity binding is unavailable"})
 +		return
 +	}
-+	if err := binder.SetOIDCIdentity(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID), nil); err != nil {
++	ctx := logger.CloneContext(c.Request.Context())
++	userID := strings.TrimSpace(req.UserID)
++	target, err := h.userSvc.GetUserByID(ctx, userID)
++	if err != nil {
++		c.JSON(http.StatusConflict, gin.H{"error": "Failed to unbind OIDC identity"})
++		return
++	}
++	if err := h.writeAdminAudit(ctx, types.AuditActionSystemUserOIDCIdentityUnbindingRequested, target, map[string]any{"provider": "configured_oidc"}); err != nil {
++		logger.Errorf(ctx, "Failed to audit OIDC identity unbinding request for user %s: %v", secutils.SanitizeForLog(userID), err)
++		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Unable to record identity unbinding request"})
++		return
++	}
++	if err := binder.SetOIDCIdentity(ctx, userID, nil); err != nil {
 +		logger.Errorf(c.Request.Context(), "Failed to unbind OIDC identity for user %s: %v", secutils.SanitizeForLog(req.UserID), err)
 +		c.JSON(http.StatusConflict, gin.H{"error": "Failed to unbind OIDC identity"})
 +		return
 +	}
-+	if target, err := h.userSvc.GetUserByID(logger.CloneContext(c.Request.Context()), strings.TrimSpace(req.UserID)); err == nil {
-+		h.emitAdminAudit(logger.CloneContext(c.Request.Context()), types.AuditActionSystemUserOIDCIdentityUnbound, target, map[string]any{"provider": "configured_oidc"})
-+	}
-+	c.JSON(http.StatusOK, gin.H{"success": true, "user_id": strings.TrimSpace(req.UserID)})
++	h.emitAdminAudit(ctx, types.AuditActionSystemUserOIDCIdentityUnbound, target, map[string]any{"provider": "configured_oidc"})
++	c.JSON(http.StatusOK, gin.H{"success": true, "user_id": userID})
 +}
 +
  // ============================================================================
  // System Settings (P1)
  // ----------------------------------------------------------------------------
+diff --git a/internal/handler/system_oidc_binding_test.go b/internal/handler/system_oidc_binding_test.go
+new file mode 100644
+index 0000000..f7e3b9a
+--- /dev/null
++++ b/internal/handler/system_oidc_binding_test.go
+@@ -0,0 +1,111 @@
++package handler
++
++import (
++	"context"
++	"errors"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"github.com/Tencent/WeKnora/internal/types"
++	"github.com/Tencent/WeKnora/internal/types/interfaces"
++	"github.com/gin-gonic/gin"
++)
++
++type oidcBindingUserServiceStub struct {
++	interfaces.UserService
++	target  *types.User
++	setCall int
++	onSet   func()
++}
++
++func (s *oidcBindingUserServiceStub) GetUserByID(context.Context, string) (*types.User, error) {
++	return s.target, nil
++}
++
++func (s *oidcBindingUserServiceStub) SetOIDCIdentity(context.Context, string, *string) error {
++	s.setCall++
++	if s.onSet != nil {
++		s.onSet()
++	}
++	return nil
++}
++
++func TestOIDCIdentityBindingRequiresAuditBeforeMutation(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, tc := range []struct {
++		name       string
++		method     string
++		body       string
++		handler    func(*SystemHandler, *gin.Context)
++		auditEvent types.AuditAction
++	}{
++		{
++			name:       "bind",
++			method:     "PUT",
++			body:       `{"user_id":"target-1","subject":"subject-1"}`,
++			handler:    func(h *SystemHandler, c *gin.Context) { h.BindOIDCIdentity(c) },
++			auditEvent: types.AuditActionSystemUserOIDCIdentityBindingRequested,
++		},
++		{
++			name:       "unbind",
++			method:     "DELETE",
++			body:       `{"user_id":"target-1"}`,
++			handler:    func(h *SystemHandler, c *gin.Context) { h.UnbindOIDCIdentity(c) },
++			auditEvent: types.AuditActionSystemUserOIDCIdentityUnbindingRequested,
++		},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			audits := &capturingAuditService{logErr: errors.New("audit storage unavailable")}
++			users := &oidcBindingUserServiceStub{target: &types.User{ID: "target-1"}}
++			h := &SystemHandler{userSvc: users, auditSvc: audits}
++			req := httptest.NewRequest(tc.method, "/api/v1/system/admin/users/oidc-binding", strings.NewReader(tc.body))
++			recorder := httptest.NewRecorder()
++			c, _ := gin.CreateTestContext(recorder)
++			c.Request = req
++
++			tc.handler(h, c)
++
++			if recorder.Code != 503 {
++				t.Fatalf("response status = %d, want 503", recorder.Code)
++			}
++			if users.setCall != 0 {
++				t.Fatalf("identity mutation called %d times after audit failure", users.setCall)
++			}
++			if len(audits.entries) != 1 || audits.entries[0].Action != tc.auditEvent {
++				t.Fatalf("audit entries = %#v, want one %q request event", audits.entries, tc.auditEvent)
++			}
++		})
++	}
++}
++
++func TestOIDCIdentityBindingAuditsRequestBeforeMutation(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	var audits *capturingAuditService
++	users := &oidcBindingUserServiceStub{
++		target: &types.User{ID: "target-1"},
++		onSet: func() {
++			if len(audits.entries) == 0 || audits.entries[0].Action != types.AuditActionSystemUserOIDCIdentityBindingRequested {
++				t.Error("identity mutation started before the request audit was stored")
++			}
++		},
++	}
++	audits = &capturingAuditService{}
++	h := &SystemHandler{userSvc: users, auditSvc: audits}
++	req := httptest.NewRequest("PUT", "/api/v1/system/admin/users/oidc-binding", strings.NewReader(`{"user_id":"target-1","subject":"subject-1"}`))
++	recorder := httptest.NewRecorder()
++	c, _ := gin.CreateTestContext(recorder)
++	c.Request = req
++
++	h.BindOIDCIdentity(c)
++
++	if recorder.Code != 200 {
++		t.Fatalf("response status = %d, want 200: %s", recorder.Code, recorder.Body.String())
++	}
++	if users.setCall != 1 {
++		t.Fatalf("identity mutation calls = %d, want 1", users.setCall)
++	}
++	if len(audits.entries) != 2 || audits.entries[1].Action != types.AuditActionSystemUserOIDCIdentityBound {
++		t.Fatalf("audit entries = %#v, want request then completion", audits.entries)
++	}
++}
 diff --git a/internal/router/model_catalog_test.go b/internal/router/model_catalog_test.go
 index 9af605c..645da6d 100644
 --- a/internal/router/model_catalog_test.go
@@ -484,10 +652,10 @@ index 204ce74..7635af5 100644
  		adminRoutes.POST("/api-keys", handler.CreatePlatformAPIKey)
  		adminRoutes.DELETE("/api-keys/:key_id", handler.DeletePlatformAPIKey)
 diff --git a/internal/types/audit_log.go b/internal/types/audit_log.go
-index 5dc7f25..46d4f4d 100644
+index 5dc7f25..acbb701 100644
 --- a/internal/types/audit_log.go
 +++ b/internal/types/audit_log.go
-@@ -141,9 +141,13 @@ const (
+@@ -141,9 +141,15 @@ const (
  	// password_generated=true only on the create path, idempotent=true
  	// marks a no-op hit on an already-existing identity.
  	// TenantID=0 (system-scope).
@@ -497,50 +665,60 @@ index 5dc7f25..46d4f4d 100644
 +	AuditActionSystemUserCreated AuditAction = "system.user_created"
 +	// OIDC identity binding changes are recorded without copying the provider
 +	// subject into audit details. TenantID=0 (system-scope).
-+	AuditActionSystemUserOIDCIdentityBound   AuditAction = "system.user_oidc_identity_bound"
-+	AuditActionSystemUserOIDCIdentityUnbound AuditAction = "system.user_oidc_identity_unbound"
-+	AuditActionSystemAPIKeyCreated           AuditAction = "system.api_key_created"
-+	AuditActionSystemAPIKeyRevoked           AuditAction = "system.api_key_revoked"
++	AuditActionSystemUserOIDCIdentityBindingRequested   AuditAction = "system.user_oidc_identity_binding_requested"
++	AuditActionSystemUserOIDCIdentityUnbindingRequested AuditAction = "system.user_oidc_identity_unbinding_requested"
++	AuditActionSystemUserOIDCIdentityBound              AuditAction = "system.user_oidc_identity_bound"
++	AuditActionSystemUserOIDCIdentityUnbound            AuditAction = "system.user_oidc_identity_unbound"
++	AuditActionSystemAPIKeyCreated                      AuditAction = "system.api_key_created"
++	AuditActionSystemAPIKeyRevoked                      AuditAction = "system.api_key_revoked"
  
  	// Runtime queue mutations are privileged SystemAdmin actions. Retrying an
  	// archived task can repeat its original side effects; deleting one removes
 diff --git a/internal/types/audit_log_test.go b/internal/types/audit_log_test.go
-index d4a38cd..2895370 100644
+index d4a38cd..bb2ab2c 100644
 --- a/internal/types/audit_log_test.go
 +++ b/internal/types/audit_log_test.go
-@@ -38,6 +38,8 @@ func TestAuditAction_DotNamespaceConvention(t *testing.T) {
+@@ -38,6 +38,10 @@ func TestAuditAction_DotNamespaceConvention(t *testing.T) {
  		AuditActionSystemAdminPromoted,
  		AuditActionSystemAdminRevoked,
  		AuditActionSystemUserPasswordReset,
 +		AuditActionSystemUserOIDCIdentityBound,
 +		AuditActionSystemUserOIDCIdentityUnbound,
++		AuditActionSystemUserOIDCIdentityBindingRequested,
++		AuditActionSystemUserOIDCIdentityUnbindingRequested,
  		AuditActionSystemQueueTaskRetried,
  		AuditActionSystemQueueTaskDeleted,
  		AuditActionSystemQueueTaskRunNow,
-@@ -125,6 +127,8 @@ func TestAuditAction_NoCollisionsAcrossNamespaces(t *testing.T) {
+@@ -125,6 +129,10 @@ func TestAuditAction_NoCollisionsAcrossNamespaces(t *testing.T) {
  	register("AuditActionSystemAdminPromoted", AuditActionSystemAdminPromoted)
  	register("AuditActionSystemAdminRevoked", AuditActionSystemAdminRevoked)
  	register("AuditActionSystemUserPasswordReset", AuditActionSystemUserPasswordReset)
 +	register("AuditActionSystemUserOIDCIdentityBound", AuditActionSystemUserOIDCIdentityBound)
 +	register("AuditActionSystemUserOIDCIdentityUnbound", AuditActionSystemUserOIDCIdentityUnbound)
++	register("AuditActionSystemUserOIDCIdentityBindingRequested", AuditActionSystemUserOIDCIdentityBindingRequested)
++	register("AuditActionSystemUserOIDCIdentityUnbindingRequested", AuditActionSystemUserOIDCIdentityUnbindingRequested)
  	register("AuditActionSystemUserCreated", AuditActionSystemUserCreated)
  	register("AuditActionSystemQueueTaskRetried", AuditActionSystemQueueTaskRetried)
  	register("AuditActionSystemQueueTaskDeleted", AuditActionSystemQueueTaskDeleted)
-@@ -145,6 +149,8 @@ func TestAuditAction_SystemNamespacePrefix(t *testing.T) {
+@@ -145,6 +153,10 @@ func TestAuditAction_SystemNamespacePrefix(t *testing.T) {
  		AuditActionSystemAdminPromoted,
  		AuditActionSystemAdminRevoked,
  		AuditActionSystemUserPasswordReset,
 +		AuditActionSystemUserOIDCIdentityBound,
 +		AuditActionSystemUserOIDCIdentityUnbound,
++		AuditActionSystemUserOIDCIdentityBindingRequested,
++		AuditActionSystemUserOIDCIdentityUnbindingRequested,
  		AuditActionSystemUserCreated,
  		AuditActionSystemQueueTaskRetried,
  		AuditActionSystemQueueTaskDeleted,
-@@ -173,6 +179,8 @@ func TestAuditAction_SystemWireValues(t *testing.T) {
+@@ -173,6 +185,10 @@ func TestAuditAction_SystemWireValues(t *testing.T) {
  		{AuditActionSystemAdminPromoted, "system.admin_promoted"},
  		{AuditActionSystemAdminRevoked, "system.admin_revoked"},
  		{AuditActionSystemUserPasswordReset, "system.user_password_reset"},
 +		{AuditActionSystemUserOIDCIdentityBound, "system.user_oidc_identity_bound"},
 +		{AuditActionSystemUserOIDCIdentityUnbound, "system.user_oidc_identity_unbound"},
++		{AuditActionSystemUserOIDCIdentityBindingRequested, "system.user_oidc_identity_binding_requested"},
++		{AuditActionSystemUserOIDCIdentityUnbindingRequested, "system.user_oidc_identity_unbinding_requested"},
  		{AuditActionSystemUserCreated, "system.user_created"},
  		{AuditActionSystemQueueTaskRetried, "system.queue_task_retried"},
  		{AuditActionSystemQueueTaskDeleted, "system.queue_task_deleted"},
