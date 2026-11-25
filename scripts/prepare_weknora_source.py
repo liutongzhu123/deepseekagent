@@ -20,7 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_SHA256 = "183b0538d895b85906da030b8b62a93bd884cd1967d10bcb38020b549b3bc5cd"
 MANIFEST_SHA256 = "3a05e5efc4f5e1a18e5b3233fc96c752e35548339400fda20573804ae553b26e"
 MANIFEST = ROOT / "ci/upstream-v0.9.1.json"
-PATCH = ROOT / "weknora/patches/0001-cnz-explicit-oidc-identity.patch"
+PATCHES = (
+    ROOT / "weknora/patches/0001-cnz-explicit-oidc-identity.patch",
+    ROOT / "weknora/patches/0002-rustup-mirror.patch",
+)
 
 
 def sha256(path: Path) -> str:
@@ -91,10 +94,11 @@ def main() -> int:
         raise SystemExit(f"source manifest mismatch: missing={len(missing)} extra={len(extra)} changed={len(changed)}")
 
     subprocess.run(["git", "init", "-q"], cwd=source, check=True)
-    subprocess.run(["git", "apply", "--check", str(PATCH)], cwd=source, check=True)
-    subprocess.run(["git", "apply", str(PATCH)], cwd=source, check=True)
+    for patch in PATCHES:
+        subprocess.run(["git", "apply", "--check", str(patch)], cwd=source, check=True)
+        subprocess.run(["git", "apply", str(patch)], cwd=source, check=True)
     print(f"verified upstream commit={manifest['commit']} files={len(actual)}")
-    print(f"applied patch={PATCH.name}")
+    print(f"applied patches={','.join(patch.name for patch in PATCHES)}")
     print(f"prepared source={source}")
     return 0
 

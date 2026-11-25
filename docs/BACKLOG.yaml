@@ -976,7 +976,7 @@ tasks:
       - 有 Go 测试、镜像构建、健康检查、合成知识样例检索/引用、OIDC 账号绑定与权限拒绝、备份恢复和回滚验收证据
       - 四角色名称保持新客户/小微客户、业务经理、系统管理员、技术部门；reviewer 的历史权限逐账号确认前不自动映射
     files: [weknora/, ci/upstream-v0.9.1.json, scripts/prepare_weknora_source.py, .github/workflows/p0-ci.yml, docs/weknora-source-baseline-and-web-unification-2026-11-24.md]
-    note: PR #238 已于 2026-11-25 合并到 main（1be9d0c），Agent/Python/Go 三项 CI 均通过，P0 本地回归 1137 passed、41 skipped；testkb DNS 指向 101.201.74.10，SSH 只读确认 yunan-persist 健康、备份校验通过、18082/39301 空闲。合并源码已传入 /opt/cnz-weknora 并完成 0600 随机密钥及 Compose 隔离检查；本机无 Docker daemon，目标机直连 Docker Hub 不通。app 初次构建发现 Dockerfile 先连慢速官方 Debian 源再切换镜像，6 分钟无 apt 进展后已终止；新建 build-mirror 修复待审 PR，将镜像切换移至首次 apt 前，并注入已实测可达的 Tsinghua apt、goproxy.cn、npmmirror 代理；未启动服务容器，yunan-persist 未改动
+    note: PR #238（身份适配，1be9d0c）和 PR #239（apt 镜像顺序，5160e17）已合并 main，Agent/Python/Go CI 均通过，P0 本地回归 1137 passed、41 skipped；testkb 备份校验通过，隔离栈端口 18082/39301 空闲。目标机 app 构建已完成 Debian apt、Go 模块和 DuckDB 阶段；两个 Rustup 安装点直连 static.rust-lang.org 超过 6 分钟无进度，已安全终止；未启动任何 CNZ 容器，yunan-persist 未改动。当前工作为将两处 Rustup 安装器及后续工具链下载统一改走显式配置的 rsproxy 镜像，待 CI 与合并后再重试构建。
 
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）
