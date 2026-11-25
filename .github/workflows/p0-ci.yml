@@ -9,7 +9,9 @@ on:
       - "ci/upstream-v0.9.1.json"
       - "scripts/prepare_weknora_source.py"
       - "scripts/deploy_cnz_weknora_testkb.py"
+      - "scripts/upgrade_cnz_weknora_frontend.py"
       - "tests/test_deploy_cnz_weknora_testkb.py"
+      - "tests/test_upgrade_cnz_weknora_frontend.py"
       - ".github/workflows/p0-ci.yml"
   pull_request:
     branches: [main]
@@ -19,7 +21,9 @@ on:
       - "ci/upstream-v0.9.1.json"
       - "scripts/prepare_weknora_source.py"
       - "scripts/deploy_cnz_weknora_testkb.py"
+      - "scripts/upgrade_cnz_weknora_frontend.py"
       - "tests/test_deploy_cnz_weknora_testkb.py"
+      - "tests/test_upgrade_cnz_weknora_frontend.py"
       - ".github/workflows/p0-ci.yml"
   workflow_dispatch:
 
@@ -77,7 +81,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Run testkb deployment safety tests
-        run: python -m pytest -q tests/test_deploy_cnz_weknora_testkb.py
+        run: python -m pytest -q tests/test_deploy_cnz_weknora_testkb.py tests/test_upgrade_cnz_weknora_frontend.py
 
   weknora-oidc-identity:
     name: WeKnora OIDC identity patch (Go 1.26)
@@ -95,6 +99,17 @@ jobs:
 
       - name: Verify source manifest and apply CNZ patch
         run: python3 scripts/prepare_weknora_source.py "$RUNNER_TEMP/weknora-v0.9.1.tar.gz" "$RUNNER_TEMP/cnz-weknora"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run CNZ WeKnora feature profile tests
+        working-directory: ${{ runner.temp }}/cnz-weknora/WeKnora-0.9.1/frontend
+        run: |
+          npm ci
+          npm test -- src/config/cnzFeatureProfile.test.ts
+          npm run build
 
       - name: Run identity-binding and OIDC verification tests
         working-directory: ${{ runner.temp }}/cnz-weknora/WeKnora-0.9.1
