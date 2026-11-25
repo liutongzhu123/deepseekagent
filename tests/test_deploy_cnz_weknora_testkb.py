@@ -80,7 +80,11 @@ def test_f4_release_directory_is_never_overwritten():
 def test_f5_transfer_uses_temporary_release_then_cleans_failures():
     assert 'incoming="$root/.incoming-$sha"' in deploy.CONFIGURE
     assert 'mv -T "$incoming" "$release"' in deploy.CONFIGURE
-    assert "tar -xzf - -C" in deploy.stream_bundle.__code__.co_consts
+    assert any(
+        "tar -xzf - -C" in value
+        for value in deploy.stream_bundle.__code__.co_consts
+        if isinstance(value, str)
+    )
     assert 'rm -rf --' in deploy.cleanup_incoming.__code__.co_consts
 
 
