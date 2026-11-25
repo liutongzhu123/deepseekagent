@@ -199,7 +199,7 @@ def test_project_isolation_for_standards_and_quotes(env):
     missing_project = alice.post(
         "/api/v1/standards/parse", files={"file": ("a.pdf", b"x")}
     )
-    assert missing_project.status_code == 400
+    assert missing_project.status_code == 403
 
     quotes = env.tmp / "quotes" / "q_20260101000000_abcdef"
     quotes.mkdir(parents=True)
@@ -229,7 +229,7 @@ def test_password_change_invalidates_existing_sessions(env):
     assert _login(TestClient(main.app), "dana", "dana-pass-2").status_code == 200
 
 
-def test_kb_stats_filters_projects(env):
+def test_kb_stats_are_admin_only_and_cover_all_projects(env):
     auth.create_user("root", "root-pass-1", role="admin")
     auth.create_user("alice", "alice-pass-1", role="reviewer", projects=["P-A"])
     parsed = {
@@ -248,9 +248,12 @@ def test_kb_stats_filters_projects(env):
 
     alice = TestClient(main.app)
     assert _login(alice, "alice", "alice-pass-1").status_code == 200
-    stats = alice.get("/api/v1/kb/stats").json()
-    assert stats["standard_count"] == 1
-    assert [item["id"] for item in stats["standards"]] == [record_a["id"]]
+    assert alice.get("/api/v1/kb/stats").status_code == 403
+    root = TestClient(main.app)
+    assert _login(root, "root", "root-pass-1").status_code == 200
+    stats = root.get("/api/v1/kb/stats").json()
+    assert stats["standard_count"] == 2
+    assert {item["id"] for item in stats["standards"]} == {record_a["id"], record_b["id"]}
 
 
 def test_provider_seam(env, monkeypatch):

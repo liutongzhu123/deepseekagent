@@ -463,7 +463,12 @@ def test_audit_and_quote_endpoints_use_saved_config(env, monkeypatch, tmp_path):
     assert admin.put("/api/v1/admin/config/quote", json=quote_section).status_code == 200
     source = tmp_path / "DVP.xlsx"
     _dvp(source)
-    response = admin.post(
+    auth.create_user("quote-manager", "manager-pass-1", role="business_manager")
+    manager = TestClient(main.app)
+    assert manager.post(
+        "/api/v1/auth/login", json={"username": "quote-manager", "password": "manager-pass-1"}
+    ).status_code == 200
+    response = manager.post(
         "/api/v1/quotes/parse", files={"file": ("DVP.xlsx", source.read_bytes())}
     )
     assert response.status_code == 200

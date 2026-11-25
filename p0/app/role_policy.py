@@ -77,7 +77,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "schedule:read",
             "schedule:manage",
             "rush-rule:manage",
-            "standard:parse",
             "standard:read",
             "standard:ask",
         }

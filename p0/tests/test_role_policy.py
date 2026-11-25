@@ -52,7 +52,7 @@ def test_technical_role_can_read_rules_and_manage_schedule_and_rush_rules():
     assert role_policy.has_permission(user, "rules:read")
     assert role_policy.has_permission(user, "schedule:manage")
     assert role_policy.has_permission(user, "rush-rule:manage")
-    assert role_policy.has_permission(user, "standard:parse")
+    assert not role_policy.has_permission(user, "standard:parse")
     assert not role_policy.has_permission(user, "config:manage:discount")
     assert not role_policy.has_permission(user, "crm:quote:write")
     assert not role_policy.has_permission(user, "standard:review")

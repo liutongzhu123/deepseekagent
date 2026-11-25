@@ -113,7 +113,10 @@ def test_draft_is_versioned_comparable_and_never_changes_live_rules(monkeypatch,
     assert "whitelist_match" not in replay.json()["candidates"]
 
     changed_live = dict(after["business"])
-    changed_live["rush"] = {**changed_live["rush"], "fee_rate": 7}
+    changed_live["rush"] = {
+        **changed_live["rush"],
+        "fee_rate": changed_live["rush"]["fee_rate"] + 0.01,
+    }
     assert client.put("/api/v1/admin/config/business", json=changed_live).status_code == 200
     stale = client.get(f"/api/v1/admin/config/business/drafts/{draft['draft_id']}/compare")
     assert stale.status_code == 200
