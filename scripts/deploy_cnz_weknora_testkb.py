@@ -84,21 +84,28 @@ DEPLOY = r'''set -Eeuo pipefail
 sha="$1"; release="/opt/cnz-weknora/releases/$sha"; project="$release/source/WeKnora-0.9.1"
 compose() { docker compose -p cnz-weknora --project-directory "$project" --env-file "$project/.env" -f "$project/docker-compose.yml" -f "$release/docker-compose.testkb.override.yml" "$@"; }
 STARTED=0
+phase=compose_contract
 rollback() {
   code=$?
-  if [ "$code" -ne 0 ] && [ "$STARTED" = 1 ]; then
-    compose down --remove-orphans >/dev/null 2>&1 || true
-    echo ROLLBACK_STOPPED_CNZ_VOLUMES_PRESERVED
+  if [ "$code" -ne 0 ]; then
+    echo "DEPLOY_FAILED_PHASE=$phase"
+    if [ "$STARTED" = 1 ]; then
+      compose down --remove-orphans >/dev/null 2>&1 || true
+      echo ROLLBACK_STOPPED_CNZ_VOLUMES_PRESERVED
+    fi
   fi
   exit "$code"
 }
 trap rollback EXIT
 compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"'
 echo COMPOSE_CONTRACT_OK
+phase=image_build
 compose build app frontend docreader
 echo IMAGES_BUILT
 STARTED=1
+phase=service_start
 compose up -d
+phase=health_check
 ready=0
 for _ in $(seq 1 90); do
   app="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
@@ -210,7 +217,11 @@ def deploy(target,upstream=None):
                 cleanup_incoming(target,sha)
                 raise RuntimeError("F5: release verification/environment setup failed")
         done=remote(target,DEPLOY,sha,7200)
-        if done.returncode: raise RuntimeError("F6/F7/F8: build/start/health failed; volumes preserved")
+        if done.returncode:
+            output=done.stdout+done.stderr
+            match=re.search(rb"DEPLOY_FAILED_PHASE=([a-z_]+)",output)
+            phase=match.group(1).decode("ascii") if match else "unknown"
+            raise RuntimeError(f"F6/F7/F8: deployment failed during {phase}; volumes preserved")
         markers=(b"COMPOSE_CONTRACT_OK",b"IMAGES_BUILT",b"HEALTH_OK",f"ACTIVE_RELEASE={sha}".encode())
         if any(m not in done.stdout for m in markers): raise RuntimeError("F9: completion marker missing")
         print(f"deployed main={sha} target={target}; app/UI/PostgreSQL/Redis healthy")
