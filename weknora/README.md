@@ -40,6 +40,10 @@ docker compose -p cnz-weknora \
 
 历史 reviewer 只对原有报告审核/标准复核任务保留隔离；用户已选择按账号确认，确认前不自动映射到中汽业务经理、技术人员或管理员。中汽工作台的四角色授权由其业务服务执行，WeKnora 内置角色仍用于知识资源自身的访问控制。管理员绑定/解除 OIDC 身份前先写入一条不含 subject 的请求审计；审计存储不可用时返回 503 并拒绝变更，成功后再记录完成事件。
 
-## 发布门槛
+## testkb 专用部署器
 
-PR #238（身份适配）和 PR #239（构建镜像顺序）已合并，GitHub Agent/Python/Go CI 通过。testkb 已准备隔离配置、独立随机密码和已校验备份，尚未启动中汽容器。目标机 app 镜像构建已通过 Debian apt、Go 模块和 DuckDB 下载阶段，当前在两处 Rustup 工具链安装阶段因直连静态分发站无进度而终止；Rustup 镜像配置修复正在开发。待镜像构建成功后，仍须完成 Compose 渲染、loopback 健康检查、独立 PostgreSQL/文件/Redis 数据卷验证、合成资料导入/检索/引用、OIDC 账号绑定和权限拒绝测试，以及停止与回滚演练。绝不以 `docker compose down -v` 清理现存 `yunan-persist`。
+`scripts/deploy_cnz_weknora_testkb.py --target yunan-101` 是首次安装部署器，只能从与 `origin/main` 完全一致且干净的检出运行。脚本会重新校验 WeKnora 官方归档和逐文件清单、应用本仓补丁，再通过 SSH 流式传输到新的版本目录；它不会复制或读取客户知识库资料。运行前目标机必须能以 SSH alias `yunan-101` 登录并使用 Docker，已有的 `/opt/cnz-weknora/active/WeKnora-0.9.1/.env` 必须为 `0600`，testkb 备份校验必须通过，五个 `yunan-persist` 容器必须健康，`/opt` 至少空余 30 GiB。
+
+脚本拒绝覆盖已有版本、发现旧 CNZ 容器/卷或已存在的 active 指针即停止。构建镜像通过后才启动 CNZ Compose 服务；服务健康检查通过后才原子切换 `/opt/cnz-weknora/active-release`。失败时只停止 `cnz-weknora` 项目并保留其数据卷；任何时候都不执行 `down -v`，不触碰 `yunan-persist`。该脚本明确只支持首次安装和同一 main SHA 的无数据重试，**不能用于升级或数据库回滚**。
+
+部署后仍需按合成资料完成登录/管理员初始化、上传解析、检索引用、OIDC 显式账号绑定及越权拒绝、容器/数据卷隔离核验和备份恢复演练。注册保持关闭，未配置可信 IdP 前 OIDC 保持关闭；因此健康检查成功仅表示运行栈启动，不代表 SSO 或业务端到端验收完成。reviewer 逐账号确认前不迁移任何历史审核权限。

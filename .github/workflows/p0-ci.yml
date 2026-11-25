@@ -8,6 +8,8 @@ on:
       - "weknora/**"
       - "ci/upstream-v0.9.1.json"
       - "scripts/prepare_weknora_source.py"
+      - "scripts/deploy_cnz_weknora_testkb.py"
+      - "tests/test_deploy_cnz_weknora_testkb.py"
       - ".github/workflows/p0-ci.yml"
   pull_request:
     branches: [main]
@@ -16,6 +18,8 @@ on:
       - "weknora/**"
       - "ci/upstream-v0.9.1.json"
       - "scripts/prepare_weknora_source.py"
+      - "scripts/deploy_cnz_weknora_testkb.py"
+      - "tests/test_deploy_cnz_weknora_testkb.py"
       - ".github/workflows/p0-ci.yml"
   workflow_dispatch:
 
@@ -71,6 +75,9 @@ jobs:
       - name: Run pytest
         working-directory: p0
         run: python -m pytest -q
+
+      - name: Run testkb deployment safety tests
+        run: python -m pytest -q tests/test_deploy_cnz_weknora_testkb.py
 
   weknora-oidc-identity:
     name: WeKnora OIDC identity patch (Go 1.26)
