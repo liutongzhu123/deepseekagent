@@ -33,7 +33,7 @@ def valid_config():
             "docreader": {"container_name": "cnz-weknora-docreader",
                 "build": {"args": {"CNZ_DOCKERHUB_MIRROR_ARG": "docker.m.daocloud.io"}}},
             "postgres": {"container_name": "cnz-weknora-postgres"},
-            "redis": {"container_name": "cnz-weknora-redis"},
+            "redis": {"container_name": "cnz-weknora-redis", "healthcheck": {"test": ["CMD", "redis-cli", "ping"]}},
         },
         "volumes": {name: {} for name in ("data-files", "docreader-tmp", "postgres-data", "redis-data")},
     }
@@ -110,6 +110,18 @@ def test_f3_preflight_requires_backup_health_and_free_space():
     assert "yunan-persist" in deploy.PREFLIGHT and "-eq 5" in deploy.PREFLIGHT
     assert "31457280" in deploy.PREFLIGHT
     assert "cnz-weknora" in deploy.PREFLIGHT
+    assert "PROJECT_VOLUMES_REUSED" in deploy.PREFLIGHT
+    assert "com.docker.compose.project" in deploy.PREFLIGHT
+    assert "com.docker.compose.volume" in deploy.PREFLIGHT
+    assert "test \"$release_present\" -eq 1" in deploy.PREFLIGHT
+
+
+def test_f3_preflight_only_reuses_exact_volumes_from_same_failed_release():
+    assert "cnz-weknora_data-files" in deploy.PREFLIGHT
+    assert "cnz-weknora_docreader-tmp" in deploy.PREFLIGHT
+    assert "cnz-weknora_postgres-data" in deploy.PREFLIGHT
+    assert "cnz-weknora_redis-data" in deploy.PREFLIGHT
+    assert "test \"$existing_volumes\" = \"$expected_volumes\"" in deploy.PREFLIGHT
 
 
 def test_f4_release_directory_is_never_overwritten():
@@ -146,6 +158,10 @@ def test_f6_compose_rejects_docker_socket_registration_or_oidc():
     config = valid_config()
     config["services"]["app"]["volumes"] = ["/var/run/docker.sock:/var/run/docker.sock"]
     with pytest.raises(ValueError, match="F6"):
+        deploy.validate_compose(config)
+    config = valid_config()
+    config["services"]["redis"].pop("healthcheck")
+    with pytest.raises(ValueError, match="Redis healthcheck"):
         deploy.validate_compose(config)
     config = valid_config()
     config["services"]["app"]["environment"]["DISABLE_REGISTRATION"] = "false"
