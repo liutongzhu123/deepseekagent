@@ -8,7 +8,7 @@
 - commit：`71c32af9273482e0dad013d0e3bea2f4d719516c`
 - 官方归档 SHA-256：`183b0538d895b85906da030b8b62a93bd884cd1967d10bcb38020b549b3bc5cd`
 - 来源清单：[`ci/upstream-v0.9.1.json`](../ci/upstream-v0.9.1.json)
-- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)
+- 本项目补丁：[`patches/0001-cnz-explicit-oidc-identity.patch`](patches/0001-cnz-explicit-oidc-identity.patch)、[`patches/0002-rustup-mirror.patch`](patches/0002-rustup-mirror.patch)
 
 ## 准备源码
 
@@ -18,11 +18,11 @@
 python3 scripts/prepare_weknora_source.py /path/to/v0.9.1.tar.gz /path/to/new-build-dir
 ```
 
-脚本拒绝不匹配的归档、损坏或内容不同的清单、危险归档路径，以及非空目标目录；它逐个验证 6,441 个文件后才执行项目补丁。GitHub Actions 也会运行这条准备路径及 OIDC 测试。
+脚本拒绝不匹配的归档、损坏或内容不同的清单、危险归档路径，以及非空目标目录；它逐个验证 6,441 个文件后，按顺序检查并应用两个项目补丁。GitHub Actions 也会运行这条准备路径及 OIDC 测试。
 
 ### 构建网络
 
-镜像构建要显式设置 Dockerfile 支持的 Debian 镜像主机名、Go 模块代理及 docreader 的 Debian 镜像 URL。`APK_MIRROR_ARG` 不带 scheme，`APT_MIRROR` 带 `http://`；选择 HTTP 镜像可在精简基础镜像安装 CA 证书之前下载 apt 索引。构建参数是公开镜像地址，不含凭据。Compose override 将 `GOPROXY_ARG` 传给 app 构建。
+镜像构建要显式设置 Dockerfile 支持的 Debian 镜像主机名、Go 模块代理、Rustup 分发镜像及 docreader 的 Debian 镜像 URL。`APK_MIRROR_ARG` 不带 scheme，`APT_MIRROR` 带 `http://`；选择 HTTP 镜像可在精简基础镜像安装 CA 证书之前下载 apt 索引。`RUSTUP_MIRROR_ARG` 指向提供 `rustup-init.sh`、Rust 工具链和组件的 Rustup 镜像。构建参数是公开镜像地址，不含凭据。Compose override 将 Debian、Go、Rustup 参数传给 app 构建。
 
 ```sh
 docker compose -p cnz-weknora \
@@ -30,7 +30,7 @@ docker compose -p cnz-weknora \
   build app frontend docreader
 ```
 
-在 `.env` 中设置 `APK_MIRROR_ARG`、`APT_MIRROR`、`GOPROXY_ARG`、`NPM_REGISTRY` 后运行；测试环境模板给出已验证的镜像端点示例。`.env` 仍必须包含独立强随机数据库/Redis 密码并保持 `0600`。
+在 `.env` 中设置 `APK_MIRROR_ARG`、`APT_MIRROR`、`GOPROXY_ARG`、`NPM_REGISTRY`、`RUSTUP_MIRROR_ARG` 后运行；测试环境模板给出已验证的镜像端点示例。`.env` 仍必须包含独立强随机数据库/Redis 密码并保持 `0600`。
 
 ## testkb 环境边界
 
@@ -42,4 +42,4 @@ docker compose -p cnz-weknora \
 
 ## 发布门槛
 
-PR #238 是草稿。GitHub CI 已确认 P0 全量回归通过（Python 3.12）；Go CI 揭示补丁新增测试少一个闭合括号，本地已修复并将重新提交。此前 P0 本地回归为 1137 passed、41 skipped，WeKnora 锁定源校验与补丁应用为 6,441 个文件通过。GitHub Actions 是当前可用的 Go 工具链验证入口；本机没有可用 Docker daemon，部署尚未开始。当前 testkb DNS 记录已经核验为 `101.201.74.10`，SSH 连接确认宿主机及 `yunan-persist` 运行中；独立运行栈的端口 18082、39301 未占用，现有备份校验和复验通过。部署前仍须完成 Go CI、Docker Compose 渲染与镜像构建、loopback 健康检查、独立 PostgreSQL/文件/Redis 数据卷验证、样例资料导入/检索/引用、OIDC 账号绑定和权限拒绝测试，以及停止与回滚演练。绝不以 `docker compose down -v` 清理现存 `yunan-persist`。
+PR #238（身份适配）和 PR #239（构建镜像顺序）已合并，GitHub Agent/Python/Go CI 通过。testkb 已准备隔离配置、独立随机密码和已校验备份，尚未启动中汽容器。目标机 app 镜像构建已通过 Debian apt、Go 模块和 DuckDB 下载阶段，当前在两处 Rustup 工具链安装阶段因直连静态分发站无进度而终止；Rustup 镜像配置修复正在开发。待镜像构建成功后，仍须完成 Compose 渲染、loopback 健康检查、独立 PostgreSQL/文件/Redis 数据卷验证、合成资料导入/检索/引用、OIDC 账号绑定和权限拒绝测试，以及停止与回滚演练。绝不以 `docker compose down -v` 清理现存 `yunan-persist`。

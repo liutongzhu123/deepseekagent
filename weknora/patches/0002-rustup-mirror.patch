@@ -1,0 +1,45 @@
+diff --git a/docker/Dockerfile.app b/docker/Dockerfile.app
+index de93fae..1dc09d9 100644
+--- a/docker/Dockerfile.app
++++ b/docker/Dockerfile.app
+@@ -3,6 +3,7 @@ FROM --platform=$TARGETPLATFORM node:24-bookworm-slim@sha256:ba849c60be29959425b
+ WORKDIR /build
+ # Use the same optional Debian mirror as the Go builder and runtime stages.
+ ARG APK_MIRROR_ARG
++ARG RUSTUP_MIRROR_ARG=https://rsproxy.cn
+ # Route the first package-index request through the configured mirror. The
+ # mirror setting is a hostname without a scheme; HTTP works before this minimal
+ # base image has CA certificates installed.
+@@ -13,8 +14,9 @@ RUN if [ -n "$APK_MIRROR_ARG" ]; then \
+     apt-get install -y --no-install-recommends git python3 ca-certificates curl build-essential cmake pkg-config && \
+     rm -rf /var/lib/apt/lists/*
+ ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
++ENV RUSTUP_UPDATE_ROOT=${RUSTUP_MIRROR_ARG}/rustup RUSTUP_DIST_SERVER=${RUSTUP_MIRROR_ARG}
+ ENV PATH=/usr/local/cargo/bin:$PATH
+-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
++RUN curl --proto '=https' --tlsv1.2 -sSf ${RUSTUP_MIRROR_ARG}/rustup-init.sh | sh -s -- -y --profile minimal --default-toolchain stable
+ COPY scripts/build_browserskill.sh scripts/browserskill-release.json ./scripts/
+ ARG TARGETOS
+ ARG TARGETARCH
+@@ -30,6 +32,7 @@ ARG GOPRIVATE_ARG
+ ARG GOPROXY_ARG
+ ARG GOSUMDB_ARG=off
+ ARG APK_MIRROR_ARG
++ARG RUSTUP_MIRROR_ARG=https://rsproxy.cn
+ 
+ # 设置Go环境变量
+ ENV GOPRIVATE=${GOPRIVATE_ARG}
+@@ -72,11 +75,12 @@ ENV BUILD_TIME=${BUILD_TIME_ARG}
+ # ~1 GB of build-stage layers).
+ ARG WITH_ANYDOC=1
+ ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
++ENV RUSTUP_UPDATE_ROOT=${RUSTUP_MIRROR_ARG}/rustup RUSTUP_DIST_SERVER=${RUSTUP_MIRROR_ARG}
+ ENV PATH=/usr/local/cargo/bin:$PATH
+ RUN --mount=type=cache,target=/usr/local/cargo/registry \
+     --mount=type=cache,target=/usr/local/cargo/git \
+     if [ "$WITH_ANYDOC" = "1" ]; then \
+-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
++        curl --proto '=https' --tlsv1.2 -sSf ${RUSTUP_MIRROR_ARG}/rustup-init.sh \
+             | sh -s -- -y --profile minimal --default-toolchain stable && \
+         ./scripts/build-anydoc-lib.sh; \
+     fi
