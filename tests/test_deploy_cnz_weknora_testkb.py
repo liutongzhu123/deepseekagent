@@ -113,7 +113,8 @@ def test_f3_preflight_requires_backup_health_and_free_space():
     assert "PROJECT_VOLUMES_REUSED" in deploy.PREFLIGHT
     assert "com.docker.compose.project" in deploy.PREFLIGHT
     assert "com.docker.compose.volume" in deploy.PREFLIGHT
-    assert "test \"$release_present\" -eq 1" in deploy.PREFLIGHT
+    assert "fingerprint_source \"$release/source/WeKnora-0.9.1\"" in deploy.PREFLIGHT
+    assert "matching_release=1" in deploy.PREFLIGHT
 
 
 def test_f3_preflight_only_reuses_exact_volumes_from_same_failed_release():
@@ -122,6 +123,24 @@ def test_f3_preflight_only_reuses_exact_volumes_from_same_failed_release():
     assert "cnz-weknora_postgres-data" in deploy.PREFLIGHT
     assert "cnz-weknora_redis-data" in deploy.PREFLIGHT
     assert "test \"$existing_volumes\" = \"$expected_volumes\"" in deploy.PREFLIGHT
+
+
+def test_source_fingerprint_ignores_local_env_but_tracks_source_and_mode(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    binary = source / "tool.sh"
+    binary.write_text("#!/bin/sh\necho one\n", encoding="utf-8")
+    binary.chmod(0o755)
+    env = source / ".env"
+    env.write_text("PRIVATE=first\n", encoding="utf-8")
+    initial = deploy.source_fingerprint(source)
+    env.write_text("PRIVATE=second\n", encoding="utf-8")
+    assert deploy.source_fingerprint(source) == initial
+    binary.write_text("#!/bin/sh\necho two\n", encoding="utf-8")
+    changed_content = deploy.source_fingerprint(source)
+    assert changed_content != initial
+    binary.chmod(0o644)
+    assert deploy.source_fingerprint(source) != changed_content
 
 
 def test_f4_release_directory_is_never_overwritten():

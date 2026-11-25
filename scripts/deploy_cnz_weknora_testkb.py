@@ -14,7 +14,7 @@ Unit tests must cover each failure. First-install only: existing CNZ containers 
 volumes abort; database upgrade/rollback is intentionally out of scope.
 """
 from __future__ import annotations
-import argparse, re, subprocess, sys, tarfile, tempfile
+import argparse, hashlib, os, re, stat, subprocess, sys, tarfile, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +27,28 @@ CONTAINERS = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend",
 REMOTE_ROOT = "/opt/cnz-weknora"
 
 PREFLIGHT = r'''set -euo pipefail
-sha="$1"; root=/opt/cnz-weknora; release="$root/releases/$sha"; incoming="$root/.incoming-$sha"
+sha="$1"; source_fingerprint="$2"; root=/opt/cnz-weknora; release="$root/releases/$sha"; incoming="$root/.incoming-$sha"
+fingerprint_source() {
+  python3 - "$1" <<'PY'
+import hashlib, os, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+h = hashlib.sha256()
+for path in sorted(root.rglob("*"), key=lambda p: p.relative_to(root).as_posix()):
+    rel = path.relative_to(root).as_posix()
+    if rel == ".env" or ".git" in path.relative_to(root).parts:
+        continue
+    mode = stat.S_IMODE(path.lstat().st_mode)
+    if path.is_symlink(): kind, payload = b"L", os.readlink(path).encode()
+    elif path.is_dir(): kind, payload = b"D", b""
+    elif path.is_file(): kind, payload = b"F", path.read_bytes()
+    else: raise SystemExit(f"unsupported source entry: {rel}")
+    h.update(kind + mode.to_bytes(4, "big") + rel.encode() + b"\0")
+    h.update(len(payload).to_bytes(8, "big"))
+    h.update(payload)
+print(h.hexdigest())
+PY
+}
 test -f /opt/cnz-weknora/active/WeKnora-0.9.1/.env
 test "$(stat -c %a /opt/cnz-weknora/active/WeKnora-0.9.1/.env)" = 600
 (cd /var/backups/testkb-yunan-persist-20261124 && sha256sum -c SHA256SUMS >/dev/null)
@@ -38,17 +59,29 @@ if [ -e "$release" ] || [ -L "$release" ]; then
   test -d "$release" && test ! -L "$release"
   grep -Fxq "$sha" "$release/DEPLOYED_FROM_MAIN"
   test "$(stat -c %a "$release/source/WeKnora-0.9.1/.env")" = 600
-  release_present=1
+  test "$(fingerprint_source "$release/source/WeKnora-0.9.1")" = "$source_fingerprint"
   echo RELEASE_PRESENT
 else
-  release_present=0
   echo RELEASE_NEW
 fi
 expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data | sort)"
 existing_volumes="$(docker volume ls -q --filter name=cnz-weknora | sort)"
 if [ -n "$existing_volumes" ]; then
-  test "$release_present" -eq 1
   test "$existing_volumes" = "$expected_volumes"
+  matching_release=0
+  for previous in "$root"/releases/*; do
+    [ -d "$previous" ] && [ ! -L "$previous" ] || continue
+    [ -d "$previous/source/WeKnora-0.9.1" ] && [ ! -L "$previous/source/WeKnora-0.9.1" ] || continue
+    [ -f "$previous/DEPLOYED_FROM_MAIN" ] && [ ! -L "$previous/DEPLOYED_FROM_MAIN" ] || continue
+    previous_sha="$(basename "$previous")"
+    grep -Fxq "$previous_sha" "$previous/DEPLOYED_FROM_MAIN" || continue
+    [ "$(stat -c %a "$previous/source/WeKnora-0.9.1/.env")" = 600 ] || continue
+    if [ "$(fingerprint_source "$previous/source/WeKnora-0.9.1")" = "$source_fingerprint" ]; then
+      matching_release=1
+      break
+    fi
+  done
+  test "$matching_release" -eq 1
   while IFS= read -r volume; do
     logical="${volume#cnz-weknora_}"
     test "$(docker volume inspect -f '{{ index .Labels "com.docker.compose.project" }}' "$volume")" = cnz-weknora
@@ -144,6 +177,20 @@ trap - EXIT
 def run(args: list[str], timeout: int = 300) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
 
+def source_fingerprint(root: Path) -> str:
+    digest=hashlib.sha256()
+    for path in sorted(root.rglob("*"), key=lambda p:p.relative_to(root).as_posix()):
+        rel=path.relative_to(root)
+        if rel.as_posix()==".env" or ".git" in rel.parts: continue
+        mode=stat.S_IMODE(path.lstat().st_mode)
+        if path.is_symlink(): kind,payload=b"L",os.readlink(path).encode()
+        elif path.is_dir(): kind,payload=b"D",b""
+        elif path.is_file(): kind,payload=b"F",path.read_bytes()
+        else: raise ValueError(f"unsupported source entry: {rel}")
+        digest.update(kind+mode.to_bytes(4,"big")+rel.as_posix().encode()+b"\0")
+        digest.update(len(payload).to_bytes(8,"big")); digest.update(payload)
+    return digest.hexdigest()
+
 def main_sha(repo: Path = ROOT) -> str:
     branch=run(["git","-C",str(repo),"branch","--show-current"])
     if branch.returncode or branch.stdout.strip()!="main":
@@ -194,11 +241,13 @@ def validate_compose(config: dict) -> None:
     if s["redis"].get("healthcheck",{}).get("test") != ["CMD", "redis-cli", "ping"]:
         raise ValueError("F6: Redis healthcheck is required")
 
-def remote(target,script,sha,timeout=300):
-    return subprocess.run(["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",target,"bash","-s","--",sha],
+def remote(target,script,sha,timeout=300,source_fingerprint_value=None):
+    args=["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",target,"bash","-s","--",sha]
+    if source_fingerprint_value is not None: args.append(source_fingerprint_value)
+    return subprocess.run(args,
                           input=script.encode(),capture_output=True,timeout=timeout,check=False)
 
-def make_bundle(sha,upstream,work):
+def make_bundle(sha,upstream,work) -> tuple[Path, str]:
     prepared=work/"prepared"
     p=run([sys.executable,str(ROOT/"scripts/prepare_weknora_source.py"),str(upstream),str(prepared)],600)
     if p.returncode: raise RuntimeError("F2: pinned upstream verification or project patch failed")
@@ -212,7 +261,7 @@ def make_bundle(sha,upstream,work):
         tar.add(source,arcname="source/WeKnora-0.9.1",filter=exclude_git)
         tar.add(ROOT/"weknora/docker-compose.testkb.override.yml",arcname="docker-compose.testkb.override.yml")
         tar.add(meta,arcname="DEPLOYED_FROM_MAIN")
-    return result
+    return result, source_fingerprint(source)
 
 def stream_bundle(target,sha,path):
     incoming=f"{REMOTE_ROOT}/.incoming-{sha}"
@@ -241,8 +290,8 @@ def deploy(target,upstream=None):
             upstream=work/"weknora-v0.9.1.tar.gz"
             dl=run(["curl","--fail","--location","--silent","--show-error","--connect-timeout","15","--max-time","300",ARCHIVE_URL,"--output",str(upstream)],320)
             if dl.returncode: raise RuntimeError("F2: official source download failed")
-        packed=make_bundle(sha,upstream,work)
-        check=remote(target,PREFLIGHT,sha,60)
+        packed,source_fingerprint_value=make_bundle(sha,upstream,work)
+        check=remote(target,PREFLIGHT,sha,60,source_fingerprint_value)
         if check.returncode or b"PREFLIGHT_OK" not in check.stdout: raise RuntimeError("F3/F4: safety preflight failed")
         if b"PREFLIGHT_OK" not in check.stdout: raise RuntimeError("F3: preflight completion marker missing")
         if b"RELEASE_PRESENT" not in check.stdout:
