@@ -16,3 +16,8 @@ services:
 
   redis:
     container_name: cnz-weknora-redis
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
