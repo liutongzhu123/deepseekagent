@@ -75,6 +75,8 @@ set_env() {
 set_env VERSION_ARG "cnz-main-$sha"
 set_env COMMIT_ID_ARG "$sha"
 set_env BUILD_TIME_ARG "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+set_env GOPROXY_ARG "https://goproxy.cn"
+set_env CNZ_DOCKERHUB_MIRROR_ARG "docker.m.daocloud.io"
 test "$(stat -c %a "$env_file")" = 600
 mv -T "$incoming" "$release"
 echo RELEASE_EXTRACTED
@@ -97,7 +99,7 @@ rollback() {
   exit "$code"
 }
 trap rollback EXIT
-compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"'
+compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"'
 echo COMPOSE_CONTRACT_OK
 phase=image_build
 compose build app frontend docreader
@@ -150,6 +152,13 @@ def validate_compose(config: dict) -> None:
     if not has_port("frontend",80,"18082") or not has_port("app",8080,"39301"): raise ValueError("F6: port mapping")
     if set(config.get("volumes",{}))!={"data-files","docreader-tmp","postgres-data","redis-data"}: raise ValueError("F6: volume mapping")
     if any("/var/run/docker.sock" in str(m) for svc in s.values() for m in svc.get("volumes",[])): raise ValueError("F6: docker socket forbidden")
+    for service in ("app", "frontend", "docreader"):
+        args=s[service].get("build",{}).get("args",{})
+        if isinstance(args,list): args=dict(item.split("=",1) for item in args)
+        if args.get("CNZ_DOCKERHUB_MIRROR_ARG") != "docker.m.daocloud.io": raise ValueError("F6: Docker Hub mirror build arg")
+    app_build_args=s["app"].get("build",{}).get("args",{})
+    if isinstance(app_build_args,list): app_build_args=dict(item.split("=",1) for item in app_build_args)
+    if app_build_args.get("GOPROXY_ARG") != "https://goproxy.cn": raise ValueError("F6: Go module proxy build arg")
     app_env=s["app"].get("environment",{})
     if app_env.get("DISABLE_REGISTRATION") != "true" or app_env.get("OIDC_AUTH_ENABLE") != "false":
         raise ValueError("F6: registration must be disabled and OIDC must stay off")
