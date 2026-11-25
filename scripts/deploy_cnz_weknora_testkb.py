@@ -132,16 +132,32 @@ def run(args: list[str], timeout: int = 300) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
 
 def main_sha(repo: Path = ROOT) -> str:
-    if run(["git","-C",str(repo),"fetch","origin","main"],120).returncode:
-        raise RuntimeError("F1: fetch main failed")
+    branch=run(["git","-C",str(repo),"branch","--show-current"])
+    if branch.returncode or branch.stdout.strip()!="main":
+        raise RuntimeError("F1: deployment must run from the main branch")
+    fetch=run(["git","-C",str(repo),"fetch","origin","main"],120)
     head=run(["git","-C",str(repo),"rev-parse","HEAD"])
-    main=run(["git","-C",str(repo),"rev-parse","origin/main"])
+    if fetch.returncode:
+        remote=run(["git","-C",str(repo),"remote","get-url","origin"])
+        match=re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$",remote.stdout.strip()) if remote.returncode==0 else None
+        if not match:
+            raise RuntimeError("F1: fetch failed and GitHub API fallback is unavailable")
+        api=run(["gh","api",f"repos/{match.group(1)}/commits/main","--jq","[.sha, .commit.tree.sha] | @tsv"],120)
+        local_tree=run(["git","-C",str(repo),"rev-parse","HEAD^{tree}"])
+        parts=api.stdout.strip().split("\t")
+        if api.returncode or len(parts)!=2 or local_tree.returncode or parts[1]!=local_tree.stdout.strip():
+            raise RuntimeError("F1: GitHub API main tree does not match local checkout")
+        main_sha=parts[0]
+    else:
+        main=run(["git","-C",str(repo),"rev-parse","origin/main"])
+        if main.returncode:
+            raise RuntimeError("F1: fetched origin/main cannot be resolved")
+        main_sha=main.stdout.strip()
     dirty=run(["git","-C",str(repo),"status","--porcelain","--untracked-files=normal"])
-    if head.returncode or main.returncode or head.stdout.strip()!=main.stdout.strip() or dirty.returncode or dirty.stdout.strip():
-        raise RuntimeError("F1: require clean checkout exactly at origin/main")
-    sha=main.stdout.strip()
-    if not SHA_RE.fullmatch(sha): raise RuntimeError("F1: invalid SHA")
-    return sha
+    if head.returncode or (not fetch.returncode and head.stdout.strip()!=main_sha) or dirty.returncode or dirty.stdout.strip():
+        raise RuntimeError("F1: require clean main tree matching current GitHub main")
+    if not SHA_RE.fullmatch(main_sha): raise RuntimeError("F1: invalid SHA")
+    return main_sha
 
 def validate_compose(config: dict) -> None:
     s=config.get("services",{})

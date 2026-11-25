@@ -42,7 +42,7 @@ docker compose -p cnz-weknora \
 
 ## testkb 专用部署器
 
-`scripts/deploy_cnz_weknora_testkb.py --target yunan-101` 是首次安装部署器，只能从与 `origin/main` 完全一致且干净的检出运行。脚本会重新校验 WeKnora 官方归档和逐文件清单、应用本仓补丁，再通过 SSH 流式传输到新的版本目录；它不会复制或读取客户知识库资料。运行前目标机必须能以 SSH alias `yunan-101` 登录并使用 Docker，已有的 `/opt/cnz-weknora/active/WeKnora-0.9.1/.env` 必须为 `0600`，testkb 备份校验必须通过，五个 `yunan-persist` 容器必须健康，`/opt` 至少空余 30 GiB。
+`scripts/deploy_cnz_weknora_testkb.py --target yunan-101` 是首次安装部署器，只能从干净的 `main` 检出运行。脚本优先 fetch `origin/main`；Git smart-HTTP 故障时使用已登录的 `gh` 读取 GitHub main SHA/tree，并要求本地 HEAD 的完整 Git tree 与远端 main tree 完全相同后才继续。脚本会重新校验 WeKnora 官方归档和逐文件清单、应用本仓补丁，再通过 SSH 流式传输到新的版本目录；它不会复制或读取客户知识库资料。运行前目标机必须能以 SSH alias `yunan-101` 登录并使用 Docker，已有的 `/opt/cnz-weknora/active/WeKnora-0.9.1/.env` 必须为 `0600`，testkb 备份校验必须通过，五个 `yunan-persist` 容器必须健康，`/opt` 至少空余 30 GiB。
 
 脚本拒绝覆盖已有版本、发现旧 CNZ 容器/卷或已存在的 active 指针即停止。构建镜像通过后才启动 CNZ Compose 服务；服务健康检查通过后才原子切换 `/opt/cnz-weknora/active-release`。失败时只停止 `cnz-weknora` 项目并保留其数据卷；任何时候都不执行 `down -v`，不触碰 `yunan-persist`。该脚本明确只支持首次安装和同一 main SHA 的无数据重试，**不能用于升级或数据库回滚**。
 
