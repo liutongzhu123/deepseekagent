@@ -6,6 +6,9 @@ services:
   app:
     image: cnz-weknora-app:dev
     container_name: cnz-weknora-app
+    build:
+      args:
+        - GOPROXY_ARG=${GOPROXY_ARG:-}
 
   docreader:
     image: cnz-weknora-docreader:dev

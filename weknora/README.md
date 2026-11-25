@@ -20,6 +20,18 @@ python3 scripts/prepare_weknora_source.py /path/to/v0.9.1.tar.gz /path/to/new-bu
 
 脚本拒绝不匹配的归档、损坏或内容不同的清单、危险归档路径，以及非空目标目录；它逐个验证 6,441 个文件后才执行项目补丁。GitHub Actions 也会运行这条准备路径及 OIDC 测试。
 
+### 构建网络
+
+镜像构建要显式设置 Dockerfile 支持的 Debian 镜像主机名、Go 模块代理及 docreader 的 Debian 镜像 URL。`APK_MIRROR_ARG` 不带 scheme，`APT_MIRROR` 带 `http://`；选择 HTTP 镜像可在精简基础镜像安装 CA 证书之前下载 apt 索引。构建参数是公开镜像地址，不含凭据。Compose override 将 `GOPROXY_ARG` 传给 app 构建。
+
+```sh
+docker compose -p cnz-weknora \
+  -f docker-compose.yml -f docker-compose.testkb.override.yml \
+  build app frontend docreader
+```
+
+在 `.env` 中设置 `APK_MIRROR_ARG`、`APT_MIRROR`、`GOPROXY_ARG`、`NPM_REGISTRY` 后运行；测试环境模板给出已验证的镜像端点示例。`.env` 仍必须包含独立强随机数据库/Redis 密码并保持 `0600`。
+
 ## testkb 环境边界
 
 准备出的源码用于单独的 Compose 项目 `cnz-weknora`，加载 `docker-compose.yml` 和 `docker-compose.testkb.override.yml`。须先复制 `.env.testkb.example` 为构建目录中的 `.env`，生成相互独立的随机数据库与 Redis 密码，设置权限 `0600`，严禁提交；上游 Compose 的 app 使用固定 `env_file: .env`，因此仅向 Compose 命令传 `--env-file` 而没有这个文件是不够的。容器名、project network、数据库/Redis/原文卷和本地端口均与 `yunan-persist` 分开；服务端口只绑定 loopback（18082 / 39301），不更改 testkb 域名 Nginx 路由，不挂载 Docker Socket，不导入现有数据库或资料。
