@@ -116,6 +116,8 @@ def test_f6_compose_rejects_docker_socket_registration_or_oidc():
 def test_f7_build_precedes_startup_and_failed_start_preserves_volumes():
     assert deploy.DEPLOY.index("compose build app frontend docreader") < deploy.DEPLOY.index("compose up -d")
     assert "STARTED=1\ncompose up -d" in deploy.DEPLOY
+    assert 'echo "DEPLOY_FAILED_PHASE=$phase"' in deploy.DEPLOY
+    assert 'phase=image_build' in deploy.DEPLOY and 'phase=health_check' in deploy.DEPLOY
     assert "compose down --remove-orphans" in deploy.DEPLOY
     assert "down -v" not in deploy.DEPLOY and "--volumes" not in deploy.DEPLOY
 
