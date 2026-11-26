@@ -1,6 +1,8 @@
 # 中汽 WeKnora 本地模型运行时增量部署
 
-状态：PR #254（发布标记修复）与 PR #255（Ollama 网络隔离）已合并；独立 Ollama 容器和 `bge-m3:567m` 已部署，app 容器内部 embedding 调用实测返回 1024 维。最新完整快照已验证。WeKnora app 仍需通过小型部署 PR 更新内部 Ollama 地址并安全重建，待审查后执行；管理员引导也待临时本机入口的明确批准。
+状态（2026-11-26）：PR #254（发布标记修复）与 PR #255（Ollama 网络隔离）已合并；独立 Ollama 容器和 `bge-m3:567m` 已部署，app 容器内部 embedding 调用实测返回 1024 维。后续本地分支 `codex/cnz-ollama-app-connectivity` 增加了 app 内部服务地址 `http://ollama:11434` 和部署回滚检查，共 45 行；推送曾因 GitHub 443 超时失败，尚未创建 PR，未部署到 active release。按项目既定流程，小于 300 行的分支需先经用户批准合并。
+
+管理员引导的临时本机方式已获用户明确批准：临时服务仅绑定服务器 `127.0.0.1`，通过 SSH 转发连接，注册后立即删除；主服务继续保持 `invite_only`。远端引导服务已启动，管理员密码脚本在本地终端会话中等待用户输入；注册、合成资料导入及检索评测尚未执行。创建管理员前已完成并验证快照：`/var/backups/cnz-weknora/20261126T132615Z-b89348a321188a13d5acee6bf99ee856c2c8350f.2oX0KT`。
 
 ## 目标拓扑
 
@@ -25,6 +27,7 @@
 
 - 本地定向测试覆盖部署器、备份兼容、前后端升级守卫及 Ollama 增量发布器：55 项通过；PR #255 的 GitHub 三项检查通过。
 - 2026-11-26 首次部署前置验收发现 Ollama 与 WeKnora app 间需要显式的内部服务地址。当前增量配置明确设定 `OLLAMA_BASE_URL=http://ollama:11434`，并由 Compose 契约检查；网络仍只限 CNZ WeKnora 专属网络。
-- 2026-11-26 Ollama `bge-m3:567m` 下载完成；从 WeKnora app 容器请求 `http://ollama:11434/api/embed` 成功，维度为 1024。注册配置仍为 `invite_only`。创建管理员前的新快照位于 `/var/backups/cnz-weknora/20261126T132615Z-b89348a321188a13d5acee6bf99ee856c2c8350f.2oX0KT`，校验通过。
+- 2026-11-26 Ollama `bge-m3:567m` 下载完成；从 WeKnora app 容器请求 `http://ollama:11434/api/embed` 成功，维度为 1024。最新快照校验通过。当前只有临时引导容器采用 `self_serve`；主服务公开配置仍为 `invite_only`。用户输入密码并注册成功后，必须删除临时容器并复核主服务配置和 `yunan-persist` 健康状态。
+- 分支 `codex/cnz-ollama-app-connectivity` 的应用连接修正已通过 Python 语法、shell 语法、`git diff --check` 和 Compose 配置检查；pytest 未运行（环境缺少 pytest 且 PyPI DNS 不通）。GitHub 推送遇 443 连接超时；未创建 PR、未合并、未部署该分支。恢复 GitHub 可达后仍需推送，并在取得小于 300 行变更的合并批准后再部署。
 - 合成模型仍须先核验许可证与算力后才可纳入评测；当前服务器无 GPU，部署 Ollama 不代表已经选定客户生产模型。
 - 客户管理员开户、可信 IdP、OIDC 登录和双 Web 单点流程仍是独立验收门。
