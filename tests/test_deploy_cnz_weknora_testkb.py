@@ -34,8 +34,13 @@ def valid_config():
                 "build": {"args": {"CNZ_DOCKERHUB_MIRROR_ARG": "docker.m.daocloud.io"}}},
             "postgres": {"container_name": "cnz-weknora-postgres"},
             "redis": {"container_name": "cnz-weknora-redis", "healthcheck": {"test": ["CMD", "redis-cli", "ping"]}},
+            "ollama": {"container_name": "cnz-weknora-ollama",
+                "image": "ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429",
+                "environment": {"OLLAMA_HOST": "0.0.0.0:11434", "OLLAMA_KEEP_ALIVE": "5m", "OLLAMA_NUM_PARALLEL": "1"},
+                "volumes": [{"type":"volume","source":"ollama-data","target":"/root/.ollama"}],
+                "healthcheck": {"test":["CMD","ollama","list"]}},
         },
-        "volumes": {name: {} for name in ("data-files", "docreader-tmp", "postgres-data", "redis-data")},
+        "volumes": {name: {} for name in ("data-files", "docreader-tmp", "postgres-data", "redis-data", "ollama-data")},
     }
 
 
@@ -196,6 +201,21 @@ def test_f6_compose_rejects_docker_socket_registration_or_oidc():
     config = valid_config()
     config["services"]["app"]["environment"]["DISABLE_REGISTRATION"] = "false"
     with pytest.raises(ValueError, match="F6"):
+        deploy.validate_compose(config)
+
+
+def test_f6_compose_requires_private_pinned_ollama_and_dedicated_volume():
+    config = valid_config()
+    config["services"]["ollama"]["ports"] = [{"host_ip":"0.0.0.0","target":11434,"published":"11434"}]
+    with pytest.raises(ValueError, match="host port"):
+        deploy.validate_compose(config)
+    config = valid_config()
+    config["services"]["ollama"]["image"] = "ollama/ollama:latest"
+    with pytest.raises(ValueError, match="pinned"):
+        deploy.validate_compose(config)
+    config = valid_config()
+    config["services"]["ollama"]["volumes"] = [{"type":"volume","source":"redis-data","target":"/root/.ollama"}]
+    with pytest.raises(ValueError, match="dedicated model volume"):
         deploy.validate_compose(config)
 
 

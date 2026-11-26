@@ -57,11 +57,18 @@ def test_frontend_update_rebuilds_only_ui_and_rolls_back_on_failure():
 def test_frontend_compose_contract_rejects_driver_opts_to_host_data(tmp_path):
     line = next(line for line in upgrade.UPGRADE.splitlines() if 'config --format json | python3 -c ' in line)
     validator = line.split("python3 -c '", 1)[1].rsplit("'", 1)[0]
-    names = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend", "docreader":"cnz-weknora-docreader", "postgres":"cnz-weknora-postgres", "redis":"cnz-weknora-redis"}
+    names = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend", "docreader":"cnz-weknora-docreader", "postgres":"cnz-weknora-postgres", "redis":"cnz-weknora-redis", "ollama":"cnz-weknora-ollama"}
     services = {name:{"container_name":container} for name,container in names.items()}
+    services["ollama"].update({
+        "image":"ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429",
+        "environment":{"OLLAMA_HOST":"0.0.0.0:11434"},
+        "healthcheck":{"test":["CMD","ollama","list"]},
+        "ports":[],
+        "volumes":[{"type":"volume","source":"ollama-data","target":"/root/.ollama"}],
+    })
     services["app"].update({"environment":{"DISABLE_REGISTRATION":"true","OIDC_AUTH_ENABLE":"false"},"ports":[{"host_ip":"127.0.0.1","target":8080,"published":"39301"}]})
     services["frontend"]["ports"]=[{"host_ip":"127.0.0.1","target":80,"published":"18082"}]
-    volumes={key:{"driver":"local"} for key in ("data-files","docreader-tmp","postgres-data","redis-data")}
+    volumes={key:{"driver":"local"} for key in ("data-files","docreader-tmp","postgres-data","redis-data","ollama-data")}
     config={"services":services,"volumes":volumes}
     def validate(value):
         return subprocess.run([sys.executable,"-c",validator],input=json.dumps(value).encode(),capture_output=True)

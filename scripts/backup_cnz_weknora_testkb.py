@@ -81,20 +81,33 @@ test "$(stat -c %a "$runtime_source/.env")" = 600
 test "$(docker ps --filter name='^cnz-weknora-app$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
 test "$(docker ps --filter name='^cnz-weknora-postgres$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
 test "$(docker ps --filter name='^cnz-weknora-redis$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
-expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis | sort)"
+ollama_present=0
+if docker inspect cnz-weknora-ollama >/dev/null 2>&1; then ollama_present=1; fi
+ollama_volume_present=0
+if docker volume inspect cnz-weknora_ollama-data >/dev/null 2>&1; then ollama_volume_present=1; fi
+if [ "$ollama_present" -eq 1 ]; then
+  test "$(docker ps --filter name='^cnz-weknora-ollama$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
+  expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama | sort)"
+else
+  expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis | sort)"
+fi
+if [ "$ollama_volume_present" -eq 1 ]; then
+  expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data cnz-weknora_ollama-data | sort)"
+else
+  expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data | sort)"
+fi
 test "$(docker ps -a --filter name='^cnz-weknora-' --format '{{.Names}}' | sort)" = "$expected_containers"
 for c in cnz-weknora-frontend cnz-weknora-docreader; do test "$(docker inspect -f '{{.State.Status}}' "$c")" = running; done
 test "$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-docreader)" = healthy
 test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:39301/health)" = 200
 test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18082/)" = 200
-expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data | sort)"
 test "$(docker volume ls -q --filter name=cnz-weknora | sort)" = "$expected_volumes"
 for volume in $expected_volumes; do
   logical="${volume#cnz-weknora_}"
   test "$(docker volume inspect -f '{{ index .Labels "com.docker.compose.project" }}' "$volume")" = cnz-weknora
   test "$(docker volume inspect -f '{{ index .Labels "com.docker.compose.volume" }}' "$volume")" = "$logical"
 done
-for container in cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis; do
+for container in $expected_containers; do
   test "$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$container")" = cnz-weknora
 done
 assert_mounts() {
@@ -108,6 +121,9 @@ assert_mounts cnz-weknora-app "$app_mounts"
 assert_mounts cnz-weknora-docreader '[["volume","/tmp/docreader","cnz-weknora_docreader-tmp"]]'
 assert_mounts cnz-weknora-postgres '[["volume","/var/lib/postgresql/data","cnz-weknora_postgres-data"]]'
 assert_mounts cnz-weknora-redis '[["volume","/data","cnz-weknora_redis-data"]]'
+if [ "$ollama_volume_present" -eq 1 ] && [ "$ollama_present" -eq 1 ]; then
+  assert_mounts cnz-weknora-ollama '[["volume","/root/.ollama","cnz-weknora_ollama-data"]]'
+fi
 test "$(docker ps --filter name=yunan-persist --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 5
 test "$(df -Pk /var/backups | awk 'NR==2 {print $4}')" -ge 10485760
 schema="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select version,dirty from schema_migrations order by version desc limit 1"')"
@@ -119,9 +135,12 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup="$(mktemp -d "$backup_root/${stamp}-${source_sha}.XXXXXX")"
 chmod 0700 "$backup"
 umask 077
-app_stopped=0; docreader_stopped=0; redis_stopped=0
+app_stopped=0; docreader_stopped=0; redis_stopped=0; ollama_stopped=0
 restart_services() {
   failures=0
+  if [ "$ollama_stopped" -eq 1 ]; then
+    if docker start cnz-weknora-ollama >/dev/null; then ollama_stopped=0; else failures=1; echo CNZ_RESTART_START_FAILED=ollama; fi
+  fi
   if [ "$redis_stopped" -eq 1 ]; then
     if docker start cnz-weknora-redis >/dev/null; then redis_stopped=0; else failures=1; echo CNZ_RESTART_START_FAILED=redis; fi
   fi
@@ -135,10 +154,11 @@ restart_services() {
   for _ in $(seq 1 60); do
     app="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
     redis="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-redis 2>/dev/null || true)"
+    ollama="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-ollama 2>/dev/null || true)"
     doc="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-docreader 2>/dev/null || true)"
     api="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39301/health 2>/dev/null || true)"
     ui="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18082/ 2>/dev/null || true)"
-    if [ "$app" = healthy ] && [ "$redis" = healthy ] && [ "$doc" = healthy ] && [ "$api" = 200 ] && [ "$ui" = 200 ]; then ready=1; break; fi
+    if { [ "$ollama_present" -eq 0 ] || [ "$ollama" = healthy ]; } && [ "$app" = healthy ] && [ "$redis" = healthy ] && [ "$doc" = healthy ] && [ "$api" = 200 ] && [ "$ui" = 200 ]; then ready=1; break; fi
     sleep 2
   done
   if [ "$ready" -ne 1 ]; then failures=1; fi
@@ -160,15 +180,22 @@ stage=quiesce
 app_stopped=1; docker stop --time 60 cnz-weknora-app >/dev/null
 docreader_stopped=1; docker stop --time 60 cnz-weknora-docreader >/dev/null
 redis_stopped=1; docker stop --time 60 cnz-weknora-redis >/dev/null
+if [ "$ollama_present" -eq 1 ]; then ollama_stopped=1; docker stop --time 60 cnz-weknora-ollama >/dev/null; fi
 stage=database_dump
 app_image="$(docker inspect -f '{{.Config.Image}}' cnz-weknora-app)"
 pg_image="$(docker inspect -f '{{.Config.Image}}' cnz-weknora-postgres)"
 docreader_image="$(docker inspect -f '{{.Config.Image}}' cnz-weknora-docreader)"
 redis_image="$(docker inspect -f '{{.Config.Image}}' cnz-weknora-redis)"
+ollama_image=none
+if [ "$ollama_present" -eq 1 ]; then ollama_image="$(docker inspect -f '{{.Config.Image}}' cnz-weknora-ollama)"
+elif [ "$ollama_volume_present" -eq 1 ]; then ollama_image='ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429'; fi
 docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$backup/database.dump"
 docker run --rm --network none --mount type=volume,source=cnz-weknora_data-files,target=/data/files,readonly --entrypoint /usr/bin/tar "$app_image" -czf - -C /data/files . > "$backup/files.tar.gz"
 docker run --rm --network none --mount type=volume,source=cnz-weknora_docreader-tmp,target=/tmp/docreader,readonly --entrypoint /usr/bin/tar "$docreader_image" -czf - -C /tmp/docreader . > "$backup/docreader-tmp.tar.gz"
 docker run --rm --network none --mount type=volume,source=cnz-weknora_redis-data,target=/data,readonly --entrypoint /bin/tar "$redis_image" -czf - -C /data . > "$backup/redis-volume.tar.gz"
+if [ "$ollama_volume_present" -eq 1 ]; then
+  docker run --rm --network none --mount type=volume,source=cnz-weknora_ollama-data,target=/root/.ollama,readonly --entrypoint /bin/tar "$ollama_image" -czf - -C /root/.ollama . > "$backup/ollama-data.tar.gz"
+fi
 if [ -f "$release/DEPLOYED_FROM_CODE" ]; then
   cp -- "$release/DEPLOYED_FROM_CODE" "$backup/DEPLOYED_FROM_CODE"
 else
@@ -181,10 +208,15 @@ gzip -t "$backup/files.tar.gz" "$backup/docreader-tmp.tar.gz" "$backup/redis-vol
 tar -tzf "$backup/files.tar.gz" >/dev/null
 tar -tzf "$backup/docreader-tmp.tar.gz" >/dev/null
 tar -tzf "$backup/redis-volume.tar.gz" >/dev/null
+if [ "$ollama_volume_present" -eq 1 ]; then
+  test -s "$backup/ollama-data.tar.gz"
+  gzip -t "$backup/ollama-data.tar.gz"
+  tar -tzf "$backup/ollama-data.tar.gz" >/dev/null
+fi
 docker run --rm --network none --mount type=bind,source="$backup",target=/backup,readonly --entrypoint pg_restore "$pg_image" --list /backup/database.dump > "$backup/database.contents.txt"
 test -s "$backup/database.contents.txt"
-printf 'active_source_sha=%s\nactive_source_fingerprint=%s\nruntime_source_sha=%s\nruntime_config_path=%s\nruntime_config_sha256=%s\ndatabase_schema=%s\napp_image=%s\npostgres_image=%s\ndocreader_image=%s\nredis_image=%s\n' \
-  "$source_sha" "$(fingerprint_source "$active")" "$runtime_source_sha" "$runtime_config" "$(sha256sum "$runtime_config" | cut -d' ' -f1)" "$schema" "$app_image" "$pg_image" "$docreader_image" "$redis_image" > "$backup/METADATA.txt"
+printf 'active_source_sha=%s\nactive_source_fingerprint=%s\nruntime_source_sha=%s\nruntime_config_path=%s\nruntime_config_sha256=%s\ndatabase_schema=%s\napp_image=%s\npostgres_image=%s\ndocreader_image=%s\nredis_image=%s\nollama_image=%s\n' \
+  "$source_sha" "$(fingerprint_source "$active")" "$runtime_source_sha" "$runtime_config" "$(sha256sum "$runtime_config" | cut -d' ' -f1)" "$schema" "$app_image" "$pg_image" "$docreader_image" "$redis_image" "$ollama_image" > "$backup/METADATA.txt"
 printf 'active_env_path=%s\nactive_env_mode=%s\nruntime_env_path=%s\nruntime_env_mode=%s\n' \
   "$active/.env" "$(stat -c %a "$active/.env")" "$runtime_source/.env" "$(stat -c %a "$runtime_source/.env")" >> "$backup/METADATA.txt"
 chmod 0600 "$backup/METADATA.txt" "$backup/database.contents.txt"

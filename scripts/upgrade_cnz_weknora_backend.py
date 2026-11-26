@@ -56,18 +56,19 @@ test "$(stat -c %a "$runtime_project/.env")" = 600
 cmp -s "$active/.env" "$runtime_project/.env"
 runtime_config="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/config/config.yaml"}}{{.Source}}{{end}}{{end}}' cnz-weknora-app)"
 test "$runtime_config" = "$runtime_project/config/config.yaml" && test -f "$runtime_config" && test ! -L "$runtime_config"
-expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis | sort)"
+expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama | sort)"
 test "$(docker ps -a --filter name='^cnz-weknora-' --format '{{.Names}}' | sort)" = "$expected_containers"
-for c in cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis; do
+for c in cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama; do
   test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c")" = cnz-weknora
   docker inspect -f '{{json .NetworkSettings.Networks}}' "$c" | python3 -c 'import json,sys; assert set(json.load(sys.stdin))=={"cnz-weknora_WeKnora-network"}'
 done
 docker inspect -f '{{json .Mounts}}' cnz-weknora-app | python3 -c 'import json,sys; got=sorted([[m.get("Type"),m.get("Destination"),m.get("Name") if m.get("Type")=="volume" else m.get("Source"),m.get("RW")] for m in json.load(sys.stdin)]); expected=sorted([["volume","/data/files","cnz-weknora_data-files",True],["volume","/tmp/docreader","cnz-weknora_docreader-tmp",False],["bind","/app/config/config.yaml",sys.argv[1],True]]); assert got==expected,got' "$runtime_config"
-for c in cnz-weknora-app cnz-weknora-postgres cnz-weknora-redis; do test "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy; done
+docker inspect -f '{{json .Mounts}}' cnz-weknora-ollama | python3 -c 'import json,sys; got=[[m.get("Type"),m.get("Destination"),m.get("Name")] for m in json.load(sys.stdin)]; assert got==[["volume","/root/.ollama","cnz-weknora_ollama-data"]],got'
+for c in cnz-weknora-app cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama; do test "$(docker inspect -f '{{.State.Health.Status}}' "$c")" = healthy; done
 for c in cnz-weknora-frontend cnz-weknora-docreader; do test "$(docker inspect -f '{{.State.Status}}' "$c")" = running; done
 test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:39301/health)" = 200
 test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18082/)" = 200
-expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data | sort)"
+expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data cnz-weknora_ollama-data | sort)"
 test "$(docker volume ls -q --filter name=cnz-weknora | sort)" = "$expected_volumes"
 for volume in $expected_volumes; do
   logical="$(printf '%s' "$volume" | sed 's/^cnz-weknora_//')"
@@ -129,9 +130,9 @@ check_compose() {
  "$@" config --format json | python3 -c '
 import json, os, sys
 c=json.load(sys.stdin); s=c["services"]
-names={"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}
+names={"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis","ollama":"cnz-weknora-ollama"}
 assert set(s)==set(names) and all(s[k]["container_name"]==v for k,v in names.items())
-assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}
+assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data","ollama-data"}
 for logical, definition in c["volumes"].items():
     assert not definition.get("external",False), (logical,definition)
     assert definition.get("driver","local")=="local", (logical,definition)
@@ -142,6 +143,12 @@ network=c["networks"]["WeKnora-network"]
 assert network.get("driver","bridge")=="bridge" and not network.get("external",False)
 assert all(set(v.get("networks",{}))=={"WeKnora-network"} for v in s.values())
 assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[]))
+assert s["ollama"]["image"]=="ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429"
+assert not s["ollama"].get("ports")
+assert s["ollama"]["environment"]["OLLAMA_HOST"]=="0.0.0.0:11434"
+assert s["ollama"]["healthcheck"]["test"]==["CMD","ollama","list"]
+ollama_mounts={(m["type"],m["source"],m["target"],bool(m.get("read_only",False))) for m in s["ollama"]["volumes"]}
+assert ollama_mounts=={("volume","ollama-data","/root/.ollama",False)},ollama_mounts
 app_mounts={(m["type"],m["source"],m["target"],bool(m.get("read_only",False))) for m in s["app"]["volumes"]}
 expected={("volume","data-files","/data/files",False),("volume","docreader-tmp","/tmp/docreader",True),("bind",os.path.abspath(sys.argv[1]),"/app/config/config.yaml",False)}
 assert app_mounts==expected,(app_mounts,expected)
@@ -166,6 +173,7 @@ frontend_id="$(docker inspect -f '{{.Id}}' cnz-weknora-frontend)"
 docreader_id="$(docker inspect -f '{{.Id}}' cnz-weknora-docreader)"
 postgres_id="$(docker inspect -f '{{.Id}}' cnz-weknora-postgres)"
 redis_id="$(docker inspect -f '{{.Id}}' cnz-weknora-redis)"
+ollama_id="$(docker inspect -f '{{.Id}}' cnz-weknora-ollama)"
 volumes_before="$(docker volume ls -q --filter name=cnz-weknora | sort)"
 test "$(readlink -f "$root/active-release")" = "$old_active"
 schema_before="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select version,dirty from schema_migrations order by version desc limit 1"')"
@@ -209,6 +217,7 @@ test "$(docker inspect -f '{{.Id}}' cnz-weknora-frontend)" = "$frontend_id"
 test "$(docker inspect -f '{{.Id}}' cnz-weknora-docreader)" = "$docreader_id"
 test "$(docker inspect -f '{{.Id}}' cnz-weknora-postgres)" = "$postgres_id"
 test "$(docker inspect -f '{{.Id}}' cnz-weknora-redis)" = "$redis_id"
+test "$(docker inspect -f '{{.Id}}' cnz-weknora-ollama)" = "$ollama_id"
 test "$(docker volume ls -q --filter name=cnz-weknora | sort)" = "$volumes_before"
 test "$(docker inspect -f '{{.Config.Env}}' cnz-weknora-app | grep -o 'OIDC_AUTH_ENABLE=false')" = OIDC_AUTH_ENABLE=false
 docker inspect -f '{{json .Mounts}}' cnz-weknora-app | python3 -c 'import json,sys; got=sorted([[m.get("Type"),m.get("Destination"),m.get("Name") if m.get("Type")=="volume" else m.get("Source"),m.get("RW")] for m in json.load(sys.stdin)]); expected=sorted([["volume","/data/files","cnz-weknora_data-files",True],["volume","/tmp/docreader","cnz-weknora_docreader-tmp",False],["bind","/app/config/config.yaml",sys.argv[1],True]]); assert got==expected,got' "$new_project/config/config.yaml"
