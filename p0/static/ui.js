@@ -1588,6 +1588,14 @@ function renderKbHealth(weknora) {
       <p>WeKnora 未连接，当前使用本地关键词检索演示完整链路；发布只写本地审计副本。</p>
       <p class="health-foot">生产环境应配置 WeKnora 后再演示发布与检索。</p>`;
   }
+  const adminConsoleUrl = weknora && typeof weknora.admin_console_url === 'string'
+    ? weknora.admin_console_url.trim()
+    : '';
+  if (adminConsoleUrl) {
+    $('kbHealth').innerHTML += `
+      <div class="mt-10"><a class="btn btn-secondary btn-sm" href="${escapeHtml(adminConsoleUrl)}" target="_blank" rel="noopener noreferrer">打开 WeKnora 管理台</a></div>
+      <p class="health-foot">使用统一身份登录；身份提供方与 WeKnora OIDC 需由部署环境配置。</p>`;
+  }
 }
 async function loadKbHealth() {
   try {

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import time
 from types import SimpleNamespace
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -17,6 +19,18 @@ from app import auth, main, oidc
 
 def _b64e(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _pkce_s256(verifier: str) -> str:
+    """Independent RFC 7636 S256 calculation for the synthetic IdP."""
+    return _b64e(hashlib.sha256(verifier.encode("ascii")).digest())
+
+
+def test_pkce_s256_matches_rfc7636_known_vector():
+    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    expected = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    assert _pkce_s256(verifier) == expected
+    assert oidc._challenge(verifier) == expected
 
 
 @pytest.fixture(scope="module")
@@ -65,6 +79,51 @@ def _jwks_client(jwks: dict) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
+def _install_synthetic_idp(monkeypatch, rsa_key, jwks):
+    """Wire the real P0 OIDC callback to an in-memory, protocol-shaped IdP."""
+    requests = []
+    issued = {"id_token": ""}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/.well-known/openid-configuration"):
+            return httpx.Response(200, json=_document())
+        if request.url.path.endswith("/token"):
+            form = parse_qs(request.content.decode("ascii"))
+            if form.get("grant_type") != ["authorization_code"]:
+                return httpx.Response(400, json={"error": "unsupported_grant_type"})
+            if (
+                form.get("code") != ["synthetic-code"]
+                or form.get("client_id") != ["p0-client"]
+                or form.get("redirect_uri")
+                != ["https://p0.example/p0/api/v1/auth/oidc/callback"]
+            ):
+                return httpx.Response(400, json={"error": "invalid_client_or_code"})
+            verifier = (form.get("code_verifier") or [""])[0]
+            if (
+                issued["code_challenge_method"] != "S256"
+                or not issued["code_challenge"]
+                or _pkce_s256(verifier) != issued["code_challenge"]
+            ):
+                return httpx.Response(400, json={"error": "invalid_grant"})
+            if not issued["id_token"]:
+                return httpx.Response(400, json={"error": "missing_synthetic_id_token"})
+            return httpx.Response(
+                200,
+                json={"id_token": issued["id_token"], "access_token": "synthetic-access"},
+            )
+        if request.url.path.endswith("/jwks"):
+            return httpx.Response(200, json=jwks)
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        oidc,
+        "_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False),
+    )
+    return requests, issued
+
+
 def _claims(**overrides) -> dict:
     now = int(time.time())
     claims = {
@@ -99,6 +158,67 @@ def test_authorize_url_has_pkce_and_nonce():
     assert "code_challenge_method=S256" in url
     assert f"state={state['s']}" in url
     assert f"nonce={state['n']}" in url
+
+
+def test_oidc_config_requires_https_issuer_and_fixed_https_callback(monkeypatch):
+    monkeypatch.setenv("P0_OIDC_CLIENT_ID", "p0-client")
+    monkeypatch.setenv("P0_OIDC_ISSUER", "http://idp.example")
+    monkeypatch.setenv("P0_OIDC_REDIRECT_URI", "https://p0.example/callback")
+    assert oidc.config() is None
+
+    monkeypatch.setenv("P0_OIDC_ISSUER", "https://idp.example")
+    monkeypatch.delenv("P0_OIDC_REDIRECT_URI", raising=False)
+    assert oidc.config() is None
+
+    monkeypatch.setenv("P0_OIDC_REDIRECT_URI", "https://p0.example:99999/callback")
+    assert oidc.config() is None
+
+
+def test_oidc_callback_uri_ignores_forwarded_headers(monkeypatch):
+    from starlette.requests import Request
+
+    monkeypatch.delenv("P0_OIDC_REDIRECT_URI", raising=False)
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/v1/auth/oidc/start",
+        "raw_path": b"/api/v1/auth/oidc/start",
+        "query_string": b"",
+        "headers": [(b"x-forwarded-host", b"attacker.example"), (b"x-forwarded-proto", b"https")],
+        "server": ("internal", 8080),
+        "client": ("127.0.0.1", 1234),
+    }
+    assert oidc.redirect_uri(Request(scope)) == ""
+
+    monkeypatch.setenv("P0_OIDC_REDIRECT_URI", "https://p0.example/callback")
+    assert oidc.redirect_uri(Request(scope)) == "https://p0.example/callback"
+
+
+def test_oidc_binding_rejects_http_issuer(oidc_env):
+    with pytest.raises(ValueError, match="HTTPS"):
+        auth.bind_oidc_identity("alice", "http://idp.example", "subject-2")
+    with pytest.raises(ValueError, match="HTTPS"):
+        auth.bind_oidc_identity("alice", "https://idp.example:99999", "subject-3")
+
+
+@pytest.mark.parametrize("endpoint_key", ["authorization_endpoint", "token_endpoint", "jwks_uri"])
+@pytest.mark.parametrize("scheme", ["http", "https-invalid-port"])
+def test_discovery_rejects_insecure_endpoints(oidc_env, endpoint_key, scheme):
+    document = _document()
+    endpoint = "http://idp.example/insecure" if scheme == "http" else "https://idp.example:99999/insecure"
+    document[endpoint_key] = endpoint
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json=document)
+        )
+    )
+
+    with pytest.raises(oidc.OidcError, match=f"{endpoint_key} must use HTTPS"):
+        oidc.discovery(oidc.config(), client=client)
+    client.close()
 
 
 def test_validate_id_token_accepts_valid_token(rsa_key, jwks):
@@ -182,6 +302,76 @@ def test_callback_creates_session_for_existing_user(oidc_env, monkeypatch):
     me = oidc_env.client.get("/api/v1/auth/me")
     assert me.status_code == 200
     assert me.json()["user"]["username"] == "alice"
+
+
+@pytest.mark.parametrize(
+    ("subject", "expected_location", "pkce_mismatch"),
+    [
+        ("subject-1", "/standards", False),
+        ("subject-unbound", "sso_error=account", False),
+        ("subject-1", "sso_error=token", True),
+    ],
+)
+def test_synthetic_idp_full_code_flow_uses_verified_subject_only(
+    oidc_env, monkeypatch, rsa_key, jwks, subject, expected_location, pkce_mismatch
+):
+    requests, issued = _install_synthetic_idp(monkeypatch, rsa_key, jwks)
+    start = oidc_env.client.get(
+        "/api/v1/auth/oidc/start?next=/standards", follow_redirects=False
+    )
+    assert start.status_code == 303
+    authorize = httpx.URL(start.headers["location"])
+    authorize_params = authorize.params
+    assert authorize_params["response_type"] == "code"
+    assert authorize_params["client_id"] == "p0-client"
+    assert authorize_params["redirect_uri"] == (
+        "https://p0.example/p0/api/v1/auth/oidc/callback"
+    )
+    assert authorize_params["scope"] == "openid profile email"
+    assert authorize_params["code_challenge_method"] == "S256"
+
+    state_cookie = start.cookies[oidc.STATE_COOKIE]
+    state_payload = oidc.read_state(state_cookie)
+    assert state_payload is not None
+    expected_challenge = _pkce_s256(state_payload["v"])
+    assert authorize_params["state"] == state_payload["s"]
+    assert authorize_params["nonce"] == state_payload["n"]
+    assert authorize_params["code_challenge"] == expected_challenge
+    issued["code_challenge"] = (
+        "tampered-challenge" if pkce_mismatch else authorize_params["code_challenge"]
+    )
+    issued["code_challenge_method"] = authorize_params["code_challenge_method"]
+
+    # The synthetic provider signs claims only after receiving the auth request,
+    # so the ID token carries the nonce generated for this exact browser flow.
+    issued["id_token"] = _token(
+        rsa_key,
+        _claims(sub=subject, nonce=state_payload["n"], preferred_username="alice"),
+    )
+    callback = oidc_env.client.get(
+        f"/api/v1/auth/oidc/callback?code=synthetic-code&state={state_payload['s']}",
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 303
+    assert expected_location in callback.headers["location"]
+    token_request = next(request for request in requests if request.url.path.endswith("/token"))
+    token_form = parse_qs(token_request.content.decode("ascii"))
+    assert token_form["code"] == ["synthetic-code"]
+    assert token_form["client_id"] == ["p0-client"]
+    assert token_form["code_verifier"] == [state_payload["v"]]
+    assert token_form["redirect_uri"] == ["https://p0.example/p0/api/v1/auth/oidc/callback"]
+    assert sum(request.url.path.endswith("/jwks") for request in requests) == (
+        0 if pkce_mismatch else 1
+    )
+
+    if subject == "subject-1" and not pkce_mismatch:
+        me = oidc_env.client.get("/api/v1/auth/me")
+        assert me.status_code == 200
+        assert me.json()["user"]["username"] == "alice"
+    else:
+        assert "p0_session" not in callback.cookies
+        assert [user["username"] for user in auth.load_users()] == ["alice"]
 
 
 def test_callback_rejects_unknown_user(oidc_env, monkeypatch):

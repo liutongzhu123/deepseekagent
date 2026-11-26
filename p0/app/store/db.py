@@ -65,6 +65,15 @@ oidc_identities = Table(
     UniqueConstraint("issuer", "subject", name="uq_oidc_identity_issuer_subject"),
 )
 
+session_revocations = Table(
+    "session_revocations",
+    metadata,
+    Column("token_digest", String(64), primary_key=True),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True), nullable=False),
+)
+Index("ix_session_revocations_expires_at", session_revocations.c.expires_at)
+
 standards = Table(
     "standards",
     metadata,

@@ -134,7 +134,7 @@ PR #246（Redis 健康检查与安全重试）和 PR #247（按 WeKnora 源码�
 
 PR #250 为登录页新增中汽零部件知识管理文案与项目知识图示，去掉 Agent/ReAct/Wiki 轮播宣传；在官方 v0.9.1 干净源码上 6 项前端测试通过、Vite 生产构建成功、完整 CI 通过。PR 合并 SHA `e87a4c85b02c0963c26ec44ea44696ec1fb36977` 已用纯前端升级器部署；浏览器截图确认 CNZ 标题、资料解析/混合检索/来源引用图示和登录说明均显示正确。升级后 UI/API 仍 200、app/docreader/PostgreSQL/Redis 容器 ID 不变、四卷与备份校验正常、旧前端镜像保留可回滚。没有测试管理员账号，因此无法查看登录后的精简侧栏、设置项或直接访问拦截。此精简是操作面约束，不替代 API 服务端授权；业务用户经工作台访问知识检索；仍需在合成管理员账号可用时完成登录后导航验收与业务端 SSO 联调。
 
-2026-11-26 本地综合回归：P0 全套 `pytest` **1162 passed / 41 skipped**（允许测试使用本机 `127.0.0.1` mock 服务）；testkb 部署器与前端升级器安全测试 **23/23 passed**；工作台与小程序 Node 测试 **66/66 passed**。P0 测试运行在固定 requirements 的隔离 Python 环境中。上述均为本地自动化回归，不代表在 testkb 部署新 P0 版本、真实 IdP 登录、生产业务或整栈恢复验收通过。
+2026-11-26 本地综合回归的最新 P0 结果：在一次性本机 PostgreSQL 集群上运行全套 `pytest` **1187 passed / 23 skipped / 5 warnings**，包含会话注销撤销的真实 PostgreSQL 写入/读回。首次冷启动有 1 项 OCR 任务超过其 10 秒等待门限；预热后单项 3.79 秒通过，完整回归重跑通过。testkb 部署器与前端升级器安全测试 **23/23 passed**、工作台与小程序 Node 测试 **66/66 passed** 是此前本地回归证据。一次性数据库已停止并清理。上述均为本地自动化回归，不代表在 testkb 部署新 P0 版本、真实 IdP 登录、生产业务或整栈恢复验收通过。
 
 ## 4. 两个 Web 端能否合并
 
@@ -177,11 +177,15 @@ PR #250 为登录页新增中汽零部件知识管理文案与项目知识图示
 
 ### 5.1 现有实现的兼容缺口
 
-P0 的 `oidc.py`、`main.py` 使用 code+PKCE、nonce、ID token 校验；当前实现按显式绑定的 `(issuer, sub)` 查找已存在且启用的账号，不使用邮箱/用户名作为身份主键，也不自动建号。绑定需逐账号审批。P0 的真实 IdP 登录/退出尚未连接客户身份提供方联调。
+P0 的 `oidc.py`、`main.py` 使用 code+PKCE、nonce、ID token 校验；当前实现按显式绑定的 `(issuer, sub)` 查找已存在且启用的账号，不使用邮箱/用户名作为身份主键，也不自动建号。绑定需逐账号审批。OIDC issuer 和 discovery 返回的 authorization/token/JWKS endpoints 必须为结构有效的 HTTPS URL；callback 必须配置固定 HTTPS `P0_OIDC_REDIRECT_URI`，不信任转发头。P0 的真实 IdP 登录/退出尚未连接客户身份提供方联调。
 
 WeKnora 官方 `internal/application/service/user.go` 原本按 email 查找账户并可自动建号；CNZ 补丁改为已验证的 `(issuer, sub)` 显式绑定、拒绝未绑定身份，并要求 UserInfo subject 与已验证 ID Token subject 一致。该补丁已部署到 testkb 的 CNZ 独立栈，但运行配置仍关闭 OIDC。两端均需等客户 IdP 的 issuer、client、redirect URI 与测试账号后才能完成真实授权码登录和单点退出联调。
 
 因此两端已有安全边界与身份绑定实现，但当前不能宣称已实现可用的单点登录。不得用“同邮箱自动合并 + 首次登录自动建个人空间”开通中汽人员。
+
+P0 本地注销现已撤销当前设备的签名令牌：JSON 模式用 0700 认证目录及 0600 跨进程锁文件维护撤销清单，数据库模式写入会话撤销表；复制的旧令牌在注销后被拒，另一设备的独立令牌保持有效。JSON 与 SQLite 方言测试通过；新建的一次性本机 PostgreSQL 集群上，包含该会话撤销专项的完整 P0 回归 1187 passed、23 skipped、5 warnings，临时数据库已停止并删除。此实现不等同于 IdP 全局退出，也不撤销 WeKnora 自身已建立的会话。
+
+WeKnora v0.9.1 的 `POST /api/v1/auth/logout` 将当前 Bearer token 交给服务层，服务层解析用户 ID 后调用 `RevokeTokensByUserID`，会撤销该用户的全部 WeKnora 会话令牌，而不只当前浏览器令牌；它没有调用 OIDC `end_session_endpoint`。设计双端退出时必须显式告知 WeKnora 退出会中断同账号的其它 WeKnora 设备，并在两端分别完成本地会话撤销后再评估 IdP 全局退出。本轮尚无 IdP 配置和 WeKnora 合成管理员账号，未在运行实例上验证此上游行为；代码依据为 [v0.9.1 logout handler](https://github.com/Tencent/WeKnora/blob/v0.9.1/internal/handler/auth.go#L500-L547) 与 [user service](https://github.com/Tencent/WeKnora/blob/v0.9.1/internal/application/service/user.go#L1495-L1505)。
 
 ### 5.2 统一身份模型
 
@@ -271,14 +275,16 @@ sequenceDiagram
 
 | 门 | 状态 | 已有证据 | 未通过项 / 下一步 |
 |---|---|---|---|
-| 1. 冻结源码与覆盖物 | 部分通过 | 官方 v0.9.1 源码锁、6,441 文件校验清单和 CNZ 补丁已入库；干净源码构建过 app、frontend、docreader，部署器校验源指纹 | 现网 v0.9.0 前端 214 个覆盖文件及配置的可复现归档仍需单独完成；不能把历史临时取证目录当发布来源 |
-| 2. 项目实例与账号/资料归属 | 部分通过 | testkb 上 CNZ 独立 Compose、DB、Redis、文件卷、网络和 loopback 端口已运行；六个关键业务表为空，原文目录为空，未导入客户资料 | 没有管理员账号，OIDC 关闭；历史账号、现有知识库/渠道/资料所有权尚未逐项确认；不得因此迁移或重分配账号 |
-| 3. 双端身份与账号投影 | 代码部分完成，联调未开始 | WeKnora 按显式绑定的 issuer/sub 查找身份，不用邮箱匹配，不自动建号；补丁已部署 | 客户 IdP、两端 client/回调配置和合成测试账号未提供；逐账号确认 reviewer 历史权限；验证未知/停用账号拒绝、双端登录及退出 |
-| 4. 统一主导航 | 设计完成，运行验收未完成 | 确认 P0/P1 工作台为业务主入口，WeKnora 提供知识服务和高级资料维护；WeKnora 登录页品牌已部署 | 无登录账号，不能检查登录后菜单或工作台到知识服务的授权跳转；需要可控的合成管理员和业务账号 |
+| 1. 冻结源码与覆盖物 | 部分通过 | 官方 v0.9.1 源码锁与 6,441 文件清单已入库；当前本地 7 个 CNZ 补丁在全新源码目录成功重放，含 WeKnora OIDC 合成流程和 nonce 修复；部署器校验源码指纹 | 本地 0006/0007 尚未进入 testkb 当前 active release；现网 v0.9.0 前端 214 个覆盖文件及配置的可复现归档仍需单独完成；不能把历史临时取证目录当发布来源 |
+| 2. 项目实例与账号/资料归属 | 部分通过 | testkb 上 CNZ 独立 Compose、DB、Redis、文件卷、网络和 loopback 端口已运行；本轮只读回读 CNZ API/UI 均为 200、app/PostgreSQL/Redis/docreader healthy，备份六项 checksum 全部 OK；此前源数据库关键表为空、原文目录为空，未导入客户资料 | OIDC 关闭；历史账号、现有知识库/渠道/资料所有权尚未逐项确认；不得因此迁移或重分配账号 |
+| 3. 双端身份与账号投影 | 本地合成流程通过；同浏览器 RP 联调/testkb 部署仍未完成 | P0 start/callback 路由经内存 IdP 覆盖 discovery、PKCE/S256、token/JWKS/RS256、nonce 与显式 issuer/sub 映射；25 项 OIDC 测试通过。WeKnora 真实 Gin start/callback + `LoginWithOIDC` 合成流程覆盖授权 URL nonce 与签名 state 一致、有效/缺失/错误 ID Token nonce、UserInfo、显式绑定和同邮箱未绑定拒绝；定向 Go 测试 service/handler/repository/config 四包通过，service/handler 的 race detector 通过，独立安全复审通过 | 当前 testkb active release `e87a4c85b02c0963c26ec44ea44696ec1fb36977` 的运行源码尚无 nonce 授权/校验补丁；客户 IdP、真实账号与双端 callback 配置未提供；仍需发布 0006/0007 后验证双端登录、未知/停用账号拒绝、IdP 全局退出及 WeKnora 会话退出；reviewer 历史权限逐账号确认；P0 PostgreSQL 集成结果见 Backlog，本地分支尚未触发 CI |
+| 4. 统一主导航 | P0 工作台至 WeKnora 的管理员入口已本地浏览器验收；testkb 联跳未完成 | 已确认 P0/P1 工作台为业务主入口；临时合成管理员看到 WeKnora OIDC 管理台链接，合成技术账号不显示；链接配置缺失/格式错误时隐藏，目标不传递 P0 会话 | testkb 未配置外部可访问的 CNZ 管理地址，WeKnora OIDC 关闭且没有合成管理员账号；不能验证真实目标导航、登录后菜单或 SSO 回调，需要配置两端测试端点与合成账号 |
 | 5. 项目功能与角色范围 | P0 服务端边界已本地实现并回归，testkb 未部署验收 | 新业务经理/技术账号空项目范围拒绝访问；检索前按项目过滤 WeKnora 知识；角色/范围/审核授权变更撤销旧会话；授权审计失败拒绝写入；旧账号兼容边界有测试 | WeKnora 实际 KB、CRM/报价/客服等业务路由仍需在 CNZ 测试环境对照角色逐项验收；跨项目拒绝和管理员操作还未在 testkb 登录验证 |
-| 6. 恢复、检索、业务与会话回归 | 未通过 | DB/文件隔离往返方法已用 synthetic sentinel 验证；容器内健康探测路径已确认；本地 P0/部署器/前端测试已通过 | 整栈冷恢复未完成数据相等断言且复跑被审批拒绝；WeKnora 合成资料检索、引用、业务端 SSO、账号变更/停用、退出/重放/回滚均未验收 |
+| 6. 恢复、检索、业务与会话回归 | 未通过 | DB/文件隔离往返方法已用 synthetic sentinel 验证；P0 当前令牌注销/重放拒绝本地回归通过；管理员跳转浏览器核验完成；本地 P0 全量 1182 passed/42 skipped，隔离 PostgreSQL 全量回归 1187/23 通过；本轮 CNZ 部署器/前端升级器/备份恢复定向测试 28 passed；testkb 备份六项校验通过 | 整栈冷恢复未完成数据相等断言且复跑被审批拒绝；WeKnora 合成资料检索、引用、双 RP 登录、账号变更/停用及 IdP/WeKnora 跨端退出仍未验收 |
 
 结论：当前可以确认 CNZ 知识服务栈已隔离部署且健康，P0 项目权限代码已在本地通过全套回归；不能据此宣称双 Web 整合、真实 OIDC、testkb 服务端权限、WeKnora 检索或整栈灾备已验收。恢复副本复测需等获批后在内部网络运行并对齐 92 个关系、关键表行数、Redis 键数及文件清单；当前审批拒绝不允许通过变更探测方式或其他路径绕过。
+
+2026-11-26 追加只读回读：testkb 当前 active release 指向 `/opt/cnz-weknora/releases/e87a4c85b02c0963c26ec44ea44696ec1fb36977`，API/UI 返回 200，备份目录六项 SHA-256 均为 OK，yunan-persist 服务保持健康。远端 WeKnora 源码未含本地 0007 nonce 修复，因此尚未对运行环境应用该变更；不得直接绕过部署器的 main-only 和发布流程。
 
 SSO 先做两端互跳可作为入口融合的过渡。只有统一品牌或在两页放导航链接不算统一账户；只有 OIDC 登录成功不算全局退出和权限同步完成。实施工期需在客户 IdP、历史账号数量、字段和资料迁移范围明确后排，不沿用上一份功能精简估算直接相加。
 

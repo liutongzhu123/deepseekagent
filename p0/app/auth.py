@@ -27,9 +27,11 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import store
 from . import role_policy
+from . import session_store
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("P0_DATA_DIR", ROOT / "data"))
@@ -281,8 +283,21 @@ def bind_oidc_identity(username: str, issuer: str, subject: str) -> dict:
     """Bind a verified issuer/subject pair to one existing account."""
     issuer_key = (issuer or "").strip().rstrip("/")
     subject_key = (subject or "").strip()
-    if not issuer_key.startswith(("https://", "http://")) or len(issuer_key) > 512:
-        raise ValueError("OIDC issuer 必须是有效的 HTTP(S) 地址")
+    try:
+        parsed_issuer = urlsplit(issuer_key)
+        valid_issuer = (
+            parsed_issuer.scheme == "https"
+            and bool(parsed_issuer.hostname)
+            and (parsed_issuer.port is None or 1 <= parsed_issuer.port <= 65535)
+            and parsed_issuer.username is None
+            and parsed_issuer.password is None
+            and not parsed_issuer.query
+            and not parsed_issuer.fragment
+        )
+    except ValueError:
+        valid_issuer = False
+    if not valid_issuer or len(issuer_key) > 512:
+        raise ValueError("OIDC issuer 必须是有效的 HTTPS 地址")
     if not subject_key or len(subject_key) > 512:
         raise ValueError("OIDC subject 不能为空且不能超过 512 位")
     with _LOCK:
@@ -705,7 +720,7 @@ def create_session(user: dict) -> str:
         "r": user["role"],
         "v": int(raw.get("session_epoch", 0)),
         "exp": int(time.time()) + SESSION_TTL_SECONDS,
-        "n": secrets.token_hex(8),
+        "n": secrets.token_hex(16),
     }
     body = _b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signature = _b64encode(
@@ -716,14 +731,12 @@ def create_session(user: dict) -> str:
 
 def read_session(token: str) -> dict | None:
     try:
-        body, signature = token.split(".", 1)
-        expected = _b64encode(
-            hmac.new(_session_secret(), body.encode("ascii"), hashlib.sha256).digest()
-        )
-        if not hmac.compare_digest(signature, expected):
+        payload = _decode_session_payload(token)
+        if payload is None:
             return None
-        payload = json.loads(_b64decode(body))
         if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        if session_store.is_revoked(_session_digest(payload), int(time.time())):
             return None
         user = find_user(payload.get("u", ""))
         if not user or not user.get("active", True):
@@ -739,8 +752,39 @@ def read_session(token: str) -> dict | None:
             role_policy.valid_account_review_grants(user)
         )
         return session_user
-    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+    except Exception:
+        # Session persistence failures fail closed; they never revive a token.
         return None
+
+
+def _decode_session_payload(token: str) -> dict | None:
+    body, signature = token.split(".", 1)
+    expected = _b64encode(
+        hmac.new(_session_secret(), body.encode("ascii"), hashlib.sha256).digest()
+    )
+    if not hmac.compare_digest(signature, expected):
+        return None
+    payload = json.loads(_b64decode(body))
+    return payload if isinstance(payload, dict) else None
+
+
+def _session_digest(payload: dict) -> str:
+    nonce = payload.get("n")
+    if not isinstance(nonce, str) or not nonce:
+        raise ValueError("session nonce missing")
+    return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+
+
+def revoke_session(token: str) -> bool:
+    """Revoke one signed session without affecting the user's other devices."""
+    try:
+        payload = _decode_session_payload(token)
+        if payload is None or int(payload.get("exp", 0)) < int(time.time()):
+            return False
+        session_store.revoke(_session_digest(payload), int(payload["exp"]))
+        return True
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
 
 
 # ---------------------------------------------------------------------------

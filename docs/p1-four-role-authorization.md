@@ -38,6 +38,13 @@ CRM 价格维护按账号的项目授权执行：新增、修改或删除时必�
 | F7 | 业务经理获 CRM 报价维护权后试图修改其他基础资料或越权项目价格 | 报价写权限与 CRM 全库维护分开；价格写入须通过 CRM 项目编号/名称双重匹配及账号项目授权 |
 | F8 | 角色降级、停用或所属项目变更后旧授权残留 | 撤销旧会话并清理/冻结旧例外授权；范围变化需重新审批 |
 | F9 | 权限审计存储失败 | 不保存新的授权、不返回成功；避免“操作成功但没有授权证据” |
+| F10 | 用户复制了会话 Cookie，或注销后重放旧令牌 | 注销时撤销当前会话 nonce；旧令牌拒绝，其他设备会话保持有效；撤销存储不可用或损坏时拒绝认证 |
+| F11 | OIDC issuer 配成 HTTP，导致发现/JWKS/令牌传输可被中间人替换 | OIDC 配置和身份绑定只接受 HTTPS issuer；HTTP 按未配置/拒绝绑定处理 |
+| F12 | 请求者伪造 `X-Forwarded-Host/Proto` 影响 IdP 授权码回调目的地 | 必须显式配置固定 HTTPS `P0_OIDC_REDIRECT_URI`；缺失或无效时拒绝启动登录，转发头不参与计算 |
+| F13 | HTTPS issuer 返回 HTTP 或非法端口的 authorization/token/JWKS endpoint | discovery 接受前校验三个 endpoint 均为结构有效的 HTTPS URL；失败不缓存 metadata、不发起 token/JWKS 请求 |
+| F14 | WeKnora ID Token 缺少授权请求 nonce，或 nonce 与浏览器授权流程不符 | 必须与签名 state 中的预期 nonce 恒定时间比较；失败时在读取 UserInfo、查找账号和签发会话前拒绝；UserInfo 不得覆盖 ID Token 安全声明 |
+
+P0 员工会话使用签名令牌和 128 位随机 nonce。注销时删除浏览器 Cookie 并将当前令牌的 nonce 摘要写入撤销存储：`P0_STORE=postgres` 写入共享 PostgreSQL 表，JSON 模式使用 `P0_DATA_DIR/auth/session_revocations.json` 和跨进程文件锁；不保存原令牌。撤销项在会话到期后清理。此行为只退出当前设备，不代表 OIDC 提供方的全局退出，也不会自动撤销 WeKnora 已签发的独立会话；双 Web 的统一登出仍需客户 IdP 配置和联调确认。
 
 ## 4. 实施顺序
 

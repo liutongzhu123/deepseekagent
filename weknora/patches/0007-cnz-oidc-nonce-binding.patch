@@ -1,0 +1,387 @@
+diff --git a/internal/application/service/user.go b/internal/application/service/user.go
+index e54d8b5..ddf4d38 100644
+--- a/internal/application/service/user.go
++++ b/internal/application/service/user.go
+@@ -5,6 +5,7 @@ import (
+ 	"crypto/rand"
+ 	"crypto/rsa"
+ 	"crypto/sha256"
++	"crypto/subtle"
+ 	"encoding/base64"
+ 	"encoding/json"
+ 	"errors"
+@@ -517,6 +518,7 @@ func (s *userService) GetOIDCAuthorizationURL(ctx context.Context, redirectURI s
+ 	query.Set("redirect_uri", redirectURI)
+ 	query.Set("scope", strings.Join(cfg.Scopes, " "))
+ 	query.Set("state", state)
++	query.Set("nonce", nonce)
+ 	if cfg.PKCEEnabled {
+ 		challenge := sha256.Sum256([]byte(codeVerifier))
+ 		query.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
+@@ -547,7 +549,7 @@ func (s *userService) LoginWithOIDC(
+ 	ctx context.Context,
+ 	code, redirectURI string,
+ 	provisioning types.TenantProvisioningMode,
+-	codeVerifier string,
++	codeVerifier, expectedNonce string,
+ ) (*types.OIDCCallbackResponse, error) {
+ 	if strings.TrimSpace(code) == "" {
+ 		return nil, errors.New("code is required")
+@@ -555,6 +557,10 @@ func (s *userService) LoginWithOIDC(
+ 	if strings.TrimSpace(redirectURI) == "" {
+ 		return nil, errors.New("redirect_uri is required")
+ 	}
++	expectedNonce = strings.TrimSpace(expectedNonce)
++	if expectedNonce == "" {
++		return nil, errors.New("OIDC nonce is required")
++	}
+ 
+ 	cfg, err := s.getOIDCConfig(ctx)
+ 	if err != nil {
+@@ -566,7 +572,7 @@ func (s *userService) LoginWithOIDC(
+ 		return nil, err
+ 	}
+ 
+-	userInfo, err := s.resolveOIDCUserInfo(ctx, cfg, tokenResp)
++	userInfo, err := s.resolveOIDCUserInfo(ctx, cfg, tokenResp, expectedNonce)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -1855,7 +1861,7 @@ func (s *userService) exchangeOIDCCode(
+ 	return &tokenResp, nil
+ }
+ 
+-func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCAuthConfig, tokenResp *oidcTokenResponse) (*types.OIDCUserInfo, error) {
++func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCAuthConfig, tokenResp *oidcTokenResponse, expectedNonce string) (*types.OIDCUserInfo, error) {
+ 	claims := map[string]interface{}{}
+ 	verifiedFromIDToken := false
+ 	verifiedSubject := ""
+@@ -1878,6 +1884,11 @@ func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCA
+ 			if verifiedSubject == "" || claimString(idTokenClaims, "iss") == "" {
+ 				return nil, errors.New("verified OIDC id_token is missing issuer or subject")
+ 			}
++			expectedNonce = strings.TrimSpace(expectedNonce)
++			idTokenNonce := claimString(idTokenClaims, "nonce")
++			if expectedNonce == "" || idTokenNonce == "" || subtle.ConstantTimeCompare([]byte(idTokenNonce), []byte(expectedNonce)) != 1 {
++				return nil, errors.New("OIDC ID token nonce does not match the authorization request")
++			}
+ 			verifiedFromIDToken = true
+ 		}
+ 	}
+@@ -1897,7 +1908,10 @@ func (s *userService) resolveOIDCUserInfo(ctx context.Context, cfg *config.OIDCA
+ 				return nil, errors.New("OIDC userinfo subject does not match verified id_token subject")
+ 			}
+ 			for k, v := range userInfoClaims {
+-				if k != "sub" && k != "iss" {
++				switch k {
++				case "sub", "iss", "nonce", "aud", "exp", "iat", "azp", "auth_time", "at_hash", "c_hash":
++					continue
++				default:
+ 					claims[k] = v
+ 				}
+ 			}
+diff --git a/internal/application/service/user_oidc_flow_test.go b/internal/application/service/user_oidc_flow_test.go
+index 85f5803..fbc94df 100644
+--- a/internal/application/service/user_oidc_flow_test.go
++++ b/internal/application/service/user_oidc_flow_test.go
+@@ -56,6 +56,7 @@ func TestOIDCServiceSyntheticProviderBoundIdentityAndUnboundSameEmail(t *testing
+ 	const subject = "stable-subject-17"
+ 	const callback = "https://weknora.example/api/v1/auth/oidc/callback"
+ 	var codeChallenge string
++	var expectedNonce string
+ 	var endpointHits struct {
+ 		sync.Mutex
+ 		userinfo int
+@@ -75,6 +76,7 @@ func TestOIDCServiceSyntheticProviderBoundIdentityAndUnboundSameEmail(t *testing
+ 			verifier := r.Form.Get("code_verifier")
+ 			endpointHits.Lock()
+ 			expectedChallenge := codeChallenge
++			tokenNonce := expectedNonce
+ 			endpointHits.Unlock()
+ 			if r.Form.Get("code") != "synthetic-code" ||
+ 				r.Form.Get("client_id") != "weknora-client" ||
+@@ -87,6 +89,7 @@ func TestOIDCServiceSyntheticProviderBoundIdentityAndUnboundSameEmail(t *testing
+ 			}
+ 			claims := baseClaims(issuer, "weknora-client")
+ 			claims["sub"] = subject
++			claims["nonce"] = tokenNonce
+ 			idToken := signedIDToken(t, key, "synthetic-kid", claims)
+ 			_ = json.NewEncoder(w).Encode(map[string]string{
+ 				"access_token": "synthetic-access-token",
+@@ -150,14 +153,15 @@ func TestOIDCServiceSyntheticProviderBoundIdentityAndUnboundSameEmail(t *testing
+ 				t.Fatal(err)
+ 			}
+ 			params := parsedAuthorization.Query()
+-			if params.Get("client_id") != "weknora-client" || params.Get("redirect_uri") != callback || params.Get("code_challenge_method") != "S256" {
++			if params.Get("client_id") != "weknora-client" || params.Get("redirect_uri") != callback || params.Get("code_challenge_method") != "S256" || params.Get("nonce") == "" || params.Get("nonce") != authorization.Nonce {
+ 				t.Fatalf("unexpected authorization parameters: %v", params)
+ 			}
+ 			endpointHits.Lock()
+ 			codeChallenge = params.Get("code_challenge")
++			expectedNonce = params.Get("nonce")
+ 			endpointHits.Unlock()
+ 
+-			response, err := svc.LoginWithOIDC(context.Background(), "synthetic-code", callback, types.TenantProvisioningMode(""), authorization.PKCEVerifier)
++			response, err := svc.LoginWithOIDC(context.Background(), "synthetic-code", callback, types.TenantProvisioningMode(""), authorization.PKCEVerifier, expectedNonce)
+ 			if bound {
+ 				if err != nil || response == nil || !response.Success || response.IsNewUser || response.User.ID != "account-42" {
+ 					t.Fatalf("bound identity did not login: response=%+v err=%v", response, err)
+diff --git a/internal/application/service/user_oidc_verify_test.go b/internal/application/service/user_oidc_verify_test.go
+index 998deb3..15c2b3b 100644
+--- a/internal/application/service/user_oidc_verify_test.go
++++ b/internal/application/service/user_oidc_verify_test.go
+@@ -79,6 +79,7 @@ func baseClaims(iss, aud string) jwt.MapClaims {
+ 		"iss":   iss,
+ 		"aud":   aud,
+ 		"sub":   "user-123",
++		"nonce": "nonce-1",
+ 		"email": "user@example.com",
+ 		"name":  "Real User",
+ 		"exp":   time.Now().Add(time.Hour).Unix(),
+@@ -337,7 +338,7 @@ func TestResolveOIDCUserInfo_RequiresVerifiedIDToken(t *testing.T) {
+ 	info, err := svc.resolveOIDCUserInfo(context.Background(), cfg, &oidcTokenResponse{
+ 		IDToken:     forged,
+ 		AccessToken: "access-token",
+-	})
++	}, "nonce-1")
+ 	if err == nil {
+ 		t.Fatal("userinfo-only login accepted without a verified id_token")
+ 	}
+@@ -361,7 +362,7 @@ func TestResolveOIDCUserInfo_RejectsMismatchedUserinfoSubject(t *testing.T) {
+ 	idToken := signedIDToken(t, key, "kid-1", baseClaims("https://idp.example", "weknora-client"))
+ 	_, err = (&userService{}).resolveOIDCUserInfo(context.Background(), cfg, &oidcTokenResponse{
+ 		IDToken: idToken, AccessToken: "access-token",
+-	})
++	}, "nonce-1")
+ 	if err == nil {
+ 		t.Fatal("userinfo with a different subject was accepted")
+ 	}
+@@ -384,7 +385,7 @@ func TestResolveOIDCUserInfo_UserinfoFailureDoesNotFallBackToUnsignedToken(t *te
+ 	_, err := svc.resolveOIDCUserInfo(context.Background(), cfg, &oidcTokenResponse{
+ 		IDToken:     forged,
+ 		AccessToken: "access-token",
+-	})
++	}, "nonce-1")
+ 	if err == nil {
+ 		t.Fatal("expected error when userinfo fails and id_token is unverified")
+ 	}
+@@ -413,7 +414,7 @@ func TestResolveOIDCUserInfo_VerifiedIDTokenUsedWhenUserinfoFails(t *testing.T)
+ 	info, err := svc.resolveOIDCUserInfo(context.Background(), cfg, &oidcTokenResponse{
+ 		IDToken:     idToken,
+ 		AccessToken: "access-token",
+-	})
++	}, "nonce-1")
+ 	if err != nil {
+ 		t.Fatalf("resolveOIDCUserInfo: %v", err)
+ 	}
+diff --git a/internal/handler/auth.go b/internal/handler/auth.go
+index af97cf2..f453c04 100644
+--- a/internal/handler/auth.go
++++ b/internal/handler/auth.go
+@@ -461,7 +461,7 @@ func (h *AuthHandler) OIDCRedirectCallback(c *gin.Context) {
+ 
+ 	resp, err := h.userService.LoginWithOIDC(
+ 		ctx, code, strings.TrimSpace(decodedState.RedirectURI),
+-		h.resolveDefaultTenantMode(ctx), decodedState.PKCEVerifier,
++		h.resolveDefaultTenantMode(ctx), decodedState.PKCEVerifier, decodedState.Nonce,
+ 	)
+ 	if err != nil {
+ 		logger.Errorf(ctx, "Failed to complete OIDC login via redirect callback: %v", err)
+diff --git a/internal/handler/auth_oidc_pkce_test.go b/internal/handler/auth_oidc_pkce_test.go
+index 09fe54a..9dc33f7 100644
+--- a/internal/handler/auth_oidc_pkce_test.go
++++ b/internal/handler/auth_oidc_pkce_test.go
+@@ -52,7 +52,7 @@ type stubOIDCPKCECallback struct {
+ }
+ 
+ func (s *stubOIDCPKCECallback) LoginWithOIDC(
+-	_ context.Context, _, _ string, _ types.TenantProvisioningMode, verifier string,
++	_ context.Context, _, _ string, _ types.TenantProvisioningMode, verifier, _ string,
+ ) (*types.OIDCCallbackResponse, error) {
+ 	s.verifier = verifier
+ 	return &types.OIDCCallbackResponse{Success: false, Message: "stop after exchange boundary"}, nil
+diff --git a/internal/handler/auth_oidc_synthetic_flow_test.go b/internal/handler/auth_oidc_synthetic_flow_test.go
+index 5b828ea..94354e0 100644
+--- a/internal/handler/auth_oidc_synthetic_flow_test.go
++++ b/internal/handler/auth_oidc_synthetic_flow_test.go
+@@ -31,9 +31,11 @@ type syntheticOIDCUserRepo struct {
+ 	user    *types.User
+ 	issuer  string
+ 	subject string
++	lookups int
+ }
+ 
+ func (r *syntheticOIDCUserRepo) GetUserByOIDCIdentity(_ context.Context, issuer, subject string) (*types.User, error) {
++	r.lookups++
+ 	if r.user == nil || issuer != r.issuer || subject != r.subject {
+ 		return nil, errors.New("user not found")
+ 	}
+@@ -72,9 +74,19 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 	const clientID = "weknora-client"
+ 	const callback = "https://weknora.example/api/v1/auth/oidc/callback"
+ 
+-	for _, bound := range []bool{true, false} {
+-		t.Run(map[bool]string{true: "bound_account", false: "same_email_unbound_account"}[bound], func(t *testing.T) {
+-			var challenge string
++	cases := []struct {
++		name      string
++		bound     bool
++		nonceMode string
++	}{
++		{name: "bound_account", bound: true, nonceMode: "valid"},
++		{name: "same_email_unbound_account", bound: false, nonceMode: "valid"},
++		{name: "missing_id_token_nonce", bound: true, nonceMode: "missing"},
++		{name: "mismatched_id_token_nonce", bound: true, nonceMode: "wrong"},
++	}
++	for _, testCase := range cases {
++		t.Run(testCase.name, func(t *testing.T) {
++			var challenge, expectedNonce string
+ 			var endpointMu sync.Mutex
+ 			userinfoHits, jwksHits := 0, 0
+ 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+@@ -89,7 +101,7 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 					}
+ 					verifier := r.Form.Get("code_verifier")
+ 					endpointMu.Lock()
+-					expectedChallenge := challenge
++					expectedChallenge, idTokenNonce := challenge, expectedNonce
+ 					endpointMu.Unlock()
+ 					if r.Form.Get("code") != "synthetic-code" || r.Form.Get("client_id") != clientID ||
+ 						r.Form.Get("redirect_uri") != callback || r.Form.Get("grant_type") != "authorization_code" ||
+@@ -103,6 +115,12 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 						"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
+ 						"email": "same@example.test", "name": "Synthetic Staff",
+ 					}
++					switch testCase.nonceMode {
++					case "valid":
++						claims["nonce"] = idTokenNonce
++					case "wrong":
++						claims["nonce"] = "wrong-authorization-nonce"
++					}
+ 					token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+ 					token.Header["kid"] = "handler-kid"
+ 					idToken, err := token.SignedString(key)
+@@ -120,7 +138,7 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 						w.WriteHeader(http.StatusUnauthorized)
+ 						return
+ 					}
+-					_ = json.NewEncoder(w).Encode(map[string]string{"sub": subject, "email": "same@example.test", "name": "Synthetic Staff"})
++					_ = json.NewEncoder(w).Encode(map[string]string{"sub": subject, "email": "same@example.test", "name": "Synthetic Staff", "nonce": "userinfo-must-not-override-token-nonce"})
+ 				case "/jwks":
+ 					endpointMu.Lock()
+ 					jwksHits++
+@@ -138,7 +156,7 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 			defer server.Close()
+ 
+ 			userRepo := &syntheticOIDCUserRepo{issuer: issuer, subject: subject}
+-			if bound {
++			if testCase.bound {
+ 				userRepo.user = &types.User{ID: "account-42", Username: "staff", Email: "same@example.test", IsActive: true}
+ 			}
+ 			tokenRepo := &syntheticOIDCTokenRepo{}
+@@ -172,11 +190,19 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 				t.Fatal(err)
+ 			}
+ 			params := authorizationURL.Query()
+-			if params.Get("client_id") != clientID || params.Get("redirect_uri") != callback || params.Get("code_challenge_method") != "S256" {
++			if params.Get("client_id") != clientID || params.Get("redirect_uri") != callback || params.Get("code_challenge_method") != "S256" || params.Get("nonce") == "" {
+ 				t.Fatalf("unexpected authorization redirect: %v", params)
+ 			}
++			statePayload, err := secutils.VerifyOIDCState(params.Get("state"))
++			if err != nil {
++				t.Fatalf("verify state returned by start route: %v", err)
++			}
++			if params.Get("nonce") != statePayload.Nonce {
++				t.Fatalf("authorization request nonce does not match signed state: query=%q state=%q", params.Get("nonce"), statePayload.Nonce)
++			}
+ 			endpointMu.Lock()
+ 			challenge = params.Get("code_challenge")
++			expectedNonce = params.Get("nonce")
+ 			endpointMu.Unlock()
+ 
+ 			var nonceCookie, pkceCookie *http.Cookie
+@@ -188,7 +214,8 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 					pkceCookie = cookie
+ 				}
+ 			}
+-			if nonceCookie == nil || pkceCookie == nil || !nonceCookie.HttpOnly || !pkceCookie.HttpOnly || !pkceCookie.Secure {
++			if nonceCookie == nil || pkceCookie == nil || nonceCookie.Value != statePayload.Nonce ||
++				!nonceCookie.HttpOnly || !nonceCookie.Secure || !pkceCookie.HttpOnly || !pkceCookie.Secure {
+ 				t.Fatal("OIDC start must set state nonce and secure PKCE cookies")
+ 			}
+ 
+@@ -202,14 +229,19 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 				t.Fatalf("OIDC callback status = %d, body=%s", callbackRecorder.Code, callbackRecorder.Body.String())
+ 			}
+ 			location := callbackRecorder.Header().Get("Location")
+-			if bound {
++			if testCase.bound && testCase.nonceMode == "valid" {
+ 				fragment := strings.TrimPrefix(location, "https://weknora.example/#oidc_result=")
+ 				decoded, err := url.QueryUnescape(fragment)
+ 				if err != nil {
+ 					t.Fatal(err)
+ 				}
+ 				payload, err := base64.RawURLEncoding.DecodeString(decoded)
+-				if err != nil || !strings.Contains(string(payload), "account-42") {
++				var result map[string]any
++				if err == nil {
++					err = json.Unmarshal(payload, &result)
++				}
++				user, _ := result["user"].(map[string]any)
++				if err != nil || user["id"] != "account-42" || result["success"] != true {
+ 					t.Fatalf("bound callback result missing account identity: payload=%s err=%v", payload, err)
+ 				}
+ 				if tokenRepo.count() != 2 {
+@@ -217,17 +249,34 @@ func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
+ 				}
+ 			} else {
+ 				if !strings.Contains(location, "#oidc_error=login_failed") || tokenRepo.count() != 0 {
+-					t.Fatalf("unbound same-email callback must fail without tokens: location=%s count=%d", location, tokenRepo.count())
++					t.Fatalf("unbound or invalid-nonce callback must fail without tokens: location=%s count=%d", location, tokenRepo.count())
+ 				}
+ 			}
++			clearedCookies := map[string]bool{}
++			for _, cookie := range callbackRecorder.Result().Cookies() {
++				if (cookie.Name == oidcNonceCookieName || cookie.Name == oidcPKCECookieName) && cookie.MaxAge < 0 {
++					clearedCookies[cookie.Name] = true
++				}
++			}
++			if !clearedCookies[oidcNonceCookieName] || !clearedCookies[oidcPKCECookieName] {
++				t.Fatal("OIDC callback must consume both one-time cookies")
++			}
++			wantLookups := 1
++			if testCase.nonceMode != "valid" {
++				wantLookups = 0
++			}
++			if userRepo.lookups != wantLookups {
++				t.Fatalf("identity lookup count = %d, want %d", userRepo.lookups, wantLookups)
++			}
+ 			endpointMu.Lock()
+ 			userinfoCount, jwksCount := userinfoHits, jwksHits
+ 			endpointMu.Unlock()
+-			if bound && (userinfoCount != 1 || jwksCount != 1) {
+-				t.Fatalf("bound callback should request userinfo and jwks once, got %d/%d", userinfoCount, jwksCount)
++			wantUserinfoHits := 1
++			if testCase.nonceMode != "valid" {
++				wantUserinfoHits = 0
+ 			}
+-			if !bound && (userinfoCount != 1 || jwksCount != 1) {
+-				t.Fatalf("unbound callback should verify token before refusing account, got userinfo=%d jwks=%d", userinfoCount, jwksCount)
++			if userinfoCount != wantUserinfoHits || jwksCount != 1 {
++				t.Fatalf("callback endpoint hits = userinfo:%d jwks:%d, want userinfo:%d jwks:1", userinfoCount, jwksCount, wantUserinfoHits)
+ 			}
+ 		})
+ 	}
+diff --git a/internal/types/interfaces/user.go b/internal/types/interfaces/user.go
+index 8e1c51b..3199d0b 100644
+--- a/internal/types/interfaces/user.go
++++ b/internal/types/interfaces/user.go
+@@ -19,7 +19,7 @@ type UserService interface {
+ 	// but must not cause automatic account creation.
+ 	LoginWithOIDC(
+ 		ctx context.Context, code, redirectURI string,
+-		provisioning types.TenantProvisioningMode, codeVerifier string,
++		provisioning types.TenantProvisioningMode, codeVerifier, expectedNonce string,
+ 	) (*types.OIDCCallbackResponse, error)
+ 	// GetUserByID gets a user by ID
+ 	GetUserByID(ctx context.Context, id string) (*types.User, error)

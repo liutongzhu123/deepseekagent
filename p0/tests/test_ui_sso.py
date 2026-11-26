@@ -8,6 +8,10 @@ def read(name: str) -> str:
     return (ROOT / "static" / name).read_text(encoding="utf-8")
 
 
+def read_js() -> str:
+    return (ROOT / "static" / "ui.js").read_text(encoding="utf-8")
+
+
 def test_login_page_has_sso_entry_and_error_mapping():
     html = read("login.html")
     for marker in ("ssoBlock", "ssoBtn", "使用企业 SSO 登录", "sso_error"):
@@ -19,3 +23,10 @@ def test_login_page_reads_provider_status():
     assert "api/v1/auth/providers" in html
     assert "start_url" in html
     assert "oidc" in html
+
+
+def test_weknora_admin_link_uses_escaped_server_url_and_safe_new_tab():
+    js = read_js()
+    assert "weknora.admin_console_url" in js
+    assert 'href="${escapeHtml(adminConsoleUrl)}"' in js
+    assert 'target="_blank" rel="noopener noreferrer"' in js
