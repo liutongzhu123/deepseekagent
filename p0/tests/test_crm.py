@@ -549,6 +549,13 @@ def test_base_data_endpoints_and_admin_permission(tmp_path, monkeypatch):
         "project_name": "项目A", "item_name": "数值类型不接受", "unit_price": 0.12345678901234568,
     })
     assert numeric_json.status_code == 400 and "十进制字符串" in numeric_json.json()["detail"]
+    raw_high_precision_number = client.post(
+        "/api/v1/crm/base-data/prices",
+        content='{"project_name":"项目A","item_name":"JSON高精度数字","unit_price":0.1234567890123456789}'.encode("utf-8"),
+        headers={"content-type": "application/json"},
+    )
+    assert raw_high_precision_number.status_code == 400
+    assert "十进制字符串" in raw_high_precision_number.json()["detail"]
     lost_precision = client.post("/api/v1/crm/base-data/prices", json={
         "project_name": "项目A", "item_name": "精度边界", "unit_price": "0.1234567890123456789",
     })
