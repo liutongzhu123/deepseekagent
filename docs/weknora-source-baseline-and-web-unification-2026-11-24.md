@@ -275,16 +275,16 @@ sequenceDiagram
 
 | 门 | 状态 | 已有证据 | 未通过项 / 下一步 |
 |---|---|---|---|
-| 1. 冻结源码与覆盖物 | 部分通过 | 官方 v0.9.1 源码锁与 6,441 文件清单已入库；当前本地 7 个 CNZ 补丁在全新源码目录成功重放，含 WeKnora OIDC 合成流程和 nonce 修复；部署器校验源码指纹 | 本地 0006/0007 尚未进入 testkb 当前 active release；现网 v0.9.0 前端 214 个覆盖文件及配置的可复现归档仍需单独完成；不能把历史临时取证目录当发布来源 |
-| 2. 项目实例与账号/资料归属 | 部分通过 | testkb 上 CNZ 独立 Compose、DB、Redis、文件卷、网络和 loopback 端口已运行；本轮只读回读 CNZ API/UI 均为 200、app/PostgreSQL/Redis/docreader healthy，备份六项 checksum 全部 OK；此前源数据库关键表为空、原文目录为空，未导入客户资料 | OIDC 关闭；历史账号、现有知识库/渠道/资料所有权尚未逐项确认；不得因此迁移或重分配账号 |
-| 3. 双端身份与账号投影 | 本地合成流程通过；同浏览器 RP 联调/testkb 部署仍未完成 | P0 start/callback 路由经内存 IdP 覆盖 discovery、PKCE/S256、token/JWKS/RS256、nonce 与显式 issuer/sub 映射；25 项 OIDC 测试通过。WeKnora 真实 Gin start/callback + `LoginWithOIDC` 合成流程覆盖授权 URL nonce 与签名 state 一致、有效/缺失/错误 ID Token nonce、UserInfo、显式绑定和同邮箱未绑定拒绝；定向 Go 测试 service/handler/repository/config 四包通过，service/handler 的 race detector 通过，独立安全复审通过 | 当前 testkb active release `e87a4c85b02c0963c26ec44ea44696ec1fb36977` 的运行源码尚无 nonce 授权/校验补丁；客户 IdP、真实账号与双端 callback 配置未提供；仍需发布 0006/0007 后验证双端登录、未知/停用账号拒绝、IdP 全局退出及 WeKnora 会话退出；reviewer 历史权限逐账号确认；P0 PostgreSQL 集成结果见 Backlog，本地分支尚未触发 CI |
+| 1. 冻结源码与覆盖物 | CNZ v0.9.1 app 源码补丁已部署；线上历史覆盖归档仍待办 | 官方归档 SHA-256 `183b0538…b3bc5cd`、6,441 文件清单和七个补丁重放通过；commit `d865df7c496a08de97fac2869e599e9dd0099975` 的 app-only 升级已检查源指纹并生效，包含 0006/0007 nonce 修复 | 现网旧 WeKnora v0.9.0 的 214 个前端覆盖文件及配置可复现归档仍需单独完成；不能把历史临时取证目录当发布来源 |
+| 2. 项目实例与账号/资料归属 | testkb 独立实例部署健康；资料/账号迁移未验收 | 升级后 app、frontend、docreader、PostgreSQL、Redis 均运行；app/PostgreSQL/Redis 健康，API/UI 均 200，schema `138|f`；四个 CNZ 卷不变；yunan-persist 5/5 健康；有效快照校验通过；本次未导入客户资料 | OIDC 保持关闭、注册模式 `invite_only`；历史账号、现有知识库/渠道/资料所有权尚未逐项确认；不得因此迁移或重分配账号 |
+| 3. 双端身份与账号投影 | 本地合成流程与 WeKnora 部署补丁已完成；真实身份联调待客户条件 | P0 start/callback 路由经内存 IdP 覆盖 discovery、PKCE/S256、token/JWKS/RS256、nonce 与显式 issuer/sub 映射；25 项 OIDC 测试通过。WeKnora Gin start/callback + `LoginWithOIDC` 合成流程覆盖 nonce、UserInfo、显式绑定和未绑定拒绝；Go 四包 OIDC 测试及 service/handler race detector 通过；0007 已部署到 testkb | 客户 IdP、真实账号与双端 callback 配置未提供，且当前 OIDC 关闭；仍需验证双端登录、未知/停用账号拒绝、IdP 全局退出及 WeKnora 会话退出；reviewer 历史权限逐账号确认；P0 PostgreSQL 集成结果见 Backlog，本地分支尚未触发 CI |
 | 4. 统一主导航 | P0 工作台至 WeKnora 的管理员入口已本地浏览器验收；testkb 联跳未完成 | 已确认 P0/P1 工作台为业务主入口；临时合成管理员看到 WeKnora OIDC 管理台链接，合成技术账号不显示；链接配置缺失/格式错误时隐藏，目标不传递 P0 会话 | testkb 未配置外部可访问的 CNZ 管理地址，WeKnora OIDC 关闭且没有合成管理员账号；不能验证真实目标导航、登录后菜单或 SSO 回调，需要配置两端测试端点与合成账号 |
 | 5. 项目功能与角色范围 | P0 服务端边界已本地实现并回归，testkb 未部署验收 | 新业务经理/技术账号空项目范围拒绝访问；检索前按项目过滤 WeKnora 知识；角色/范围/审核授权变更撤销旧会话；授权审计失败拒绝写入；旧账号兼容边界有测试 | WeKnora 实际 KB、CRM/报价/客服等业务路由仍需在 CNZ 测试环境对照角色逐项验收；跨项目拒绝和管理员操作还未在 testkb 登录验证 |
-| 6. 恢复、检索、业务与会话回归 | 未通过 | DB/文件隔离往返方法已用 synthetic sentinel 验证；P0 当前令牌注销/重放拒绝本地回归通过；管理员跳转浏览器核验完成；本地 P0 全量 1182 passed/42 skipped，隔离 PostgreSQL 全量回归 1187/23 通过；本轮 CNZ 部署器/前端升级器/备份恢复定向测试 28 passed；testkb 备份六项校验通过 | 整栈冷恢复未完成数据相等断言且复跑被审批拒绝；WeKnora 合成资料检索、引用、双 RP 登录、账号变更/停用及 IdP/WeKnora 跨端退出仍未验收 |
+| 6. 恢复、检索、业务与会话回归 | 未通过 | DB/文件隔离往返方法已用 synthetic sentinel 验证；P0 当前令牌注销/重放拒绝本地回归通过；管理员跳转浏览器核验完成；本地 P0 回归与 WeKnora Go OIDC 定向测试通过；app-only 升级后服务及隔离不变量通过；testkb 快照 SHA-256 与数据库恢复演练通过 | 整栈冷恢复仍未完成全量数据相等断言；合成资料尚未上传 WeKnora，检索/引用、双 RP 登录、账号变更/停用及 IdP/WeKnora 跨端退出仍未验收 |
 
 结论：当前可以确认 CNZ 知识服务栈已隔离部署且健康，P0 项目权限代码已在本地通过全套回归；不能据此宣称双 Web 整合、真实 OIDC、testkb 服务端权限、WeKnora 检索或整栈灾备已验收。恢复副本复测需等获批后在内部网络运行并对齐 92 个关系、关键表行数、Redis 键数及文件清单；当前审批拒绝不允许通过变更探测方式或其他路径绕过。
 
-2026-11-26 追加只读回读：testkb 当前 active release 指向 `/opt/cnz-weknora/releases/e87a4c85b02c0963c26ec44ea44696ec1fb36977`，API/UI 返回 200，备份目录六项 SHA-256 均为 OK，yunan-persist 服务保持健康。远端 WeKnora 源码未含本地 0007 nonce 修复，因此尚未对运行环境应用该变更；不得直接绕过部署器的 main-only 和发布流程。
+2026-11-26 部署更新：本地提交 `d865df7c496a08de97fac2869e599e9dd0099975` 经固定 v0.9.1 归档、七补丁重放及 app-only 升级器部署到 testkb；运行 active release 已由旧版本切换到该代码提交，app 镜像已重建。升级前有效快照为 `/var/backups/cnz-weknora/20261126T052341Z-e87a4c85b02c0963c26ec44ea44696ec1fb36977.QWU7vO`。升级成功标记及独立只读回读确认 schema `138|f`、API/UI 200、五个 CNZ 服务运行、四个 CNZ 卷不变、五个 yunan-persist 服务健康，OIDC=false、注册模式 invite_only。后端升级器保留原 app 镜像回滚标签；未运行数据库迁移、未触碰 yunan-persist，也未导入客户资料。此部署使本地 0007 nonce 补丁进入 testkb 源码，但不表示客户 IdP/账号绑定已启用或通过运行态验收。
 
 SSO 先做两端互跳可作为入口融合的过渡。只有统一品牌或在两页放导航链接不算统一账户；只有 OIDC 登录成功不算全局退出和权限同步完成。实施工期需在客户 IdP、历史账号数量、字段和资料迁移范围明确后排，不沿用上一份功能精简估算直接相加。
 

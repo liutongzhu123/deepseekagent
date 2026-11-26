@@ -65,5 +65,6 @@ docker compose -p cnz-weknora \
 - 服务终态：CNZ app、Redis、docreader 健康，API/UI 均返回 200；五个 `yunan-persist` 容器健康。此记录不代表完整应用栈恢复验收：原文/docreader/Redis 归档做了完整性校验，尚未在隔离栈逐项回灌并执行 WeKnora 端到端验收。
 - 当时活动 release 为 `e87a4c85...`，运行中 app 配置来自 `9cb69e89...`；快照元数据分别记录两者和配置文件哈希。该差异需在后端升级时结合发布脚本继续核验。
 - 目标机 `/var/backups` 所在文件系统为 ext4，脚本没有静态加密。当前归档只靠 root 可访问的目录/文件权限保护，后续需在异机备份前配置加密存储。
+- 2026-11-26 追加：使用固定上游归档及快照完成 app-only 部署，active 代码 release 为 `d865df7c496a08de97fac2869e599e9dd0099975`。app、frontend、docreader、PostgreSQL、Redis 均运行，API/UI 200，schema 为 `138|f`，OIDC=false、注册模式 `invite_only`；四个 CNZ 卷未变、yunan-persist 五个服务健康。旧 app 镜像保留供回滚。本次没有开启注册、配置客户 IdP 或上传资料。
 
 部署后仍需按合成资料完成登录/管理员初始化、上传解析、检索引用、OIDC 显式账号绑定及越权拒绝、容器/数据卷隔离核验和备份恢复演练。注册保持关闭，未配置可信 IdP 前 OIDC 保持关闭；因此健康检查成功仅表示运行栈启动，不代表 SSO 或业务端到端验收完成。reviewer 逐账号确认前不迁移任何历史审核权限。
