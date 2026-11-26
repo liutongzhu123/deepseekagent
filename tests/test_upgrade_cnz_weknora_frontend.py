@@ -25,6 +25,7 @@ def test_preflight_requires_isolated_healthy_cnz_and_valid_backup():
         "sha256sum -c SHA256SUMS",
         "UPGRADE_PREFLIGHT_OK",
         "active-release",
+        "DEPLOYED_FROM_CODE",
         "test \"$old_sha\" != \"$sha\"",
         "expected_containers",
         "cnz-weknora_postgres-data",

@@ -35,7 +35,7 @@ def test_remote_preflight_requires_isolated_healthy_stack_backup_and_clean_schem
         "cnz-weknora_docreader-tmp", "cnz-weknora_postgres-data",
         "com.docker.compose.project", "schema_migrations", "10485760",
         "yunan-persist", "127.0.0.1:39301", "127.0.0.1:18082",
-        "DEPLOYED_FROM_MAIN", "stat -c %a \"$active/.env\"",
+        "DEPLOYED_FROM_MAIN", "DEPLOYED_FROM_CODE", "verify_release_marker", "stat -c %a \"$active/.env\"",
     ):
         assert required in script
     for expected in (

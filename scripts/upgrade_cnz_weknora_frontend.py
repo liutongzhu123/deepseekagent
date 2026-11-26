@@ -35,7 +35,11 @@ case "$active" in "$root"/releases/*/source/WeKnora-0.9.1) ;; *) exit 31 ;; esac
 old_release="$(dirname "$(dirname "$active")")"
 old_sha="$(basename "$old_release")"
 test "$old_sha" != "$sha"
-grep -Fxq "$old_sha" "$old_release/DEPLOYED_FROM_MAIN"
+if [ -f "$old_release/DEPLOYED_FROM_CODE" ]; then
+  grep -Fxq "$old_sha" "$old_release/DEPLOYED_FROM_CODE"
+else
+  grep -Fxq "$old_sha" "$old_release/DEPLOYED_FROM_MAIN"
+fi
 test "$(stat -c %a "$active/.env")" = 600
 test ! -e "$release" && test ! -L "$release"
 test ! -e "$incoming" && test ! -L "$incoming"

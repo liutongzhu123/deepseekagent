@@ -48,6 +48,16 @@ for path in sorted(root.rglob("*"), key=lambda p: p.relative_to(root).as_posix()
 print(digest.hexdigest())
 PY
 }
+verify_release_marker() {
+  expected="$1"; directory="$2"
+  if [ -f "$directory/DEPLOYED_FROM_CODE" ]; then
+    grep -Fxq "$expected" "$directory/DEPLOYED_FROM_CODE"
+  elif [ -f "$directory/DEPLOYED_FROM_MAIN" ]; then
+    grep -Fxq "$expected" "$directory/DEPLOYED_FROM_MAIN"
+  else
+    return 1
+  fi
+}
 stage=preflight
 trap 'echo "CNZ_BACKUP_FAILED_STAGE=$stage"' ERR
 root=/opt/cnz-weknora
@@ -56,14 +66,14 @@ active="$(readlink -f "$root/active-release")"
 case "$active" in "$root"/releases/*/source/WeKnora-0.9.1) ;; *) echo F2_INVALID_ACTIVE_RELEASE; exit 22 ;; esac
 release="$(dirname "$(dirname "$active")")"
 source_sha="$(basename "$release")"
-grep -Fxq "$source_sha" "$release/DEPLOYED_FROM_MAIN"
+verify_release_marker "$source_sha" "$release"
 test "$(stat -c %a "$active/.env")" = 600
 runtime_config="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/config/config.yaml"}}{{.Source}}{{end}}{{end}}' cnz-weknora-app)"
 [[ "$runtime_config" =~ ^$root/releases/([[:xdigit:]]{40})/source/WeKnora-0\.9\.1/config/config\.yaml$ ]]
 runtime_source_sha="${BASH_REMATCH[1]}"
 runtime_release="$root/releases/$runtime_source_sha"
 runtime_source="$runtime_release/source/WeKnora-0.9.1"
-grep -Fxq "$runtime_source_sha" "$runtime_release/DEPLOYED_FROM_MAIN"
+verify_release_marker "$runtime_source_sha" "$runtime_release"
 test -f "$runtime_config" && test ! -L "$runtime_config"
 test "$(stat -c %a "$runtime_source/.env")" = 600
 test "$(docker ps --filter name='^cnz-weknora-app$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
@@ -157,7 +167,11 @@ docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump 
 docker run --rm --network none --mount type=volume,source=cnz-weknora_data-files,target=/data/files,readonly --entrypoint /usr/bin/tar "$app_image" -czf - -C /data/files . > "$backup/files.tar.gz"
 docker run --rm --network none --mount type=volume,source=cnz-weknora_docreader-tmp,target=/tmp/docreader,readonly --entrypoint /usr/bin/tar "$docreader_image" -czf - -C /tmp/docreader . > "$backup/docreader-tmp.tar.gz"
 docker run --rm --network none --mount type=volume,source=cnz-weknora_redis-data,target=/data,readonly --entrypoint /bin/tar "$redis_image" -czf - -C /data . > "$backup/redis-volume.tar.gz"
-cp -- "$release/DEPLOYED_FROM_MAIN" "$backup/DEPLOYED_FROM_MAIN"
+if [ -f "$release/DEPLOYED_FROM_CODE" ]; then
+  cp -- "$release/DEPLOYED_FROM_CODE" "$backup/DEPLOYED_FROM_CODE"
+else
+  cp -- "$release/DEPLOYED_FROM_MAIN" "$backup/DEPLOYED_FROM_MAIN"
+fi
 chmod 0600 "$backup"/*
 stage=verify_archives
 test -s "$backup/database.dump" && test -s "$backup/files.tar.gz" && test -s "$backup/docreader-tmp.tar.gz" && test -s "$backup/redis-volume.tar.gz"
