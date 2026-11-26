@@ -47,6 +47,13 @@ def test_failure_inventory_is_covered_by_preflight_and_rollback_guards():
     assert "down -v" not in add.INSTALL
 
 
+def test_configure_verifies_the_same_main_marker_created_by_bundle_builder():
+    assert 'grep -Fxq "$sha" "$incoming/DEPLOYED_FROM_MAIN"' in add.CONFIGURE
+    assert 'grep -Fxq "$sha" "$incoming/DEPLOYED_FROM_CODE"' not in add.CONFIGURE
+    assert "OLLAMA_CONFIGURE_FAILED_PHASE" in add.CONFIGURE
+    assert "activate_staged_release" in add.CONFIGURE
+
+
 def test_remote_scripts_parse_and_deployment_targets_are_constrained(tmp_path):
     for name, script in (("preflight", add.PREFLIGHT), ("configure", add.CONFIGURE), ("install", add.INSTALL)):
         path = tmp_path / f"{name}.sh"
@@ -122,3 +129,28 @@ def test_missing_runtime_marker_is_reported_as_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(add.base, "cleanup_incoming", lambda *_: None)
     with pytest.raises(RuntimeError, match="completion marker missing"):
         add.install("yunan-101", "/var/backups/cnz-weknora/snapshot", upstream)
+
+
+def test_configure_failure_reports_safe_stage_and_stops_before_service_start(monkeypatch, tmp_path):
+    sha, old = "a" * 40, "b" * 40
+    bundle = tmp_path / "release.tar.gz"
+    bundle.write_bytes(b"synthetic bundle")
+    upstream = tmp_path / "upstream.tar.gz"
+    upstream.write_bytes(b"synthetic upstream")
+    monkeypatch.setattr(add.base, "main_sha", lambda: sha)
+    monkeypatch.setattr(add.base, "make_bundle", lambda *_: (bundle, "d" * 64))
+    responses = [
+        completed(f"OLLAMA_PREFLIGHT_OK\nOLD_SHA={old}\nRUNTIME_SHA={old}\n"),
+        completed(),
+        completed("OLLAMA_CONFIGURE_FAILED_PHASE=verify_release_inputs\n", 2),
+    ]
+    scripts = []
+    monkeypatch.setattr(add, "remote", lambda target, script, *a, **k: scripts.append(script) or responses.pop(0))
+    monkeypatch.setattr(add.base, "stream_bundle", lambda *_: completed())
+    cleaned = []
+    monkeypatch.setattr(add.base, "cleanup_incoming", lambda *a: cleaned.append(a))
+    with pytest.raises(RuntimeError, match="verify_release_inputs; runtime remains unchanged"):
+        add.install("yunan-101", "/var/backups/cnz-weknora/snapshot", upstream)
+    assert scripts[-1] == add.CONFIGURE
+    assert add.INSTALL not in scripts
+    assert cleaned == [("yunan-101", sha)]

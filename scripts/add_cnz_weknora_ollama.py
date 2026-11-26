@@ -102,13 +102,18 @@ printf 'OLLAMA_PREFLIGHT_OK\nOLD_SHA=%s\nRUNTIME_SHA=%s\n' "$old_sha" "$runtime_
 CONFIGURE = r'''set -euo pipefail
 sha="$1"; root=/opt/cnz-weknora; incoming="$root/.incoming-$sha"; release="$root/releases/$sha"
 active="$(readlink -f "$root/active-release")"; project="$incoming/source/WeKnora-0.9.1"
+phase=verify_release_inputs
+trap 'code=$?; if [ "$code" -ne 0 ]; then echo "OLLAMA_CONFIGURE_FAILED_PHASE=$phase"; fi; exit "$code"' EXIT
 test -f "$project/docker-compose.yml" && test -f "$incoming/docker-compose.testkb.override.yml"
-grep -Fxq "$sha" "$incoming/DEPLOYED_FROM_CODE"
+grep -Fxq "$sha" "$incoming/DEPLOYED_FROM_MAIN"
 test ! -e "$release" && test ! -L "$release"
+phase=copy_runtime_environment
 cp -- "$active/.env" "$project/.env"; chmod 0600 "$project/.env"
 test "$(stat -c %a "$project/.env")" = 600
+phase=activate_staged_release
 mv -T "$incoming" "$release"
 echo OLLAMA_RELEASE_READY
+trap - EXIT
 '''
 
 INSTALL = r'''set -Eeuo pipefail
@@ -236,7 +241,9 @@ def install(target: str, backup: str, upstream: Path | None = None) -> None:
         configured = remote(target, CONFIGURE, sha, timeout=60)
         if configured.returncode or b"OLLAMA_RELEASE_READY" not in configured.stdout:
             base.cleanup_incoming(target, sha)
-            raise RuntimeError("F3: release setup failed")
+            match = re.search(rb"OLLAMA_CONFIGURE_FAILED_PHASE=([a-z_]+)", configured.stdout + configured.stderr)
+            phase = match.group(1).decode() if match else "unknown"
+            raise RuntimeError(f"F3: release setup failed during {phase}; runtime remains unchanged")
         deployed = remote(target, INSTALL, sha, old_sha, fingerprint, timeout=600)
         if deployed.returncode:
             match = re.search(rb"OLLAMA_INSTALL_FAILED_PHASE=([a-z_]+)", deployed.stdout + deployed.stderr)
