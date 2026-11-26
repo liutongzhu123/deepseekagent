@@ -28,6 +28,6 @@
 - 本地定向测试覆盖部署器、备份兼容、前后端升级守卫及 Ollama 增量发布器：55 项通过；PR #255 的 GitHub 三项检查通过。
 - 2026-11-26 首次部署前置验收发现 Ollama 与 WeKnora app 间需要显式的内部服务地址。当前增量配置明确设定 `OLLAMA_BASE_URL=http://ollama:11434`，并由 Compose 契约检查；网络仍只限 CNZ WeKnora 专属网络。
 - 2026-11-26 Ollama `bge-m3:567m` 下载完成；从 WeKnora app 容器请求 `http://ollama:11434/api/embed` 成功，维度为 1024。最新快照校验通过。临时引导容器采用 `self_serve`；主服务公开配置仍为 `invite_only`。注册曾因 ORM 列名错误返回 400，未创建用户；修正并部署代码前不得重试。成功注册后必须立即删除临时容器，并复核主服务配置和 `yunan-persist` 健康状态。
-- 分支 `codex/cnz-ollama-app-connectivity` 的应用连接修正已通过 Python 语法、shell 语法、`git diff --check` 和 Compose 配置检查；WeKnora 补丁文件可被 Git 解析，但上游 Go 回归测试尚未运行。当前本机没有 Go，部署脚本也只接受干净且已验证的 `main`。GitHub 推送遇 443 连接超时；未创建 PR、未合并、未部署该分支。恢复 GitHub 可达后仍需推送，并在取得小于 300 行变更的合并批准后再部署。
+- 分支 `codex/cnz-ollama-app-connectivity` 的应用连接修正已通过 Python 语法、shell 语法、`git diff --check` 和 Compose 配置检查；WeKnora OIDC 列名回归在独立 Go 容器的只读源码 overlay 上通过，活动源码未修改。部署脚本只接受干净且已验证的 `main`。GitHub 推送遇 443 连接超时；未创建 PR、未合并、未部署该分支。恢复 GitHub 可达后仍需推送，并在取得小于 300 行变更的合并批准后再部署。
 - 合成模型仍须先核验许可证与算力后才可纳入评测；当前服务器无 GPU，部署 Ollama 不代表已经选定客户生产模型。
 - 客户管理员开户、可信 IdP、OIDC 登录和双 Web 单点流程仍是独立验收门。本次 400 的应用日志已确认密码字段被脱敏为 `***`；脚本不保存密码。
