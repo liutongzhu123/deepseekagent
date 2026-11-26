@@ -50,4 +50,18 @@ docker compose -p cnz-weknora \
 
 已安装 CNZ 栈的纯前端升级使用 `scripts/upgrade_cnz_weknora_frontend.py --target yunan-101`。它重新验证当前 release、备份校验、五个 CNZ 容器/四个卷所有权与健康状态，只构建并替换 frontend。旧前端镜像保留为 `cnz-weknora-ui:rollback-<old-sha>`；新 UI 与 API 检查通过后才切换 active-release，失败时恢复旧镜像和旧指针。该路径不迁移数据库或资料、不重建 app/PostgreSQL/Redis/docreader，也不删除任何卷；仅覆盖前端补丁发布，不是通用版本升级或数据库回滚工具。
 
+## testkb CNZ 数据快照
+
+`scripts/backup_cnz_weknora_testkb.py --target yunan-101` 仅备份 CNZ PostgreSQL custom dump、WeKnora 原文卷、docreader 临时卷、Redis 持久卷和版本/镜像/迁移元数据；目录设为 `0700`，文件设为 `0600`，通过 `pg_restore --list`、压缩包可读性和 SHA-256 校验。为取得一致快照，脚本依次短暂停止 CNZ app、docreader、Redis，PostgreSQL 保持在线供 `pg_dump` 使用；退出时按 Redis、docreader、app 顺序尽力逐个恢复，并确认健康检查与 API/UI 200。它只接受 `yunan-101`，校验 CNZ 精确容器/卷、Compose 所属项目标签和实际挂载路径，要求五个 `yunan-persist` 服务健康；不会停止或修改 `yunan-persist`，也不执行删除卷操作。快照目录以原子方式独占创建，避免并发运行共写。它会同时记录活动 release 与正在运行的 app 配置所属 release，前端单独升级造成的版本指针差异不会被隐藏。
+
+快照不复制 `.env`，只记录活动 release 与运行中 app release 的 `.env` 路径和权限；但数据库或持久卷可能包含 WeKnora 保存的连接凭据等应用数据，因此快照仍按敏感数据保护。当前脚本只设置本机目录/文件权限，不提供静态加密；执行前须确认 `/var/backups` 的主机访问与存储保护符合要求。它是 testkb 原机的数据恢复点，不是独立主机迁移包。每次快照会短暂中断 CNZ 知识服务；完整数据恢复演练仍须在隔离副本上完成，单纯校验 dump/tar/SHA 不算恢复验收。
+
+### 2026-11-26 testkb 执行记录
+
+- 有效快照：`/var/backups/cnz-weknora/20261126T052341Z-e87a4c85b02c0963c26ec44ea44696ec1fb36977.QWU7vO`；目录 `0700`、文件 `0600`、SHA-256 校验通过，无 `INCOMPLETE` 标记。
+- 数据库恢复演练：使用同版本 PostgreSQL 镜像，在无网络、临时 tmpfs 的隔离容器中恢复，迁移状态为 `138 / clean`，恢复后有 90 张 public 表；临时容器已删除。
+- 服务终态：CNZ app、Redis、docreader 健康，API/UI 均返回 200；五个 `yunan-persist` 容器健康。此记录不代表完整应用栈恢复验收：原文/docreader/Redis 归档做了完整性校验，尚未在隔离栈逐项回灌并执行 WeKnora 端到端验收。
+- 当时活动 release 为 `e87a4c85...`，运行中 app 配置来自 `9cb69e89...`；快照元数据分别记录两者和配置文件哈希。该差异需在后端升级时结合发布脚本继续核验。
+- 目标机 `/var/backups` 所在文件系统为 ext4，脚本没有静态加密。当前归档只靠 root 可访问的目录/文件权限保护，后续需在异机备份前配置加密存储。
+
 部署后仍需按合成资料完成登录/管理员初始化、上传解析、检索引用、OIDC 显式账号绑定及越权拒绝、容器/数据卷隔离核验和备份恢复演练。注册保持关闭，未配置可信 IdP 前 OIDC 保持关闭；因此健康检查成功仅表示运行栈启动，不代表 SSO 或业务端到端验收完成。reviewer 逐账号确认前不迁移任何历史审核权限。
