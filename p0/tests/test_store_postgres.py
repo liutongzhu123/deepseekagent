@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import auth, main, quote_store, report_store, standard_store, task_worker
+from app import auth, main, quote_store, report_store, session_store, standard_store, task_worker
 from app.store import config, db, migration, objects, tasks
 
 PG_URL = os.getenv("P0_TEST_DATABASE_URL", "")
@@ -65,6 +65,8 @@ def pg(monkeypatch, tmp_path):
     monkeypatch.setattr(auth, "USERS_PATH", data / "auth" / "users.json")
     monkeypatch.setattr(auth, "AUDIT_PATH", data / "audit" / "audit.jsonl")
     monkeypatch.setattr(auth, "AUDIT_DIR", data / "audit")
+    monkeypatch.setattr(auth, "SECRET_PATH", data / "auth" / "session_secret")
+    monkeypatch.setattr(auth, "_SECRET", None)
     monkeypatch.setattr(standard_store, "DATA_DIR", data / "standards")
     monkeypatch.setattr(quote_store, "QUOTE_DIR", data / "quotes")
     monkeypatch.setattr(report_store, "REPORT_DIR", data / "reports")
@@ -269,6 +271,23 @@ def test_migration_reconciliation_and_file_rollback(pg):
         else:
             os.environ["P0_STORE"] = old_store
         config.reset_caches()
+
+
+def test_postgres_session_logout_revokes_only_current_token(pg):
+    user = auth.create_user("session-user", "session-password-1", role="technical")
+    current = auth.create_session(user)
+    other_device = auth.create_session(user)
+    assert auth.read_session(current)
+    assert auth.read_session(other_device)
+
+    assert auth.revoke_session(current)
+    assert auth.read_session(current) is None
+    assert auth.read_session(other_device)
+
+    with db.engine().connect() as conn:
+        rows = conn.execute(db.session_revocations.select()).all()
+    assert len(rows) == 1
+    assert len(rows[0].token_digest) == 64
 
 
 def test_report_audit_roundtrip(pg):

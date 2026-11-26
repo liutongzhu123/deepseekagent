@@ -58,6 +58,13 @@ def _citation_matches(citations: list[dict], expected_no: str, expected_clause: 
 
 
 def evaluate(dataset: dict, *, mode: str = "auto", from_store: bool = False) -> dict:
+    # F1: explicitly requesting WeKnora without a configured connection must
+    # fail before reading a store or issuing cases; never label a local fallback
+    # as a WeKnora evaluation.
+    if mode not in {"auto", "weknora", "keyword"}:
+        raise ValueError("mode must be auto/weknora/keyword")
+    if mode == "weknora" and not weknora.configured():
+        raise ValueError("mode=weknora requires a configured WeKnora endpoint, API key, and KB id")
     if from_store:
         from app import standard_store
 
@@ -67,8 +74,6 @@ def evaluate(dataset: dict, *, mode: str = "auto", from_store: bool = False) -> 
     chosen_mode = mode
     if mode == "auto":
         chosen_mode = "weknora" if weknora.configured() else "keyword"
-    if chosen_mode not in {"weknora", "keyword"}:
-        raise ValueError("mode must be auto/weknora/keyword")
     cases = dataset.get("cases") or []
     if not isinstance(cases, list) or not cases:
         raise ValueError("dataset has no cases")
@@ -89,6 +94,16 @@ def evaluate(dataset: dict, *, mode: str = "auto", from_store: bool = False) -> 
             error = "exception"
         elapsed_ms = (time.perf_counter() - started) * 1000
         latencies.append(elapsed_ms)
+        retrieval = answer.get("retrieval") or {}
+        # Backend identity must come from the retrieval result itself. Missing
+        # metadata is "unknown", never an inference from the requested mode.
+        actual_mode = str(retrieval.get("mode") or "unknown")
+        if error == "weknora_unavailable":
+            actual_mode = "unavailable"
+        # F2: a runtime outage may fall back when auto mode is allowed. An
+        # explicitly requested WeKnora run must fail the affected case instead.
+        if mode == "weknora" and actual_mode != "weknora" and not error:
+            error = "unexpected_backend"
         found = bool(answer.get("found"))
         citations = answer.get("citations") or []
         expected_no = str(case.get("standard_no") or "").strip()
@@ -110,8 +125,8 @@ def evaluate(dataset: dict, *, mode: str = "auto", from_store: bool = False) -> 
                 "found": found,
                 "ok": ok,
                 "citation_ok": citation_ok,
-                "mode": (answer.get("retrieval") or {}).get("mode", chosen_mode),
-                "top_score": (answer.get("retrieval") or {}).get("top_score"),
+                "mode": actual_mode,
+                "top_score": retrieval.get("top_score"),
                 "latency_ms": round(elapsed_ms, 1),
                 "error": error,
                 "answer": str(answer.get("answer") or "")[:500],
@@ -129,9 +144,15 @@ def evaluate(dataset: dict, *, mode: str = "auto", from_store: bool = False) -> 
         bucket["ok"] += 1 if item["ok"] else 0
     for bucket in by_tag.values():
         bucket["accuracy"] = round(bucket["ok"] / bucket["total"], 4) if bucket["total"] else 0.0
+    actual_modes: dict[str, int] = {}
+    for item in results:
+        actual_modes[item["mode"]] = actual_modes.get(item["mode"], 0) + 1
+    actual_modes = dict(sorted(actual_modes.items()))
     return {
         "name": dataset.get("name", ""),
-        "mode": chosen_mode,
+        "requested_mode": mode,
+        "mode": next(iter(actual_modes)) if len(actual_modes) == 1 else "mixed",
+        "actual_modes": actual_modes,
         "kb_count": len(kbs),
         "chunk_count": sum(len(kb.get("chunks") or []) for kb in kbs),
         "total": len(results),
@@ -155,7 +176,8 @@ def markdown(report: dict) -> str:
     lines = [
         f"# WeKnora Q&A 评测：{report['name']}",
         "",
-        f"- 模式：`{report['mode']}`；知识库 {report['kb_count']} 份 / {report['chunk_count']} 片段",
+        f"- 请求模式：`{report.get('requested_mode', report['mode'])}`；实际模式：`{report['mode']}`；知识库 {report['kb_count']} 份 / {report['chunk_count']} 片段",
+        f"- 后端用例数：{', '.join(f'`{mode}` {count}' for mode, count in report.get('actual_modes', {report['mode']: report['total']}).items())}",
         f"- 用例：{report['total']}",
         f"- 库内命中：{report['hit']['ok']}/{report['hit']['total']}（{report['hit']['accuracy']:.1%}）",
         f"- 库外拒答：{report['refusal']['ok']}/{report['refusal']['total']}（{report['refusal']['accuracy']:.1%}）",

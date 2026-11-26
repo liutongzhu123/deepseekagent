@@ -354,12 +354,31 @@ def test_project_scoped_crm_errors_do_not_expose_source_path(monkeypatch, tmp_pa
     assert prices.status_code == 503 and secret_path not in prices.text
 
 
-def test_sales_user_without_project_grants_keeps_legacy_unrestricted_reads(tmp_path, monkeypatch):
+def test_new_business_manager_without_project_grants_fails_closed(tmp_path, monkeypatch):
     path = tmp_path / "crm.xlsx"
     _workbook(path)
     monkeypatch.setenv("P0_CRM_MODE", "excel")
     monkeypatch.setenv("P0_CRM_PATH", str(path))
     client = _restricted_sales_client(monkeypatch, tmp_path, [])
+
+    projects = client.get("/api/v1/crm/projects").json()
+    qualifications = client.get("/api/v1/crm/qualifications").json()
+    prices = client.get("/api/v1/crm/prices").json()
+
+    assert projects["counts"]["projects"] == 0
+    assert prices["total"] == 0
+    assert qualifications["qualifications"] == []
+
+
+def test_legacy_business_manager_without_scope_marker_keeps_legacy_unrestricted_reads(tmp_path, monkeypatch):
+    path = tmp_path / "crm.xlsx"
+    _workbook(path)
+    monkeypatch.setenv("P0_CRM_MODE", "excel")
+    monkeypatch.setenv("P0_CRM_PATH", str(path))
+    client = _restricted_sales_client(monkeypatch, tmp_path, [])
+    legacy = auth.find_user("scoped-sales")
+    legacy.pop("project_scope_enforced", None)
+    auth.save_users([legacy])
 
     projects = client.get("/api/v1/crm/projects").json()
     qualifications = client.get("/api/v1/crm/qualifications").json()
@@ -530,6 +549,13 @@ def test_base_data_endpoints_and_admin_permission(tmp_path, monkeypatch):
         "project_name": "项目A", "item_name": "数值类型不接受", "unit_price": 0.12345678901234568,
     })
     assert numeric_json.status_code == 400 and "十进制字符串" in numeric_json.json()["detail"]
+    raw_high_precision_number = client.post(
+        "/api/v1/crm/base-data/prices",
+        content='{"project_name":"项目A","item_name":"JSON高精度数字","unit_price":0.1234567890123456789}'.encode("utf-8"),
+        headers={"content-type": "application/json"},
+    )
+    assert raw_high_precision_number.status_code == 400
+    assert "十进制字符串" in raw_high_precision_number.json()["detail"]
     lost_precision = client.post("/api/v1/crm/base-data/prices", json={
         "project_name": "项目A", "item_name": "精度边界", "unit_price": "0.1234567890123456789",
     })

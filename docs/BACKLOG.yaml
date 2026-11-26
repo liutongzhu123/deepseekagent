@@ -12,7 +12,7 @@
 #   - detail: 详细说明（长任务用，可引用 docs/ 下的设计文档）
 
 meta:
-  updated_at: 2026-11-25
+  updated_at: 2026-11-26
   owner: supervisor
   next_task_hint: KB_IDENTITY_STACK
 
@@ -971,13 +971,25 @@ tasks:
     acceptance:
       - 6,441 个官方源文件按锁定 SHA-256 清单验证，应用中汽补丁后可从干净目录复现
       - OIDC 仅按已验证 issuer/sub 查找管理员显式绑定的账号；邮箱不作身份匹配，不自动建号
+      - WeKnora ID Token 必须携带与签名 state nonce 完全匹配的 nonce；缺失/不匹配在 UserInfo、账号查找和签发 token 前拒绝，UserInfo 不得覆盖安全声明
       - 绑定/解绑仅系统管理员可执行且生成审计事件；未绑定账号、userinfo subject 不符和无有效 ID Token 全部拒绝
       - 中汽 WeKnora Compose project、容器、数据库、Redis、原文卷、网络和 loopback 端口与 yunan-persist 完全隔离
       - 有 Go 测试、镜像构建、健康检查、合成知识样例检索/引用、OIDC 账号绑定与权限拒绝、备份恢复和回滚验收证据
       - 四角色名称保持新客户/小微客户、业务经理、系统管理员、技术部门；reviewer 的历史权限逐账号确认前不自动映射
-    files: [weknora/, ci/upstream-v0.9.1.json, scripts/prepare_weknora_source.py, .github/workflows/p0-ci.yml, docs/weknora-source-baseline-and-web-unification-2026-11-24.md]
-    note: PR #238/#239/#240（OIDC 身份、apt 顺序、Rustup 镜像）、PR #241（testkb 首次部署器）、PR #242（release staging 路径）、PR #243（安全失败阶段标记）、PR #244（构建镜像代理）、PR #245（GitHub API main 校验回退）及 PR #246（Redis healthcheck/失败后卷复用）已合并。testkb 上锁定的 v0.9.1 app/frontend/docreader 镜像成功构建；首次启动 app/API 和 UI 返回 200，但 Redis 无 healthcheck 导致 F8 门禁失败，已按脚本停止 CNZ 服务并保留四个独立卷；yunan-persist 五个服务健康且未变更。PR #246 后 main SHA 改变暴露同 SHA 重试限制，当前 PR 用源文件路径/类型/内容/权限指纹匹配失败 release，只有指纹一致、无 CNZ 容器、精确四卷和 Compose 标签匹配时才复用；不同源码、异常卷或 active 指针存在都拒绝。
+      - 员工账号管理脚本仅创建 admin/business_manager/technical；customer 和旧 reviewer/sales/viewer 在密码输入前拒绝，且有回归测试
+      - 历史账号 CSV 只读预览拒绝 email/password/未知列、重复账号和坏行；输入与输出均为仓库外 0600 私有文件；reviewer/viewer/未知角色不自动映射
+      - 新建非管理员账号启用显式项目范围；空范围无项目数据访问，只有 * 表示全部；旧会话在角色/范围/审核权限变更后失效，授权审计不可用时拒绝修改
+      - 员工注销撤销当前会话令牌；复制令牌重放被拒，其他设备令牌仍有效；JSON、SQLite 方言和真实 PostgreSQL 均有本地回归，P0 CI 也具备 PostgreSQL 专项
+      - P0 标准问答按项目过滤发往 WeKnora 的已发布知识；无授权账号不向知识检索请求传入任何项目内容
+      - P0 工作台只向系统管理员显示 WeKnora OIDC 管理台入口；跳转地址必须来自可信部署配置并通过 HTTPS/目标路径校验，不能传递 P0 会话令牌
+    files: [weknora/, p0/app/auth.py, p0/app/main.py, p0/app/session_store.py, p0/app/store/db.py, p0/static/index.html, p0/static/ui.js, p0/deploy/README.md, p0/scripts/preview_role_migration.py, p0/scripts/manage_users.py, p0/tests/test_auth.py, p0/tests/test_ui_sso.py, p0/tests/test_oidc.py, p0/tests/test_crm.py, p0/tests/test_admin_config.py, p0/tests/test_preview_role_migration.py, p0/tests/test_manage_users.py, ci/upstream-v0.9.1.json, scripts/prepare_weknora_source.py, .github/workflows/p0-ci.yml, docs/weknora-source-baseline-and-web-unification-2026-11-24.md, docs/p1-four-role-authorization.md, docs/p1-sso/README.md, docs/p1-weknora-ops/README.md]
+    note: PR #238/#239/#240（OIDC 身份、apt 顺序、Rustup 镜像）、PR #241（testkb 首次部署器）、PR #242（release staging 路径）、PR #243（安全失败阶段标记）、PR #244（构建镜像代理）、PR #245（GitHub API main 校验回退）及 PR #246（Redis healthcheck/失败后卷复用）已合并。testkb 上锁定的 v0.9.1 app/frontend/docreader 镜像成功构建；首次启动 app/API 和 UI 返回 200，但 Redis 无 healthcheck 导致 F8 门禁失败，已按脚本停止 CNZ 服务并保留四个独立卷；yunan-persist 五个服务健康且未变更。PR #246 后 main SHA 改变暴露同 SHA 重试限制，部署器已改为按源码指纹和卷所有权安全重试。后续 PR #247/#248/#250 已合并，CNZ 前端操作面精简和登录页文案已部署；2026-11-26 只读回读 CNZ API/UI 均为 200、四个 CNZ 卷存在、yunan-persist 五个服务健康；同日对 2026-11-24 备份目录中的 database.dump、files.tar.gz、redis-volume.tar.gz、config-deployment.tar.gz、images.tar.gz、ENVIRONMENT-MANIFEST.txt 重跑 SHA-256 校验均为 OK，/opt 与 /var/backups 各有 33 GiB 可用。只读验证确认现有 CNZ 前端容器内 wget/curl 可通过 Compose 服务名访问 `app:8080/health` 并获 200；冷恢复的下一轮探测应在副本网络内完成。最新只读源基线为 public relkind r=86/v=4、paradedb r=1/v=1 共 92 个关系（此前 91 口径漏计 pg_search 的 index_layer_info 视图）；六个关键表行数均为 0、Redis DBSIZE=8、原文目录 0 文件。OIDC 仍关闭，没有管理员/员工账号迁移或合成资料上传；CNZ 整栈冷恢复副本曾启动健康，但数据库/Redis 一致性断言未完成，重复运行被自动审批拒绝，因此恢复验收仍未通过。新增关键词合成基线为 9/14 命中、8/8 库外拒答，不代表 WeKnora 实际检索；需在获得受控管理员和合成知识库后用显式 WeKnora 模式复测，并完成恢复数据一致性、OIDC 绑定拒绝、登录后菜单/API、业务工作台跳转和双端退出验收。历史 reviewer 权限仍按账号待确认；2026-11-26 本地 P0 pytest 为 1157 passed/41 skipped、部署器/升级器安全测试 23/23、工作台/小程序 Node 测试 66/66，均未触碰 testkb。
 
+    latest_verification: >-
+      2026-11-26 当前 P0 工作树完整 pytest 使用本机一次性 PostgreSQL 集群验证：1187 passed、23 skipped、5 warnings；真实 PostgreSQL 会话撤销专项通过，并覆盖复制令牌重放拒绝、同账号另一会话继续有效、存储失败返回 503 且令牌未撤销、损坏 JSON 台账 fail-closed、0700/0600 文件权限。首次冷启动回归有 1 项 OCR 任务超过 10 秒测试门限；预热后该项 3.79 秒通过，随后完整回归通过。临时数据库已停止并删除；P0 CI 也配置了 PostgreSQL service，但本地分支尚未触发 CI。testkb 未部署此改动，客户 IdP 和 WeKnora 独立会话退出未联调。此前项目范围权限浏览器核验和 Node 测试结果见上轮记录。当前回合测试使用无 PostgreSQL 的 P0 venv：完整套件 1182 passed、42 skipped、5 warnings；沙箱首次运行因 localhost bind 限制有 3 项失败，提升权限后整套通过。新增管理员跨端跳转定向测试 9 passed；本地合成 OIDC 通过完整 P0 start/callback 路由、discovery、PKCE、nonce、JWKS/RS256 和 issuer/sub 绑定/拒绝，OIDC 文件 19 passed；固定 RFC 7636 向量与 tampered challenge 拒绝纳入。UI 静态检查和本地合成账号浏览器验证通过，管理员看到链接、技术账号无链接，未访问配置的目标地址或真实 IdP。独立只读复核通过。另以固定上游归档 SHA-256 `183b0538d895b85906da030b8b62a93bd884cd1967d10bcb38020b549b3bc5cd` 新鲜准备当前 WeKnora 补丁源码，并对 `internal/application/service`、`internal/handler`、`internal/application/repository`、`internal/config` 执行 `go test -run OIDC -count=1`，4 个包均通过；这不等于 P0 + WeKnora 同浏览器联登或真实 IdP 验收。此代码仍未部署 testkb，WeKnora Go RP 尚未与合成 IdP 做同一浏览器的联合回调。最新安全增量：OIDC 25 项测试通过，P0 完整套件 1191 passed、42 skipped、5 warnings；第二方复核确认 HTTPS issuer、固定 HTTPS callback、discovery HTTPS endpoints、端口范围和 128 位 nonce 风险均已关闭。另新增 WeKnora OIDC 合成 IdP 服务流程测试：真实 LoginWithOIDC 覆盖授权 URL、PKCE、token/JWKS/RS256、UserInfo、显式 issuer/sub 绑定；同邮箱但未绑定拒绝且不签 token。固定归档准备出的 6,441 文件/六补丁源码中，service、handler、repository、config 四包 OIDC 定向测试均通过。测试还逐条断言绑定与未绑定流程确实各请求一次 JWKS 和 UserInfo。测试 PKCE challenge 与服务端 handler 使用 mutex 同步，新增服务流程 `go test -race` 通过。最终六补丁重建复验四个 OIDC 包均通过。另有真实 Gin OIDC start/callback handler + `NewUserService/LoginWithOIDC` 合成联调，核验 state/nonce/PKCE cookies、RS256/JWKS、UserInfo、绑定登录和同邮箱未绑定拒绝；handler flow 的 `go test -race` 通过。该结果仍不是同浏览器两 RP 联登或 testkb 运行态验收。2026-11-26 安全跟进先发现 state nonce 未发送给 IdP，现已修正授权 URL nonce 并要求 ID Token nonce 恒等绑定；合成流程验证授权 URL nonce 与签名 state 一致、IdP 按收到的授权 nonce 回签，同时覆盖缺失/错误 nonce 拒绝和 UserInfo 不得覆盖安全声明。最终固定上游 SHA-256 重建 6,441 文件并应用七个补丁成功；OIDC 定向 Go 测试 service、handler、repository、config 四包通过，service 与 handler 合成流程 `go test -race` 通过，独立安全复审确认 nonce 协议链路闭合。testkb 未部署，仍待真实 IdP、同浏览器 P0/WeKnora SSO、目标环境运行态联调。 本轮只读回读 testkb active release 为 e87a4c85b02c0963c26ec44ea44696ec1fb36977，CNZ API/UI 均 200、备份六项校验均 OK、yunan-persist 健康；远端源码仍缺本地 0007 nonce 修复。部署器、前端升级器和备份恢复定向 pytest 28 passed，覆盖率台账校验 18 passed。 2026-11-26 本地提交 2874154（20 个文件，1,520 行新增/47 行删除）后，P0 auth/OIDC/session/UI 定向 pytest 为 58 passed、12 skipped；`gh auth status` 当前报告 GitHub CLI 凭据无效且 API 连通失败，因此未创建或推送 PR。
+
+      2026-11-26 本轮提交 `26127f6` 加固部署隔离：首次部署、前端/后端升级和快照共用 `/opt/cnz-weknora/.deploy.lock`；Compose 卷拒绝 external、非 local driver、`driver_opts` 和跨项目名称映射。相关四套本地断言 44/44、四个远端 shell 脚本 `bash -n` 4/4；独立复核未发现阻断项。pytest 未安装，未执行线上部署；最新 `gh auth status` 仍显示 token invalid，未推送/创建 PR。
+      2026-11-26 之后只读复核 testkb：active release 仍为 `d865df7c496a08de97fac2869e599e9dd0099975`；五个 CNZ 容器均只接 `cnz-weknora_WeKnora-network`，app 的三项实际挂载与预期一致；四个 CNZ 卷仍为独立命名卷，yunan-persist 5/5 healthy；API/UI=200、schema=`138|f`、注册关闭、OIDC=false。仅做只读核验，未创建账号、模型或知识库，未上传资料，也未部署尚未合入的锁/卷合同代码。
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）
     status: done

@@ -26,6 +26,8 @@ PATCHES = (
     ROOT / "weknora/patches/0003-cnz-testkb-build-mirrors.patch",
     ROOT / "weknora/patches/0004-cnz-knowledge-workspace-profile.patch",
     ROOT / "weknora/patches/0005-cnz-login-scope-copy.patch",
+    ROOT / "weknora/patches/0006-cnz-oidc-synthetic-flow-tests.patch",
+    ROOT / "weknora/patches/0007-cnz-oidc-nonce-binding.patch",
 )
 
 

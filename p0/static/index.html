@@ -394,8 +394,8 @@
             </div>
             <div class="field">
               <label for="quoteProject">项目标识</label>
-              <input type="text" id="quoteProject" placeholder="受限账号必填；留空表示不限定项目">
-              <span class="hint">项目标识用于 P1 行级授权，只对项目受限账号生效。</span>
+              <input type="text" id="quoteProject" placeholder="受限账号必填；留空表示本次不指定项目">
+              <span class="hint">本次报价的项目筛选与账号授权范围分开校验；业务经理和技术账号只能访问已获授权的项目，空授权不会放开数据访问。</span>
             </div>
             <div class="row">
               <button class="btn btn-primary" id="quoteBtn"><svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg>生成报价</button>
@@ -1017,7 +1017,7 @@
 
 <dialog id="modalCreateUser" class="modal">
   <div class="modal-head">
-    <div><h2>新增用户</h2><p>新账号默认按所选角色获得权限；项目授权可稍后调整。</p></div>
+    <div><h2>新增用户</h2><p>新账号按所选角色获得权限；业务经理和技术部门须有明确项目授权才能访问项目数据。</p></div>
     <button type="button" class="icon-btn" data-close="modalCreateUser" aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
   </div>
   <div class="modal-body">
@@ -1037,7 +1037,7 @@
       <div class="row"><input type="text" id="nuPassword" autocomplete="new-password" placeholder="至少 10 位，字母 / 数字 / 符号至少两类"><button type="button" class="btn btn-secondary btn-sm" id="nuGenPassword"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>生成</button></div>
       <span class="hint">密码只显示在本次操作中，请通过安全渠道交给用户。</span>
     </div>
-    <div class="field"><label for="nuProjects">项目授权</label><input type="text" id="nuProjects" autocomplete="off" placeholder="逗号分隔，例如 P-A, P-B；留空=不限制"><span class="hint">受限账号只能访问打上对应项目标签的标准和报价。</span></div>
+    <div class="field"><label for="nuProjects">项目授权</label><input type="text" id="nuProjects" autocomplete="off" placeholder="逗号分隔，例如 P-A, P-B；留空=无项目访问；*=全部项目"><span class="hint">业务经理和技术账号只能访问授权项目的标准和报价；全部项目须明确填写 *。</span></div>
     <div class="muted" id="nuStatus"></div>
   </div>
   <div class="modal-foot">
@@ -1052,7 +1052,7 @@
     <button type="button" class="icon-btn" data-close="modalProject" aria-label="关闭"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
   </div>
   <div class="modal-body">
-    <div class="field"><label for="projectInput">项目标识</label><input type="text" id="projectInput" autocomplete="off" placeholder="P-A, P-B"><span class="hint">留空表示不限制项目；填写 * 表示全部项目。</span></div>
+    <div class="field"><label for="projectInput">项目标识</label><input type="text" id="projectInput" autocomplete="off" placeholder="P-A, P-B"><span class="hint">留空时无项目访问权限；填写 * 才表示全部项目。</span></div>
     <div class="project-presets" id="projectPresets"></div>
     <div class="muted" id="projectStatus"></div>
   </div>

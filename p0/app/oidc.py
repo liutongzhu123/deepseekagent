@@ -26,7 +26,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 from cryptography.hazmat.primitives import hashes
@@ -57,14 +57,15 @@ class OidcConfig:
 def config(redirect_uri: str = "") -> OidcConfig | None:
     issuer = os.getenv("P0_OIDC_ISSUER", "").strip().rstrip("/")
     client_id = os.getenv("P0_OIDC_CLIENT_ID", "").strip()
-    if not issuer or not client_id:
+    callback = (redirect_uri or os.getenv("P0_OIDC_REDIRECT_URI", "")).strip()
+    if not _is_https_url(issuer) or not client_id or not _is_https_url(callback):
         return None
     return OidcConfig(
         issuer=issuer,
         client_id=client_id,
         client_secret=os.getenv("P0_OIDC_CLIENT_SECRET", "").strip(),
         scopes=os.getenv("P0_OIDC_SCOPES", "openid profile email").strip() or "openid profile email",
-        redirect_uri=redirect_uri,
+        redirect_uri=callback,
     )
 
 
@@ -73,14 +74,30 @@ def enabled() -> bool:
 
 
 def redirect_uri(request) -> str:
-    """Callback URL; ``P0_OIDC_REDIRECT_URI`` overrides proxy-derived values."""
+    """Return only an explicitly configured HTTPS callback URL.
+
+    Forwarded headers are intentionally ignored: they are request input and
+    must not determine where the IdP sends an authorization code.
+    """
+    del request
     override = os.getenv("P0_OIDC_REDIRECT_URI", "").strip()
-    if override:
-        return override
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    root = os.getenv("P0_ROOT_PATH", "").rstrip("/")
-    return f"{scheme}://{host}{root}/api/v1/auth/oidc/callback"
+    return override if _is_https_url(override) else ""
+
+
+def _is_https_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        return (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and (parsed.port is None or 1 <= parsed.port <= 65535)
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+        )
+    except ValueError:
+        return False
 
 
 def _b64e(raw: bytes) -> str:
@@ -160,8 +177,11 @@ def discovery(cfg: OidcConfig, client: httpx.Client | None = None) -> dict:
     if document_issuer != cfg.issuer:
         raise OidcError("discovery issuer does not match P0_OIDC_ISSUER")
     for key in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
-        if not document.get(key):
+        endpoint = str(document.get(key, ""))
+        if not endpoint:
             raise OidcError(f"discovery missing {key}")
+        if not _is_https_url(endpoint):
+            raise OidcError(f"discovery {key} must use HTTPS")
     _DISCOVERY_CACHE[cfg.issuer] = (time.time() + _CACHE_TTL_SECONDS, document)
     return document
 

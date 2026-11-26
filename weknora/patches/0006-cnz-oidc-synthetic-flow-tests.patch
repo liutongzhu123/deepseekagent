@@ -1,0 +1,440 @@
+diff --git a/internal/application/service/user_oidc_flow_test.go b/internal/application/service/user_oidc_flow_test.go
+new file mode 100644
+index 0000000..85f5803
+--- /dev/null
++++ b/internal/application/service/user_oidc_flow_test.go
+@@ -0,0 +1,189 @@
++package service
++
++import (
++	"context"
++	"crypto/rand"
++	"crypto/rsa"
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/Tencent/WeKnora/internal/config"
++	"github.com/Tencent/WeKnora/internal/types"
++	"github.com/Tencent/WeKnora/internal/types/interfaces"
++)
++
++type oidcFlowUserRepo struct {
++	interfaces.UserRepository
++	user    *types.User
++	issuer  string
++	subject string
++	lookups int
++}
++
++func (r *oidcFlowUserRepo) GetUserByOIDCIdentity(_ context.Context, issuer, subject string) (*types.User, error) {
++	r.lookups++
++	if r.user == nil || issuer != r.issuer || subject != r.subject {
++		return nil, errors.New("user not found")
++	}
++	return r.user, nil
++}
++
++type oidcFlowTokenRepo struct {
++	interfaces.AuthTokenRepository
++	tokens []*types.AuthToken
++}
++
++func (r *oidcFlowTokenRepo) CreateToken(_ context.Context, token *types.AuthToken) error {
++	r.tokens = append(r.tokens, token)
++	return nil
++}
++
++func TestOIDCServiceSyntheticProviderBoundIdentityAndUnboundSameEmail(t *testing.T) {
++	withOIDCSSRFWhitelist(t, "127.0.0.1")
++	key, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		t.Fatal(err)
++	}
++	const issuer = "https://idp.example"
++	const subject = "stable-subject-17"
++	const callback = "https://weknora.example/api/v1/auth/oidc/callback"
++	var codeChallenge string
++	var endpointHits struct {
++		sync.Mutex
++		userinfo int
++		jwks     int
++	}
++
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		switch r.URL.Path {
++		case "/authorize":
++			w.WriteHeader(http.StatusNoContent)
++		case "/token":
++			if err := r.ParseForm(); err != nil {
++				t.Errorf("parse token request: %v", err)
++				w.WriteHeader(http.StatusBadRequest)
++				return
++			}
++			verifier := r.Form.Get("code_verifier")
++			endpointHits.Lock()
++			expectedChallenge := codeChallenge
++			endpointHits.Unlock()
++			if r.Form.Get("code") != "synthetic-code" ||
++				r.Form.Get("client_id") != "weknora-client" ||
++				r.Form.Get("redirect_uri") != callback ||
++				r.Form.Get("grant_type") != "authorization_code" ||
++				!matchesPKCES256(expectedChallenge, verifier) {
++				t.Errorf("token request did not match authorization request: %v", r.Form)
++				w.WriteHeader(http.StatusBadRequest)
++				return
++			}
++			claims := baseClaims(issuer, "weknora-client")
++			claims["sub"] = subject
++			idToken := signedIDToken(t, key, "synthetic-kid", claims)
++			_ = json.NewEncoder(w).Encode(map[string]string{
++				"access_token": "synthetic-access-token",
++				"id_token":     idToken,
++				"token_type":   "Bearer",
++			})
++		case "/userinfo":
++			endpointHits.Lock()
++			endpointHits.userinfo++
++			endpointHits.Unlock()
++			if r.Header.Get("Authorization") != "Bearer synthetic-access-token" {
++				t.Errorf("userinfo missing bearer token")
++				w.WriteHeader(http.StatusUnauthorized)
++				return
++			}
++			_ = json.NewEncoder(w).Encode(map[string]string{
++				"sub": subject, "email": "same@example.test", "name": "Synthetic User",
++			})
++		case "/jwks":
++			endpointHits.Lock()
++			endpointHits.jwks++
++			endpointHits.Unlock()
++			_ = json.NewEncoder(w).Encode(oidcJWKS{Keys: []oidcJWK{rsaJWK(key, "synthetic-kid")}})
++		default:
++			http.NotFound(w, r)
++		}
++	}))
++	defer server.Close()
++
++	for _, bound := range []bool{true, false} {
++		t.Run(map[bool]string{true: "explicit_binding", false: "same_email_without_binding"}[bound], func(t *testing.T) {
++			endpointHits.Lock()
++			endpointHits.userinfo, endpointHits.jwks = 0, 0
++			endpointHits.Unlock()
++			var boundUser *types.User
++			if bound {
++				boundUser = &types.User{ID: "account-42", Username: "staff", Email: "same@example.test", IsActive: true}
++			}
++			userRepo := &oidcFlowUserRepo{user: boundUser, issuer: issuer, subject: subject}
++			tokenRepo := &oidcFlowTokenRepo{}
++			svc := &userService{
++				userRepo:  userRepo,
++				tokenRepo: tokenRepo,
++				config: &config.Config{OIDCAuth: &config.OIDCAuthConfig{
++					Enable: true, PKCEEnabled: true, IssuerURL: issuer,
++					ClientID: "weknora-client", ClientSecret: "synthetic-client-secret",
++					AuthorizationEndpoint: server.URL + "/authorize",
++					TokenEndpoint:         server.URL + "/token",
++					UserInfoEndpoint:      server.URL + "/userinfo",
++					JwksURI:               server.URL + "/jwks",
++					Scopes:                []string{"openid", "profile", "email"},
++				}},
++			}
++
++			authorization, err := svc.GetOIDCAuthorizationURL(context.Background(), callback)
++			if err != nil {
++				t.Fatalf("build authorization URL: %v", err)
++			}
++			parsedAuthorization, err := url.Parse(authorization.AuthorizationURL)
++			if err != nil {
++				t.Fatal(err)
++			}
++			params := parsedAuthorization.Query()
++			if params.Get("client_id") != "weknora-client" || params.Get("redirect_uri") != callback || params.Get("code_challenge_method") != "S256" {
++				t.Fatalf("unexpected authorization parameters: %v", params)
++			}
++			endpointHits.Lock()
++			codeChallenge = params.Get("code_challenge")
++			endpointHits.Unlock()
++
++			response, err := svc.LoginWithOIDC(context.Background(), "synthetic-code", callback, types.TenantProvisioningMode(""), authorization.PKCEVerifier)
++			if bound {
++				if err != nil || response == nil || !response.Success || response.IsNewUser || response.User.ID != "account-42" {
++					t.Fatalf("bound identity did not login: response=%+v err=%v", response, err)
++				}
++				if userRepo.lookups != 1 || len(tokenRepo.tokens) != 2 {
++					t.Fatalf("expected one identity lookup and two persisted tokens, lookups=%d tokens=%d", userRepo.lookups, len(tokenRepo.tokens))
++				}
++			} else {
++				if err == nil || !strings.Contains(err.Error(), "not bound") || response != nil {
++					t.Fatalf("same-email unbound identity must be denied: response=%+v err=%v", response, err)
++				}
++				if userRepo.lookups != 1 || len(tokenRepo.tokens) != 0 {
++					t.Fatalf("unbound identity must not issue tokens, lookups=%d tokens=%d", userRepo.lookups, len(tokenRepo.tokens))
++				}
++			}
++			endpointHits.Lock()
++			userinfoHits, jwksHits := endpointHits.userinfo, endpointHits.jwks
++			endpointHits.Unlock()
++			if userinfoHits != 1 || jwksHits != 1 {
++				t.Fatalf("expected one UserInfo and one JWKS request, got userinfo=%d jwks=%d", userinfoHits, jwksHits)
++			}
++		})
++	}
++}
++
++func matchesPKCES256(challenge, verifier string) bool {
++	digest := sha256.Sum256([]byte(verifier))
++	return verifier != "" && challenge == base64.RawURLEncoding.EncodeToString(digest[:])
++}
+diff --git a/internal/handler/auth_oidc_synthetic_flow_test.go b/internal/handler/auth_oidc_synthetic_flow_test.go
+new file mode 100644
+index 0000000..5b828ea
+--- /dev/null
++++ b/internal/handler/auth_oidc_synthetic_flow_test.go
+@@ -0,0 +1,239 @@
++package handler
++
++import (
++	"context"
++	"crypto/rand"
++	"crypto/rsa"
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/json"
++	"errors"
++	"math/big"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	appservice "github.com/Tencent/WeKnora/internal/application/service"
++	"github.com/Tencent/WeKnora/internal/config"
++	"github.com/Tencent/WeKnora/internal/types"
++	"github.com/Tencent/WeKnora/internal/types/interfaces"
++	secutils "github.com/Tencent/WeKnora/internal/utils"
++	"github.com/gin-gonic/gin"
++	"github.com/golang-jwt/jwt/v5"
++)
++
++type syntheticOIDCUserRepo struct {
++	interfaces.UserRepository
++	user    *types.User
++	issuer  string
++	subject string
++}
++
++func (r *syntheticOIDCUserRepo) GetUserByOIDCIdentity(_ context.Context, issuer, subject string) (*types.User, error) {
++	if r.user == nil || issuer != r.issuer || subject != r.subject {
++		return nil, errors.New("user not found")
++	}
++	return r.user, nil
++}
++
++type syntheticOIDCTokenRepo struct {
++	interfaces.AuthTokenRepository
++	mu     sync.Mutex
++	tokens []*types.AuthToken
++}
++
++func (r *syntheticOIDCTokenRepo) CreateToken(_ context.Context, token *types.AuthToken) error {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	r.tokens = append(r.tokens, token)
++	return nil
++}
++
++func (r *syntheticOIDCTokenRepo) count() int {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	return len(r.tokens)
++}
++
++func TestOIDCSyntheticProviderThroughStartAndCallbackRoutes(t *testing.T) {
++	secutils.ResetSSRFWhitelistForTest()
++	t.Setenv("SSRF_WHITELIST", "127.0.0.1")
++	t.Cleanup(secutils.ResetSSRFWhitelistForTest)
++	key, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		t.Fatal(err)
++	}
++	const issuer = "https://idp.example"
++	const subject = "weknora-stable-subject"
++	const clientID = "weknora-client"
++	const callback = "https://weknora.example/api/v1/auth/oidc/callback"
++
++	for _, bound := range []bool{true, false} {
++		t.Run(map[bool]string{true: "bound_account", false: "same_email_unbound_account"}[bound], func(t *testing.T) {
++			var challenge string
++			var endpointMu sync.Mutex
++			userinfoHits, jwksHits := 0, 0
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				switch r.URL.Path {
++				case "/authorize":
++					w.WriteHeader(http.StatusNoContent)
++				case "/token":
++					if err := r.ParseForm(); err != nil {
++						t.Errorf("parse token form: %v", err)
++						w.WriteHeader(http.StatusBadRequest)
++						return
++					}
++					verifier := r.Form.Get("code_verifier")
++					endpointMu.Lock()
++					expectedChallenge := challenge
++					endpointMu.Unlock()
++					if r.Form.Get("code") != "synthetic-code" || r.Form.Get("client_id") != clientID ||
++						r.Form.Get("redirect_uri") != callback || r.Form.Get("grant_type") != "authorization_code" ||
++						!matchesHandlerPKCE(expectedChallenge, verifier) {
++						t.Errorf("invalid token exchange form: %v", r.Form)
++						w.WriteHeader(http.StatusBadRequest)
++						return
++					}
++					claims := jwt.MapClaims{
++						"iss": issuer, "sub": subject, "aud": clientID,
++						"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
++						"email": "same@example.test", "name": "Synthetic Staff",
++					}
++					token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
++					token.Header["kid"] = "handler-kid"
++					idToken, err := token.SignedString(key)
++					if err != nil {
++						t.Errorf("sign synthetic id token: %v", err)
++						w.WriteHeader(http.StatusInternalServerError)
++						return
++					}
++					_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "synthetic-access", "id_token": idToken, "token_type": "Bearer"})
++				case "/userinfo":
++					endpointMu.Lock()
++					userinfoHits++
++					endpointMu.Unlock()
++					if r.Header.Get("Authorization") != "Bearer synthetic-access" {
++						w.WriteHeader(http.StatusUnauthorized)
++						return
++					}
++					_ = json.NewEncoder(w).Encode(map[string]string{"sub": subject, "email": "same@example.test", "name": "Synthetic Staff"})
++				case "/jwks":
++					endpointMu.Lock()
++					jwksHits++
++					endpointMu.Unlock()
++					publicKey := key.PublicKey
++					modulus := base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes())
++					exponent := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes())
++					_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
++						"kty": "RSA", "kid": "handler-kid", "use": "sig", "alg": "RS256", "n": modulus, "e": exponent,
++					}}})
++				default:
++					http.NotFound(w, r)
++				}
++			}))
++			defer server.Close()
++
++			userRepo := &syntheticOIDCUserRepo{issuer: issuer, subject: subject}
++			if bound {
++				userRepo.user = &types.User{ID: "account-42", Username: "staff", Email: "same@example.test", IsActive: true}
++			}
++			tokenRepo := &syntheticOIDCTokenRepo{}
++			appConfig := &config.Config{
++				FrontendBaseURL: "https://weknora.example",
++				Auth:            &config.AuthConfig{DefaultTenantMode: "tenantless"},
++				OIDCAuth: &config.OIDCAuthConfig{
++					Enable: true, PKCEEnabled: true, IssuerURL: issuer, ClientID: clientID,
++					ClientSecret: "synthetic-secret", AuthorizationEndpoint: server.URL + "/authorize",
++					TokenEndpoint: server.URL + "/token", UserInfoEndpoint: server.URL + "/userinfo",
++					JwksURI: server.URL + "/jwks", Scopes: []string{"openid", "profile", "email"},
++				},
++			}
++			realUserService := appservice.NewUserService(appConfig, userRepo, tokenRepo, nil, nil, nil)
++			handler := NewAuthHandler(appConfig, realUserService, nil, nil, nil)
++			gin.SetMode(gin.TestMode)
++			router := gin.New()
++			router.Use(errorCapture())
++			router.GET("/auth/oidc/start", handler.OIDCStart)
++			router.GET("/api/v1/auth/oidc/callback", handler.OIDCRedirectCallback)
++
++			startRequest := httptest.NewRequest(http.MethodGet, "https://weknora.example/auth/oidc/start", nil)
++			startRequest.Host = "weknora.example"
++			startRecorder := httptest.NewRecorder()
++			router.ServeHTTP(startRecorder, startRequest)
++			if startRecorder.Code != http.StatusFound {
++				t.Fatalf("OIDC start status = %d, body=%s", startRecorder.Code, startRecorder.Body.String())
++			}
++			authorizationURL, err := url.Parse(startRecorder.Header().Get("Location"))
++			if err != nil {
++				t.Fatal(err)
++			}
++			params := authorizationURL.Query()
++			if params.Get("client_id") != clientID || params.Get("redirect_uri") != callback || params.Get("code_challenge_method") != "S256" {
++				t.Fatalf("unexpected authorization redirect: %v", params)
++			}
++			endpointMu.Lock()
++			challenge = params.Get("code_challenge")
++			endpointMu.Unlock()
++
++			var nonceCookie, pkceCookie *http.Cookie
++			for _, cookie := range startRecorder.Result().Cookies() {
++				switch cookie.Name {
++				case oidcNonceCookieName:
++					nonceCookie = cookie
++				case oidcPKCECookieName:
++					pkceCookie = cookie
++				}
++			}
++			if nonceCookie == nil || pkceCookie == nil || !nonceCookie.HttpOnly || !pkceCookie.HttpOnly || !pkceCookie.Secure {
++				t.Fatal("OIDC start must set state nonce and secure PKCE cookies")
++			}
++
++			callbackURL := "https://weknora.example/api/v1/auth/oidc/callback?code=synthetic-code&state=" + url.QueryEscape(params.Get("state"))
++			callbackRequest := httptest.NewRequest(http.MethodGet, callbackURL, nil)
++			callbackRequest.AddCookie(nonceCookie)
++			callbackRequest.AddCookie(pkceCookie)
++			callbackRecorder := httptest.NewRecorder()
++			router.ServeHTTP(callbackRecorder, callbackRequest)
++			if callbackRecorder.Code != http.StatusFound {
++				t.Fatalf("OIDC callback status = %d, body=%s", callbackRecorder.Code, callbackRecorder.Body.String())
++			}
++			location := callbackRecorder.Header().Get("Location")
++			if bound {
++				fragment := strings.TrimPrefix(location, "https://weknora.example/#oidc_result=")
++				decoded, err := url.QueryUnescape(fragment)
++				if err != nil {
++					t.Fatal(err)
++				}
++				payload, err := base64.RawURLEncoding.DecodeString(decoded)
++				if err != nil || !strings.Contains(string(payload), "account-42") {
++					t.Fatalf("bound callback result missing account identity: payload=%s err=%v", payload, err)
++				}
++				if tokenRepo.count() != 2 {
++					t.Fatalf("bound callback should persist two tokens, got %d", tokenRepo.count())
++				}
++			} else {
++				if !strings.Contains(location, "#oidc_error=login_failed") || tokenRepo.count() != 0 {
++					t.Fatalf("unbound same-email callback must fail without tokens: location=%s count=%d", location, tokenRepo.count())
++				}
++			}
++			endpointMu.Lock()
++			userinfoCount, jwksCount := userinfoHits, jwksHits
++			endpointMu.Unlock()
++			if bound && (userinfoCount != 1 || jwksCount != 1) {
++				t.Fatalf("bound callback should request userinfo and jwks once, got %d/%d", userinfoCount, jwksCount)
++			}
++			if !bound && (userinfoCount != 1 || jwksCount != 1) {
++				t.Fatalf("unbound callback should verify token before refusing account, got userinfo=%d jwks=%d", userinfoCount, jwksCount)
++			}
++		})
++	}
++}
++
++func matchesHandlerPKCE(challenge, verifier string) bool {
++	digest := sha256.Sum256([]byte(verifier))
++	return verifier != "" && challenge == base64.RawURLEncoding.EncodeToString(digest[:])
++}

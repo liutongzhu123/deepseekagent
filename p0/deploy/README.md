@@ -26,6 +26,7 @@ P0_SESSION_SECRET=<随机 48+ 字节>
 # P0_OIDC_ISSUER=https://login.example.com
 # P0_OIDC_CLIENT_ID=<client id>
 # P0_OIDC_CLIENT_SECRET=<secret；public client 留空>
+# Required to enable SSO; must exactly match the HTTPS callback registered at the IdP.
 # P0_OIDC_REDIRECT_URI=https://<DOMAIN>/p0/api/v1/auth/oidc/callback
 # P0_OIDC_SCOPES=openid profile email
 # P0_OIDC_TOKEN_AUTH=post
@@ -34,6 +35,8 @@ P0_WEKNORA_BASE_URL=http://127.0.0.1:8081
 P0_WEKNORA_API_KEY=<WeKnora tenant API key>
 P0_WEKNORA_KB_ID=<P0 业务专用知识库 ID>
 P0_WEKNORA_REQUIRED=1
+# 仅系统管理员可见；需使用 WeKnora 的 HTTPS OIDC 启动地址
+# P0_WEKNORA_ADMIN_URL=https://<DOMAIN>/api/v1/auth/oidc/start
 P0_WEKNORA_MIN_SCORE=0.35
 P0_WEKNORA_TOP_K=6
 P0_WEKNORA_RERANK=0

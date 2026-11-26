@@ -7,8 +7,10 @@ Usage (run on the server, from /opt/cq-ai-p0):
     .venv/bin/python scripts/manage_users.py add <user> <role> [department] [projects]
     .venv/bin/python scripts/manage_users.py reset <user>
 
-``role`` is one of admin / reviewer / sales / viewer; ``projects`` is a
-comma-separated grant list (omit it for an unrestricted account).
+``role`` is one of admin / business_manager / technical; external customers
+are managed by the mini-program identity service, not as employee accounts.
+``projects`` is a comma-separated grant list (omit it for an unrestricted
+account).
 
 Passwords are read from stdin (getpass), never from a command-line argument.
 """
@@ -21,6 +23,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import auth  # noqa: E402
+
+EMPLOYEE_ROLES = ("admin", "business_manager", "technical")
 
 
 def main(argv: list[str]) -> int:
@@ -35,12 +39,19 @@ def main(argv: list[str]) -> int:
     if command == "add":
         if len(argv) not in (4, 5, 6):
             print(
-                "usage: manage_users.py add <user> <admin|reviewer|sales|viewer> "
+                "usage: manage_users.py add <user> <admin|business_manager|technical> "
                 "[department] [projects]",
                 file=sys.stderr,
             )
             return 2
         username, role = argv[2], argv[3]
+        if role not in EMPLOYEE_ROLES:
+            print(
+                "角色无效；员工账号仅支持 admin、business_manager、technical。"
+                "外部客户由小程序身份服务管理。",
+                file=sys.stderr,
+            )
+            return 2
         department = argv[4] if len(argv) >= 5 else ""
         projects = argv[5].split(",") if len(argv) >= 6 else []
         password = getpass.getpass("新密码（至少 10 位，字母/数字/符号至少两类）: ")

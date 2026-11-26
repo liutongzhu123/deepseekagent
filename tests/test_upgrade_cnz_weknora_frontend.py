@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,7 @@ def test_preflight_requires_isolated_healthy_cnz_and_valid_backup():
         "sha256sum -c SHA256SUMS",
         "UPGRADE_PREFLIGHT_OK",
         "active-release",
+        "DEPLOYED_FROM_CODE",
         "test \"$old_sha\" != \"$sha\"",
         "expected_containers",
         "cnz-weknora_postgres-data",
@@ -38,6 +41,8 @@ def test_preflight_requires_isolated_healthy_cnz_and_valid_backup():
 
 def test_frontend_update_rebuilds_only_ui_and_rolls_back_on_failure():
     script = upgrade.UPGRADE
+    assert 'not v.get("driver_opts")' in script
+    assert 'v.get("name") in (None,"cnz-weknora_"+k)' in script
     assert "compose_new build frontend" in script
     assert "compose_new up -d --no-deps frontend" in script
     assert "compose_old up -d --no-deps frontend" in script
@@ -47,6 +52,23 @@ def test_frontend_update_rebuilds_only_ui_and_rolls_back_on_failure():
     assert "down -v" not in script and "--volumes" not in script
     assert "compose_new up -d --no-deps app" not in script
     assert script.index("wait_frontend \"$new_image\"") < script.index('mv -Tf "$root/active-release.new.$sha"')
+
+
+def test_frontend_compose_contract_rejects_driver_opts_to_host_data(tmp_path):
+    line = next(line for line in upgrade.UPGRADE.splitlines() if 'config --format json | python3 -c ' in line)
+    validator = line.split("python3 -c '", 1)[1].rsplit("'", 1)[0]
+    names = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend", "docreader":"cnz-weknora-docreader", "postgres":"cnz-weknora-postgres", "redis":"cnz-weknora-redis"}
+    services = {name:{"container_name":container} for name,container in names.items()}
+    services["app"].update({"environment":{"DISABLE_REGISTRATION":"true","OIDC_AUTH_ENABLE":"false"},"ports":[{"host_ip":"127.0.0.1","target":8080,"published":"39301"}]})
+    services["frontend"]["ports"]=[{"host_ip":"127.0.0.1","target":80,"published":"18082"}]
+    volumes={key:{"driver":"local"} for key in ("data-files","docreader-tmp","postgres-data","redis-data")}
+    config={"services":services,"volumes":volumes}
+    def validate(value):
+        return subprocess.run([sys.executable,"-c",validator],input=json.dumps(value).encode(),capture_output=True)
+    assert validate(config).returncode == 0
+    malicious=json.loads(json.dumps(config))
+    malicious["volumes"]["data-files"]["driver_opts"]={"type":"none","o":"bind","device":"/srv/yunan-persist/data-files"}
+    assert validate(malicious).returncode != 0
 
 
 def test_remote_shell_scripts_parse(tmp_path):

@@ -23,7 +23,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote as url_quote
+from urllib.parse import quote as url_quote, urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
@@ -495,6 +495,14 @@ def login(payload: LoginRequest, request: Request) -> JSONResponse:
 @app.post("/api/v1/auth/logout")
 def logout(request: Request) -> JSONResponse:
     user = _require_user(request)
+    token = request.cookies.get(auth.COOKIE_NAME, "")
+    try:
+        if not auth.revoke_session(token):
+            raise HTTPException(status_code=401, detail="会话无效，请重新登录")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="会话注销暂不可用，请稍后重试") from exc
     _audit_event(request, user, "logout")
     response = JSONResponse({"ok": True})
     response.delete_cookie(auth.COOKIE_NAME, path=ROOT_PATH or "/")
@@ -538,6 +546,27 @@ def update_user(username: str, payload: UpdateUserRequest, request: Request) -> 
             raise HTTPException(status_code=409, detail="不能停用当前登录的管理员")
         if payload.role is not None and payload.role != "admin":
             raise HTTPException(status_code=409, detail="不能降低当前登录管理员的角色")
+    before = auth.find_user(username)
+    if before is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    access_change = any(
+        value is not None for value in (payload.role, payload.active, payload.projects)
+    )
+    if access_change and not auth.audit({
+        "user": actor["username"],
+        "role": actor["role"],
+        "event": "account_access_change_requested",
+        "target": username,
+        "previous_role": before.get("role", ""),
+        "requested_role": payload.role,
+        "requested_active": payload.active,
+        "requested_projects": payload.projects,
+        "method": "PATCH",
+        "path": request.url.path,
+        "status": 200,
+        "ip": _client_ip(request),
+    }):
+        raise HTTPException(status_code=503, detail="审计记录写入失败，未更新账号权限")
     try:
         user = auth.update_user(
             username,
@@ -771,7 +800,31 @@ def audit_recent(request: Request, limit: int = 50) -> dict:
 
 @app.get("/api/v1/system/status")
 def system_status(request: Request) -> dict:
-    _require_permission(request, "system:status")
+    actor = _require_permission(request, "system:status")
+    admin_console_url = ""
+    # F1 non-admin roles never receive the cross-web admin link; F2 require HTTPS;
+    # F3 require the exact OIDC start route; F4 reject credentials/query/fragment.
+    if actor.get("role") == "admin":
+        candidate = os.getenv("P0_WEKNORA_ADMIN_URL", "").strip()
+        try:
+            parsed = urlsplit(candidate)
+            if (
+                candidate
+                and not any(char.isspace() or ord(char) < 32 for char in candidate)
+                and "?" not in candidate
+                and "#" not in candidate
+                and parsed.scheme == "https"
+                and parsed.hostname
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.path.rstrip("/") == "/api/v1/auth/oidc/start"
+                and not parsed.query
+                and not parsed.fragment
+            ):
+                admin_console_url = candidate
+        except ValueError:
+            # Malformed deployment configuration must not break system status.
+            pass
     return {
         "version": app.version,
         "auth": {
@@ -784,6 +837,7 @@ def system_status(request: Request) -> dict:
             "configured": weknora.configured(),
             "required": weknora.required(),
             "kb_id": (weknora.config_from_env().kb_id if weknora.config_from_env() else ""),
+            "admin_console_url": admin_console_url,
         },
         "model_routing": model_readiness.snapshot(),
     }
