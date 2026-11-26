@@ -50,6 +50,8 @@ docker compose -p cnz-weknora \
 
 已安装 CNZ 栈的纯前端升级使用 `scripts/upgrade_cnz_weknora_frontend.py --target yunan-101`。它重新验证当前 release、备份校验、五个 CNZ 容器/四个卷所有权与健康状态，只构建并替换 frontend。旧前端镜像保留为 `cnz-weknora-ui:rollback-<old-sha>`；新 UI 与 API 检查通过后才切换 active-release，失败时恢复旧镜像和旧指针。该路径不迁移数据库或资料、不重建 app/PostgreSQL/Redis/docreader，也不删除任何卷；仅覆盖前端补丁发布，不是通用版本升级或数据库回滚工具。
 
+后端补丁升级使用 `scripts/upgrade_cnz_weknora_backend.py --target yunan-101 --upstream-archive /path/to/v0.9.1.tar.gz --backup-path /var/backups/cnz-weknora/<verified-snapshot>`。它只接受干净且已提交的本地分支、锁定官方 v0.9.1 归档和有效快照；升级前检查 active 与运行中 app release、配置文件、迁移状态 `138 / clean`、CNZ 容器及卷所有权、服务健康、磁盘余量和五个 `yunan-persist` 服务。它只构建并替换 app，保留当前 app 镜像作为回滚镜像；更新后核对数据库仍为 `138 / clean`、frontend/docreader/PostgreSQL/Redis 容器 ID 和数据卷不变、API/UI 返回 200、OIDC 仍关闭，最后才切换 active-release。失败时尝试用运行中原 release 和原镜像恢复 app；不执行数据库迁移、`down`、卷删除或 `yunan-persist` 操作。它不是完整栈回灌验收，也不启用 OIDC；真实 IdP、账号绑定、检索引用与角色越权验收仍待后续完成。
+
 ## testkb CNZ 数据快照
 
 `scripts/backup_cnz_weknora_testkb.py --target yunan-101` 仅备份 CNZ PostgreSQL custom dump、WeKnora 原文卷、docreader 临时卷、Redis 持久卷和版本/镜像/迁移元数据；目录设为 `0700`，文件设为 `0600`，通过 `pg_restore --list`、压缩包可读性和 SHA-256 校验。为取得一致快照，脚本依次短暂停止 CNZ app、docreader、Redis，PostgreSQL 保持在线供 `pg_dump` 使用；退出时按 Redis、docreader、app 顺序尽力逐个恢复，并确认健康检查与 API/UI 200。它只接受 `yunan-101`，校验 CNZ 精确容器/卷、Compose 所属项目标签和实际挂载路径，要求五个 `yunan-persist` 服务健康；不会停止或修改 `yunan-persist`，也不执行删除卷操作。快照目录以原子方式独占创建，避免并发运行共写。它会同时记录活动 release 与正在运行的 app 配置所属 release，前端单独升级造成的版本指针差异不会被隐藏。
