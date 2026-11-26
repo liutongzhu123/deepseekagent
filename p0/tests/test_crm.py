@@ -354,12 +354,31 @@ def test_project_scoped_crm_errors_do_not_expose_source_path(monkeypatch, tmp_pa
     assert prices.status_code == 503 and secret_path not in prices.text
 
 
-def test_sales_user_without_project_grants_keeps_legacy_unrestricted_reads(tmp_path, monkeypatch):
+def test_new_business_manager_without_project_grants_fails_closed(tmp_path, monkeypatch):
     path = tmp_path / "crm.xlsx"
     _workbook(path)
     monkeypatch.setenv("P0_CRM_MODE", "excel")
     monkeypatch.setenv("P0_CRM_PATH", str(path))
     client = _restricted_sales_client(monkeypatch, tmp_path, [])
+
+    projects = client.get("/api/v1/crm/projects").json()
+    qualifications = client.get("/api/v1/crm/qualifications").json()
+    prices = client.get("/api/v1/crm/prices").json()
+
+    assert projects["counts"]["projects"] == 0
+    assert prices["total"] == 0
+    assert qualifications["qualifications"] == []
+
+
+def test_legacy_business_manager_without_scope_marker_keeps_legacy_unrestricted_reads(tmp_path, monkeypatch):
+    path = tmp_path / "crm.xlsx"
+    _workbook(path)
+    monkeypatch.setenv("P0_CRM_MODE", "excel")
+    monkeypatch.setenv("P0_CRM_PATH", str(path))
+    client = _restricted_sales_client(monkeypatch, tmp_path, [])
+    legacy = auth.find_user("scoped-sales")
+    legacy.pop("project_scope_enforced", None)
+    auth.save_users([legacy])
 
     projects = client.get("/api/v1/crm/projects").json()
     qualifications = client.get("/api/v1/crm/qualifications").json()

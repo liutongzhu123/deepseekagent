@@ -538,6 +538,27 @@ def update_user(username: str, payload: UpdateUserRequest, request: Request) -> 
             raise HTTPException(status_code=409, detail="不能停用当前登录的管理员")
         if payload.role is not None and payload.role != "admin":
             raise HTTPException(status_code=409, detail="不能降低当前登录管理员的角色")
+    before = auth.find_user(username)
+    if before is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    access_change = any(
+        value is not None for value in (payload.role, payload.active, payload.projects)
+    )
+    if access_change and not auth.audit({
+        "user": actor["username"],
+        "role": actor["role"],
+        "event": "account_access_change_requested",
+        "target": username,
+        "previous_role": before.get("role", ""),
+        "requested_role": payload.role,
+        "requested_active": payload.active,
+        "requested_projects": payload.projects,
+        "method": "PATCH",
+        "path": request.url.path,
+        "status": 200,
+        "ip": _client_ip(request),
+    }):
+        raise HTTPException(status_code=503, detail="审计记录写入失败，未更新账号权限")
     try:
         user = auth.update_user(
             username,

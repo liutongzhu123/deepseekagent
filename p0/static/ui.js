@@ -1755,7 +1755,7 @@ function renderUsers() {
     const username = escapeHtml(user.username || '');
     const name = user.display_name || user.username || '未命名';
     const options = EMPLOYEE_ROLE_CODES.map((role) => `<option value="${role}" ${user.role === role ? 'selected' : ''}>${ROLE_NAMES[role]}</option>`).join('');
-    const projects = (user.projects || []).map((project) => `<span class="chip">${project === '*' ? '全部项目' : escapeHtml(project)}</span>`).join('') || '<span class="muted">不限制</span>';
+    const projects = (user.projects || []).map((project) => `<span class="chip">${project === '*' ? '全部项目' : escapeHtml(project)}</span>`).join('') || (user.role === 'admin' ? '<span class="muted">管理员全局权限</span>' : user.project_scope_enforced ? '<span class="muted">无项目授权（拒绝项目数据）</span>' : '<span class="muted">历史账号范围待确认</span>');
     const status = user.active ? '<span class="pill success">启用</span>' : '<span class="pill neutral">停用</span>';
     return `<tr>
       <td><div class="user-cell"><span class="avatar">${escapeHtml(initials(name))}</span><div><span class="u-name">${escapeHtml(name)}</span><span class="u-login">@${username}${user.restricted ? ' · 项目受限' : ''}</span></div></div></td>
@@ -2451,7 +2451,7 @@ async function patchUser(username, body, successMessage) {
 }
 function openProjectModal(username, projects) {
   state.projectUser = username;
-  $('projectSub').textContent = `设置 ${username} 可访问的项目；留空表示不限制。`;
+  $('projectSub').textContent = `设置 ${username} 可访问的项目；留空时无项目访问权限，输入 * 才表示全部项目。`;
   $('projectInput').value = projects || '';
   $('projectStatus').textContent = '';
   const known = Array.from(new Set([

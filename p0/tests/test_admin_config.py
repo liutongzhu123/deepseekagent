@@ -444,12 +444,14 @@ def test_audit_and_quote_endpoints_use_saved_config(env, monkeypatch, tmp_path):
     report = copy.deepcopy(admin.get("/api/v1/admin/config").json()["config"]["report"])
     report["rules"][7]["enabled"] = False
     assert admin.put("/api/v1/admin/config/report", json=report).status_code == 200
+    auth.create_user("auditor", "audit-password-1", role="technical", projects=["*"])
     auth.set_review_permissions(
-        "root", ["report:audit"], granted_by="test-supervisor",
+        "auditor", ["report:audit"], granted_by="root",
         reason="测试账号逐账号确认报告审核职责",
     )
+    auditor = _client("auditor", "audit-password-1", "technical")
     monkeypatch.setattr(main, "parse_docx", lambda path: _report())
-    response = admin.post(
+    response = auditor.post(
         "/api/v1/reports/audit", files={"file": ("sample.docx", b"fake-docx")}
     )
     assert response.status_code == 200

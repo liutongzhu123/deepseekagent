@@ -169,25 +169,30 @@ def _grants(user: dict) -> list[str]:
 
 
 def is_restricted(user: dict) -> bool:
-    """A user with explicit project grants (and not ``*``) is project-scoped."""
+    """Return whether this account must be filtered by explicit project grants."""
     if user.get("role") == "admin":
         return False
     grants = _grants(user)
-    return bool(grants) and "*" not in grants
+    if "*" in grants:
+        return False
+    return bool(grants) or bool(user.get("project_scope_enforced"))
 
 
 def can_access_project(user: dict, project: str, created_by: str = "") -> bool:
     """Row-level project check shared by standards and quotes.
 
-    Users without project grants keep P0's unrestricted behaviour so existing
-    installs do not lose access on upgrade.  An unassigned resource is visible
-    to its creator, and to unrestricted users, but not to other restricted users.
+    Explicitly scoped accounts with no project grants fail closed. Legacy rows
+    without the scope marker retain their old behavior until individually
+    migrated. An unassigned resource is visible to its creator and legacy
+    unrestricted users, but not to explicitly scoped accounts.
     """
     if user.get("role") == "admin":
         return True
     grants = _grants(user)
-    if not grants or "*" in grants:
+    if "*" in grants:
         return True
+    if not grants:
+        return not bool(user.get("project_scope_enforced"))
     project = (project or "").strip()
     if project:
         return project in grants
@@ -370,6 +375,7 @@ def create_user(
             "active": True,
             "department": (department or "").strip()[:128],
             "projects": normalized,
+            "project_scope_enforced": role != "admin",
             "permission_grants": [],
             "auth_provider": "local",
             "session_epoch": 0,
@@ -462,11 +468,19 @@ def update_user(
         )
         if losing_admin and _count_active_admins(users) <= 1:
             raise ValueError("至少保留一个启用的管理员")
+        security_changed = False
         if role is not None:
             if role != target.get("role"):
                 target["permission_grants"] = []
+                security_changed = True
             target["role"] = role
+            scope_enforced = role != "admin"
+            if bool(target.get("project_scope_enforced")) != scope_enforced:
+                security_changed = True
+            target["project_scope_enforced"] = scope_enforced
         if active is not None:
+            if bool(target.get("active", True)) != bool(active):
+                security_changed = True
             if not active:
                 target["permission_grants"] = []
             target["active"] = bool(active)
@@ -477,7 +491,14 @@ def update_user(
         if normalized is not None:
             if normalized != list(target.get("projects") or []):
                 target["permission_grants"] = []
+                security_changed = True
             target["projects"] = normalized
+            scope_enforced = target.get("role") != "admin"
+            if bool(target.get("project_scope_enforced")) != scope_enforced:
+                security_changed = True
+            target["project_scope_enforced"] = scope_enforced
+        if security_changed:
+            target["session_epoch"] = int(target.get("session_epoch", 0)) + 1
         target["updated_at"] = _now()
         save_users(users)
         return public_user(target)
@@ -509,6 +530,11 @@ def set_review_permissions(
         if target.get("role") not in {"business_manager", "admin", "technical"}:
             raise ValueError("审核权限只能授予已确认四角色中的员工账号")
         stamp = _now()
+        prior_permissions = {
+            str(item.get("permission", ""))
+            for item in target.get("permission_grants", [])
+            if isinstance(item, dict)
+        }
         target["permission_grants"] = [
             {
                 "permission": permission,
@@ -518,6 +544,8 @@ def set_review_permissions(
             }
             for permission in normalized
         ]
+        if prior_permissions != set(normalized):
+            target["session_epoch"] = int(target.get("session_epoch", 0)) + 1
         target["updated_at"] = stamp
         save_users(users)
         return public_user(target)
@@ -531,6 +559,7 @@ def public_user(user: dict) -> dict:
         "active": bool(user.get("active", True)),
         "department": user.get("department", ""),
         "projects": list(user.get("projects") or []),
+        "project_scope_enforced": bool(user.get("project_scope_enforced")),
         "review_permissions": sorted(role_policy.valid_account_review_grants(user)),
         "permissions": sorted(
             set(role_policy.ROLE_PERMISSIONS.get(user.get("role", ""), ()))
