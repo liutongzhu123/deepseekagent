@@ -28,6 +28,8 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
         "127.0.0.1:39301/health", "127.0.0.1:18082/", "DEPLOYED_FROM_CODE", "DEPLOYED_FROM_MAIN",
         "realpath -e -- \"$backup\"",
         "cnz-weknora_data-files", "cnz-weknora_WeKnora-network",
+        "BOOTSTRAP_PRESENT=%s", "cnz-weknora-bootstrap", "127.0.0.1:39302",
+        "registration_mode\")==\"self_serve\"",
     ):
         assert required in upgrade.PREFLIGHT
 
@@ -35,6 +37,7 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
 def test_release_build_has_no_sql_migration_after_138():
     assert "max(versions)!=138" in Path(upgrade.__file__).read_text()
     assert "DEPLOYED_FROM_CODE" in upgrade.CONFIGURE
+    assert "docker-compose.testkb.bootstrap.override.yml" in Path(upgrade.__file__).read_text()
 
 
 def test_upgrade_builds_and_replaces_only_app_with_rollback():
@@ -42,6 +45,10 @@ def test_upgrade_builds_and_replaces_only_app_with_rollback():
     assert "compose_new build app" in script
     assert "compose_new up -d --no-deps app" in script
     assert "compose_old up -d --no-deps app" in script
+    assert "compose_bootstrap_new up -d --no-deps --no-build bootstrap-app" in script
+    assert "compose_bootstrap_old up -d --no-deps --no-build bootstrap-app" in script
+    assert "wait_bootstrap \"$new_image\"" in script
+    assert "len(p)==1" in script
     assert script.index("compose_new build app") < script.index("phase=app_replace") < script.index("compose_new up -d --no-deps app")
     assert "BACKEND_ROLLBACK_OK_NON_APP_CONTAINERS_UNTOUCHED" in script
     assert "BACKEND_ROLLBACK_POINTER_VERIFY_FAILED" in script
@@ -55,6 +62,15 @@ def test_upgrade_builds_and_replaces_only_app_with_rollback():
     assert "compose_new up -d --no-deps frontend" not in script
     assert script.index('app_mounts=') < script.index("compose_new up -d --no-deps app")
     assert 'set(c["networks"])=={"WeKnora-network"}' in script
+
+
+def test_bootstrap_override_is_loopback_only_and_keeps_registration_separate():
+    override = (ROOT / "weknora/docker-compose.testkb.bootstrap.override.yml").read_text()
+    assert "ports: !override" in override
+    assert '"127.0.0.1:39302:8080"' in override
+    assert 'DISABLE_REGISTRATION: "false"' in override
+    assert 'OIDC_AUTH_ENABLE: "false"' in override
+    assert "OLLAMA_BASE_URL: http://ollama:11434" in override
 
 
 def test_post_upgrade_checks_database_siblings_volumes_and_oidc_off():

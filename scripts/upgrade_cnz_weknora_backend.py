@@ -11,7 +11,7 @@ F6 post-start schema, sibling container, volume, API/UI, or isolation mismatch: 
 F7 missing completion markers: report failure instead of claiming deployment.
 """
 from __future__ import annotations
-import argparse, importlib.util, json, re, shlex, subprocess, sys, tarfile, tempfile
+import argparse, hashlib, importlib.util, json, re, shlex, subprocess, sys, tarfile, tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 REMOTE_ROOT="/opt/cnz-weknora"
@@ -57,6 +57,23 @@ cmp -s "$active/.env" "$runtime_project/.env"
 runtime_config="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/config/config.yaml"}}{{.Source}}{{end}}{{end}}' cnz-weknora-app)"
 test "$runtime_config" = "$runtime_project/config/config.yaml" && test -f "$runtime_config" && test ! -L "$runtime_config"
 expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama | sort)"
+bootstrap_present=0
+if docker inspect cnz-weknora-bootstrap >/dev/null 2>&1; then
+  bootstrap_present=1
+  test "$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-bootstrap)" = healthy
+  test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project\"}}' cnz-weknora-bootstrap)" = cnz-weknora
+  test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.service\"}}' cnz-weknora-bootstrap)" = bootstrap-app
+  test "$(docker inspect -f '{{.Image}}' cnz-weknora-bootstrap)" = "$(docker inspect -f '{{.Image}}' cnz-weknora-app)"
+  test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cnz-weknora-bootstrap)" = "$runtime_project"
+  docker inspect -f '{{json .NetworkSettings.Ports}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p=={"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"39302"}]},p'
+  docker inspect -f '{{json .NetworkSettings.Networks}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; assert set(json.load(sys.stdin))=={"cnz-weknora_WeKnora-network"}'
+  for expected in 'DISABLE_REGISTRATION=false' 'OIDC_AUTH_ENABLE=false'; do
+    docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-bootstrap | grep -Fxq "$expected"
+  done
+  curl -fsS --max-time 4 http://127.0.0.1:39302/api/v1/auth/config | python3 -c 'import json,sys; assert json.load(sys.stdin).get("registration_mode")=="self_serve"'
+  docker inspect -f '{{json .Mounts}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; got=sorted([[m.get("Type"),m.get("Destination"),m.get("Name") if m.get("Type")=="volume" else m.get("Source"),m.get("RW")] for m in json.load(sys.stdin)]); expected=sorted([["volume","/data/files","cnz-weknora_data-files",True],["volume","/tmp/docreader","cnz-weknora_docreader-tmp",False],["bind","/app/config/config.yaml",sys.argv[1],True]]); assert got==expected,got' "$runtime_config"
+  expected_containers="$(printf '%s\n' "$expected_containers" cnz-weknora-bootstrap | sort)"
+fi
 test "$(docker ps -a --filter name='^cnz-weknora-' --format '{{.Names}}' | sort)" = "$expected_containers"
 for c in cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama; do
   test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c")" = cnz-weknora
@@ -82,7 +99,7 @@ test "$schema" = 138\|f
 grep -Fxq 'database_schema=138|f' "$backup/METADATA.txt"
 old_image="$(docker inspect -f '{{.Image}}' cnz-weknora-app)"
 test "$(docker inspect -f '{{.Config.Image}}' cnz-weknora-app)" = cnz-weknora-app:dev
-printf 'BACKEND_PREFLIGHT_OK\nACTIVE_SHA=%s\nRUNTIME_SHA=%s\nOLD_IMAGE=%s\n' "$active_sha" "$runtime_sha" "$old_image"
+printf 'BACKEND_PREFLIGHT_OK\nACTIVE_SHA=%s\nRUNTIME_SHA=%s\nOLD_IMAGE=%s\nBOOTSTRAP_PRESENT=%s\n' "$active_sha" "$runtime_sha" "$old_image" "$bootstrap_present"
 '''
 
 CONFIGURE=r'''set -euo pipefail
@@ -98,7 +115,8 @@ echo BACKEND_RELEASE_READY
 '''
 
 UPGRADE=r'''set -Eeuo pipefail
-sha="$1"; runtime_sha="$2"; active_sha="$3"; old_image="$4"; fingerprint="$5"; backup="$6"; root=/opt/cnz-weknora
+sha="$1"; runtime_sha="$2"; active_sha="$3"; old_image="$4"; fingerprint="$5"; backup="$6"; bootstrap_present="$7"; root=/opt/cnz-weknora
+[[ "$bootstrap_present" =~ ^[01]$ ]]
 exec 9>"$root/.deploy.lock"
 flock -n 9 || { echo BACKEND_DEPLOY_LOCKED; exit 40; }
 new_release="$root/releases/$sha"; new_project="$new_release/source/WeKnora-0.9.1"
@@ -125,6 +143,8 @@ PY
 }
 compose_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" "$@"; }
 compose_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$old_release/docker-compose.testkb.override.yml" "$@"; }
+compose_bootstrap_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
+compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$old_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
 check_compose() {
  project_config="$1"; shift
  "$@" config --format json | python3 -c '
@@ -169,23 +189,37 @@ wait_app() {
  done
  test "$ready" -eq 1
 }
+wait_bootstrap() {
+ expected="$1"; ready=0
+ for _ in $(seq 1 60); do
+  image="$(docker inspect -f '{{.Image}}' cnz-weknora-bootstrap 2>/dev/null || true)"
+  health="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-bootstrap 2>/dev/null || true)"
+  api="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39302/health 2>/dev/null || true)"
+  config="$(curl -fsS --max-time 3 http://127.0.0.1:39302/api/v1/auth/config 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("registration_mode",""))' 2>/dev/null || true)"
+  if [ "$image" = "$expected" ] && [ "$health" = healthy ] && [ "$api" = 200 ] && [ "$config" = self_serve ]; then ready=1; break; fi
+  sleep 2
+ done
+ test "$ready" -eq 1
+}
 frontend_id="$(docker inspect -f '{{.Id}}' cnz-weknora-frontend)"
 docreader_id="$(docker inspect -f '{{.Id}}' cnz-weknora-docreader)"
 postgres_id="$(docker inspect -f '{{.Id}}' cnz-weknora-postgres)"
 redis_id="$(docker inspect -f '{{.Id}}' cnz-weknora-redis)"
 ollama_id="$(docker inspect -f '{{.Id}}' cnz-weknora-ollama)"
+if [ "$bootstrap_present" = 1 ]; then test "$(docker inspect -f '{{.Image}}' cnz-weknora-bootstrap)" = "$old_image"; fi
 volumes_before="$(docker volume ls -q --filter name=cnz-weknora | sort)"
 test "$(readlink -f "$root/active-release")" = "$old_active"
 schema_before="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select version,dirty from schema_migrations order by version desc limit 1"')"
 test "$schema_before" = 138\|f && grep -Fxq "database_schema=$schema_before" "$backup/METADATA.txt"
 test "$(fingerprint_source "$new_project")" = "$fingerprint"
+test "$(sha256sum "$new_release/docker-compose.testkb.bootstrap.override.yml" | cut -d' ' -f1)" = "$(cat "$new_release/BOOTSTRAP_OVERRIDE_SHA256")"
 check_compose "$new_project/config/config.yaml" compose_new
 check_compose "$old_project/config/config.yaml" compose_old
 test "$(docker inspect -f '{{.Image}}' cnz-weknora-app)" = "$old_image"
 if docker image inspect "$rollback_tag" >/dev/null 2>&1; then
  test "$(docker image inspect -f '{{.Id}}' "$rollback_tag")" = "$old_image"
 else docker image tag "$old_image" "$rollback_tag"; fi
-phase=app_build; switch_started=0
+phase=app_build; switch_started=1
 rollback() {
  code=$?; trap - EXIT; set +e
  if [ "$code" -ne 0 ]; then echo "BACKEND_UPGRADE_FAILED_PHASE=$phase"; fi
@@ -193,6 +227,10 @@ rollback() {
   docker image tag "$old_image" cnz-weknora-app:dev || { echo BACKEND_ROLLBACK_IMAGE_TAG_FAILED; exit 90; }
   compose_old up -d --no-deps app || { echo BACKEND_ROLLBACK_RECREATE_FAILED; exit 90; }
   wait_app "$old_image" || { echo BACKEND_ROLLBACK_HEALTH_FAILED; exit 90; }
+  if [ "$bootstrap_present" = 1 ]; then
+   compose_bootstrap_old up -d --no-deps --no-build bootstrap-app || { echo BACKEND_ROLLBACK_BOOTSTRAP_RECREATE_FAILED; exit 90; }
+   wait_bootstrap "$old_image" || { echo BACKEND_ROLLBACK_BOOTSTRAP_HEALTH_FAILED; exit 90; }
+  fi
   current_active="$(readlink -f "$root/active-release" 2>/dev/null || true)"
   if [ "$current_active" = "$new_project" ]; then
    ln -s "$old_active" "$root/active-release.rollback.$sha" || { echo BACKEND_ROLLBACK_POINTER_LINK_FAILED; exit 90; }
@@ -205,12 +243,21 @@ rollback() {
 }
 trap rollback EXIT
 check_compose "$new_project/config/config.yaml" compose_new
+if [ "$bootstrap_present" = 1 ]; then
+ compose_bootstrap_new config --format json | python3 -c 'import json,os,sys; c=json.load(sys.stdin); s=c["services"]["bootstrap-app"]; assert s["container_name"]=="cnz-weknora-bootstrap"; assert s["image"]=="cnz-weknora-app:dev"; assert s["environment"]["DISABLE_REGISTRATION"]=="false"; assert s["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39302" for p in s.get("ports",[])); assert set(s.get("networks",{}))=={"WeKnora-network"}; got={(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in s.get("volumes",[])}; expected={("volume","data-files","/data/files",False),("volume","docreader-tmp","/tmp/docreader",True),("bind",os.path.abspath(sys.argv[1]),"/app/config/config.yaml",False)}; assert got==expected,(got,expected); assert all("/var/run/docker.sock" not in str(m) for m in s.get("volumes",[]))' "$new_project/config/config.yaml"
+ compose_bootstrap_new config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]["bootstrap-app"]; assert s["environment"]["OLLAMA_BASE_URL"]=="http://ollama:11434"; p=s.get("ports",[]); assert len(p)==1 and p[0].get("host_ip")=="127.0.0.1" and p[0].get("published")=="39302" and p[0].get("target")==8080,p'
+fi
 compose_new build app
 new_image="$(docker image inspect -f '{{.Id}}' cnz-weknora-app:dev)"
 test -n "$new_image" && test "$new_image" != "$old_image"
-phase=app_replace; switch_started=1
+phase=app_replace
 compose_new up -d --no-deps app
 phase=app_health; wait_app "$new_image"
+if [ "$bootstrap_present" = 1 ]; then
+ phase=bootstrap_replace
+ compose_bootstrap_new up -d --no-deps --no-build bootstrap-app
+ phase=bootstrap_health; wait_bootstrap "$new_image"
+fi
 schema_after="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select version,dirty from schema_migrations order by version desc limit 1"')"
 test "$schema_after" = "$schema_before"
 test "$(docker inspect -f '{{.Id}}' cnz-weknora-frontend)" = "$frontend_id"
@@ -236,6 +283,7 @@ echo "ACTIVE_RELEASE=$sha"
 echo "APP_IMAGE=$new_image"
 echo "DATABASE_SCHEMA=$schema_after"
 echo "OIDC_AUTH_ENABLE=false"
+if [ "$bootstrap_present" = 1 ]; then echo "BOOTSTRAP_AUTH_CONFIG=self_serve"; fi
 trap - EXIT
 '''
 
@@ -258,6 +306,11 @@ def make_bundle(commit, archive, work):
  with tarfile.open(packed,"w:gz") as tar:
   tar.add(source,arcname="source/WeKnora-0.9.1",filter=lambda item: None if ".git" in Path(item.name).parts else item)
   tar.add(ROOT/"weknora/docker-compose.testkb.override.yml",arcname="docker-compose.testkb.override.yml")
+  bootstrap_override=ROOT/"weknora/docker-compose.testkb.bootstrap.override.yml"
+  bootstrap_hash=hashlib.sha256(bootstrap_override.read_bytes()).hexdigest()
+  bootstrap_marker=work/"BOOTSTRAP_OVERRIDE_SHA256"; bootstrap_marker.write_text(bootstrap_hash+"\n",encoding="ascii")
+  tar.add(bootstrap_override,arcname="docker-compose.testkb.bootstrap.override.yml")
+  tar.add(bootstrap_marker,arcname="BOOTSTRAP_OVERRIDE_SHA256")
   tar.add(marker,arcname="DEPLOYED_FROM_CODE"); tar.add(uf,arcname="UPSTREAM_COMMIT")
  return packed,base.source_fingerprint(source)
 
@@ -287,8 +340,10 @@ def upgrade(target, archive, backup):
   r=re.search(rb"RUNTIME_SHA=([0-9a-f]{40})",checked.stdout)
   a=re.search(rb"ACTIVE_SHA=([0-9a-f]{40})",checked.stdout)
   i=re.search(rb"OLD_IMAGE=(sha256:[0-9a-f]{64})",checked.stdout)
-  if not r or not a or not i: raise RuntimeError("F3: active/runtime release or image missing")
+  b=re.search(rb"BOOTSTRAP_PRESENT=([01])",checked.stdout)
+  if not r or not a or not i or not b: raise RuntimeError("F3: active/runtime release, image, or bootstrap state missing")
   runtime_sha,active_sha,old_image=r.group(1).decode(),a.group(1).decode(),i.group(1).decode()
+  bootstrap_present=b.group(1).decode()
   incoming=f"{REMOTE_ROOT}/.incoming-{commit}"
   create=f"set -euo pipefail; test ! -e {incoming!r} && test ! -L {incoming!r}; install -d -m 0755 {incoming!r}"
   if remote(target,create,commit,timeout=60).returncode: raise RuntimeError("F4: incoming release exists")
@@ -297,7 +352,7 @@ def upgrade(target, archive, backup):
   ready=remote(target,CONFIGURE,commit,timeout=60)
   if ready.returncode or b"BACKEND_RELEASE_READY" not in ready.stdout:
    base.cleanup_incoming(target,commit); raise RuntimeError("F4: release staging failed")
-  result=remote(target,UPGRADE,commit,runtime_sha,active_sha,old_image,fingerprint,backup,timeout=3600)
+  result=remote(target,UPGRADE,commit,runtime_sha,active_sha,old_image,fingerprint,backup,bootstrap_present,timeout=3600)
   if result.returncode:
    match=re.search(rb"BACKEND_UPGRADE_FAILED_PHASE=([a-z_]+)",result.stdout+result.stderr)
    phase=match.group(1).decode() if match else "unknown"
@@ -305,7 +360,8 @@ def upgrade(target, archive, backup):
    raise RuntimeError(f"F5: app-only upgrade failed at {phase}")
   expected=(b"BACKEND_UPGRADE_OK_APP_ONLY",f"ACTIVE_RELEASE={commit}".encode(),b"DATABASE_SCHEMA=138|f",b"OIDC_AUTH_ENABLE=false")
   if any(x not in result.stdout for x in expected): raise RuntimeError("F6: completion marker missing")
-  print(f"CNZ WeKnora app upgraded at {commit}; schema 138 unchanged; OIDC stays disabled")
+  if bootstrap_present == "1" and b"BOOTSTRAP_AUTH_CONFIG=self_serve" not in result.stdout: raise RuntimeError("F6: bootstrap readiness marker missing")
+  print(f"CNZ WeKnora app upgraded at {commit}; schema 138 unchanged; OIDC stays disabled; bootstrap updated={bootstrap_present}")
 
 def main():
  parser=argparse.ArgumentParser(description=__doc__)

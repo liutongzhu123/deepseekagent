@@ -1,0 +1,13 @@
+services:
+  bootstrap-app:
+    extends:
+      file: docker-compose.yml
+      service: app
+    image: cnz-weknora-app:dev
+    container_name: cnz-weknora-bootstrap
+    ports: !override
+      - "127.0.0.1:39302:8080"
+    environment:
+      DISABLE_REGISTRATION: "false"
+      OIDC_AUTH_ENABLE: "false"
+      OLLAMA_BASE_URL: http://ollama:11434

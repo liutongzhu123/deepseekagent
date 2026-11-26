@@ -7,6 +7,7 @@ F2 release, topology, health, backup capacity, or DB migration preflight: no sto
 F3 backup paths are atomically allocated; symlinked roots are refused.
 F4 dump/archive/checksum error: mark snapshot incomplete and restart stopped CNZ services.
 F5 service restart or health error: report separately; never touch yunan-persist.
+F6 a temporary bootstrap app is accepted only when it is the known loopback-only sidecar; it is quiesced with the main app.
 F6 the active .env is not copied; database and volume archives may contain persisted secrets.
 Snapshot directory is mode 0700 and every snapshot artifact is mode 0600.
 
@@ -91,6 +92,22 @@ if [ "$ollama_present" -eq 1 ]; then
 else
   expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis | sort)"
 fi
+bootstrap_present=0
+if docker inspect cnz-weknora-bootstrap >/dev/null 2>&1; then
+  bootstrap_present=1
+  test "$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-bootstrap)" = healthy
+  test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' cnz-weknora-bootstrap)" = cnz-weknora
+  test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' cnz-weknora-bootstrap)" = bootstrap-app
+  test "$(docker inspect -f '{{.Image}}' cnz-weknora-bootstrap)" = "$(docker inspect -f '{{.Image}}' cnz-weknora-app)"
+  test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' cnz-weknora-bootstrap)" = "$runtime_source"
+  docker inspect -f '{{json .NetworkSettings.Ports}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p=={"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"39302"}]},p'
+  docker inspect -f '{{json .NetworkSettings.Networks}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; assert set(json.load(sys.stdin))=={"cnz-weknora_WeKnora-network"}'
+  for expected in 'DISABLE_REGISTRATION=false' 'OIDC_AUTH_ENABLE=false'; do
+    docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-bootstrap | grep -Fxq "$expected"
+  done
+  curl -fsS --max-time 4 http://127.0.0.1:39302/api/v1/auth/config | python3 -c 'import json,sys; assert json.load(sys.stdin).get("registration_mode")=="self_serve"'
+  expected_containers="$(printf '%s\n' "$expected_containers" cnz-weknora-bootstrap | sort)"
+fi
 if [ "$ollama_volume_present" -eq 1 ]; then
   expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data cnz-weknora_ollama-data | sort)"
 else
@@ -118,6 +135,7 @@ assert sorted(actual)==sorted(json.loads(sys.argv[2])), (sys.argv[1],actual)' "$
 }
 app_mounts="$(python3 -c 'import json,sys; config=sys.argv[1]; print(json.dumps([["volume","/data/files","cnz-weknora_data-files"],["volume","/tmp/docreader","cnz-weknora_docreader-tmp"],["bind","/app/config/config.yaml",config]]))' "$runtime_config")"
 assert_mounts cnz-weknora-app "$app_mounts"
+if [ "$bootstrap_present" -eq 1 ]; then assert_mounts cnz-weknora-bootstrap "$app_mounts"; fi
 assert_mounts cnz-weknora-docreader '[["volume","/tmp/docreader","cnz-weknora_docreader-tmp"]]'
 assert_mounts cnz-weknora-postgres '[["volume","/var/lib/postgresql/data","cnz-weknora_postgres-data"]]'
 assert_mounts cnz-weknora-redis '[["volume","/data","cnz-weknora_redis-data"]]'
@@ -135,7 +153,7 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup="$(mktemp -d "$backup_root/${stamp}-${source_sha}.XXXXXX")"
 chmod 0700 "$backup"
 umask 077
-app_stopped=0; docreader_stopped=0; redis_stopped=0; ollama_stopped=0
+app_stopped=0; bootstrap_stopped=0; docreader_stopped=0; redis_stopped=0; ollama_stopped=0
 restart_services() {
   failures=0
   if [ "$ollama_stopped" -eq 1 ]; then
@@ -150,18 +168,23 @@ restart_services() {
   if [ "$app_stopped" -eq 1 ]; then
     if docker start cnz-weknora-app >/dev/null; then app_stopped=0; else failures=1; echo CNZ_RESTART_START_FAILED=app; fi
   fi
+  if [ "$bootstrap_stopped" -eq 1 ]; then
+    if docker start cnz-weknora-bootstrap >/dev/null; then bootstrap_stopped=0; else failures=1; echo CNZ_RESTART_START_FAILED=bootstrap; fi
+  fi
   ready=0
   for _ in $(seq 1 60); do
     app="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
     redis="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-redis 2>/dev/null || true)"
     ollama="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-ollama 2>/dev/null || true)"
     doc="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-docreader 2>/dev/null || true)"
+    bootstrap="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-bootstrap 2>/dev/null || true)"
     api="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39301/health 2>/dev/null || true)"
     ui="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18082/ 2>/dev/null || true)"
-    if { [ "$ollama_present" -eq 0 ] || [ "$ollama" = healthy ]; } && [ "$app" = healthy ] && [ "$redis" = healthy ] && [ "$doc" = healthy ] && [ "$api" = 200 ] && [ "$ui" = 200 ]; then ready=1; break; fi
+    if { [ "$ollama_present" -eq 0 ] || [ "$ollama" = healthy ]; } && { [ "$bootstrap_present" -eq 0 ] || [ "$bootstrap" = healthy ]; } && [ "$app" = healthy ] && [ "$redis" = healthy ] && [ "$doc" = healthy ] && [ "$api" = 200 ] && [ "$ui" = 200 ]; then ready=1; break; fi
     sleep 2
   done
   if [ "$ready" -ne 1 ]; then failures=1; fi
+  if [ "$bootstrap_present" -eq 1 ] && ! curl -fsS --max-time 4 http://127.0.0.1:39302/api/v1/auth/config | python3 -c 'import json,sys; assert json.load(sys.stdin).get("registration_mode")=="self_serve"'; then failures=1; echo CNZ_RESTART_START_FAILED=bootstrap_config; fi
   return "$failures"
 }
 on_exit() {
@@ -177,6 +200,7 @@ on_exit() {
 }
 trap on_exit EXIT
 stage=quiesce
+if [ "$bootstrap_present" -eq 1 ]; then bootstrap_stopped=1; docker stop --time 60 cnz-weknora-bootstrap >/dev/null; fi
 app_stopped=1; docker stop --time 60 cnz-weknora-app >/dev/null
 docreader_stopped=1; docker stop --time 60 cnz-weknora-docreader >/dev/null
 redis_stopped=1; docker stop --time 60 cnz-weknora-redis >/dev/null
