@@ -130,6 +130,8 @@ echo RELEASE_EXTRACTED
 
 DEPLOY = r'''set -Eeuo pipefail
 sha="$1"; release="/opt/cnz-weknora/releases/$sha"; project="$release/source/WeKnora-0.9.1"
+exec 9>/opt/cnz-weknora/.deploy.lock
+flock -n 9 || { echo CNZ_DEPLOY_LOCKED; exit 40; }
 compose() { docker compose -p cnz-weknora --project-directory "$project" --env-file "$project/.env" -f "$project/docker-compose.yml" -f "$release/docker-compose.testkb.override.yml" "$@"; }
 STARTED=0
 phase=compose_contract
@@ -145,7 +147,7 @@ rollback() {
   exit "$code"
 }
 trap rollback EXIT
-compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert s["redis"]["healthcheck"]["test"]==["CMD","redis-cli","ping"]'
+compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert s["redis"]["healthcheck"]["test"]==["CMD","redis-cli","ping"]'
 echo COMPOSE_CONTRACT_OK
 phase=image_build
 compose build app frontend docreader
@@ -227,6 +229,9 @@ def validate_compose(config: dict) -> None:
         return any(p.get("host_ip")=="127.0.0.1" and int(p.get("target",0))==target and str(p.get("published"))==published for p in s[service].get("ports",[]))
     if not has_port("frontend",80,"18082") or not has_port("app",8080,"39301"): raise ValueError("F6: port mapping")
     if set(config.get("volumes",{}))!={"data-files","docreader-tmp","postgres-data","redis-data"}: raise ValueError("F6: volume mapping")
+    for logical, definition in config["volumes"].items():
+        if definition.get("external",False) or definition.get("driver","local")!="local" or definition.get("driver_opts") or definition.get("name") not in (None,"cnz-weknora_"+logical):
+            raise ValueError("F6: CNZ-only local volume mapping")
     if any("/var/run/docker.sock" in str(m) for svc in s.values() for m in svc.get("volumes",[])): raise ValueError("F6: docker socket forbidden")
     for service in ("app", "frontend", "docreader"):
         args=s[service].get("build",{}).get("args",{})

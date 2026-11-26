@@ -97,6 +97,11 @@ def test_remote_shell_script_parses(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_backup_serializes_with_deploy_transactions():
+    assert 'exec 9>"$root/.deploy.lock"' in backup.REMOTE_BACKUP
+    assert "flock -n 9" in backup.REMOTE_BACKUP
+
+
 def test_success_requires_completion_marker_and_failure_does_not_leak_output(monkeypatch):
     monkeypatch.setattr(
         backup.base,

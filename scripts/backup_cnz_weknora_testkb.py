@@ -61,6 +61,8 @@ verify_release_marker() {
 stage=preflight
 trap 'echo "CNZ_BACKUP_FAILED_STAGE=$stage"' ERR
 root=/opt/cnz-weknora
+exec 9>"$root/.deploy.lock"
+flock -n 9 || { echo CNZ_DEPLOY_LOCKED; exit 40; }
 backup_root=/var/backups/cnz-weknora
 active="$(readlink -f "$root/active-release")"
 case "$active" in "$root"/releases/*/source/WeKnora-0.9.1) ;; *) echo F2_INVALID_ACTIVE_RELEASE; exit 22 ;; esac
