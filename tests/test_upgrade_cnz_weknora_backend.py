@@ -213,7 +213,8 @@ def test_unmerged_branch_is_rejected_before_fetch_or_remote_call(tmp_path, monke
     assert remote_calls == []
 
 
-def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_path):
+@pytest.mark.parametrize("bootstrap_present", ["0", "1"])
+def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_path, bootstrap_present):
     sha = "a" * 40
     archive = tmp_path / "upstream.tar.gz"
     archive.write_bytes(b"fixture")
@@ -230,9 +231,9 @@ def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_pat
     monkeypatch.setattr(upgrade.base, "run", fake_git)
     monkeypatch.setattr(upgrade, "make_bundle", lambda *_: (bundle, "d" * 64))
     responses = [
-        Result(b"BACKEND_PREFLIGHT_OK\nACTIVE_SHA=" + b"e" * 40 + b"\nRUNTIME_SHA=" + b"b" * 40 + b"\nOLD_IMAGE=sha256:" + b"c" * 64 + b"\n"),
+        Result(b"BACKEND_PREFLIGHT_OK\nACTIVE_SHA=" + b"e" * 40 + b"\nRUNTIME_SHA=" + b"b" * 40 + b"\nOLD_IMAGE=sha256:" + b"c" * 64 + b"\nBOOTSTRAP_PRESENT=" + bootstrap_present.encode() + b"\n"),
         Result(b""), Result(b"BACKEND_RELEASE_READY\n"),
-        Result(b"BACKEND_UPGRADE_OK_APP_ONLY\nACTIVE_RELEASE=" + sha.encode() + b"\nDATABASE_SCHEMA=138|f\nOIDC_AUTH_ENABLE=false\n"),
+        Result(b"BACKEND_UPGRADE_OK_APP_ONLY\nACTIVE_RELEASE=" + sha.encode() + b"\nDATABASE_SCHEMA=138|f\nOIDC_AUTH_ENABLE=false\n" + (b"BOOTSTRAP_AUTH_CONFIG=self_serve\n" if bootstrap_present == "1" else b"")),
     ]
     remote_calls = []
     def fake_remote(target, script, *args, **kwargs):
@@ -245,6 +246,7 @@ def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_pat
     assert len(remote_calls) == 4
     assert remote_calls[0][0] == upgrade.PREFLIGHT
     assert remote_calls[-1][0] == upgrade.UPGRADE
+    assert remote_calls[-1][1][-1] == bootstrap_present
 
 
 def test_remote_shell_scripts_pass_bash_parser(tmp_path):
