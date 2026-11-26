@@ -114,7 +114,9 @@ PR #246（Redis 健康检查与安全重试）和 PR #247（按 WeKnora 源码�
 
 同日只读复核再次对 `/var/backups/testkb-yunan-persist-20261124/SHA256SUMS` 执行校验，数据库、文件、Redis、部署配置、镜像和环境清单全部为 `OK`。五个 `yunan-persist` 容器仍 healthy；CNZ 与旧栈使用不同项目、容器名、网络、数据库、Redis、文件卷和端口。磁盘余量约 34 GiB。2026-11-26 完成隔离恢复往返：从 CNZ 数据库转储应用 schema 到随机临时库，加入一条 synthetic sentinel，再备份并恢复到第二个随机临时库；当时记录的 91 个应用 schema 对象恢复成功，sentinel 内容一致。CNZ 文件卷当时为 0 个文件，以只读方式复制到临时卷后对 synthetic sentinel 做 tar 备份/恢复与 SHA-256 比较通过。临时数据库、卷和文件已全部清理，CNZ API/UI 与五个 `yunan-persist` 服务仍健康。此项验证了数据库/文件往返方法，不代表整栈冷恢复或从旧栈备份恢复已验收。
 
-2026-11-26 补做整栈冷恢复尝试：安全门回读 CNZ 数据库 `users/tenants/models/knowledge_bases/knowledges/messages` 均为 0，WeKnora 原文目录为空，Redis 有 8 个键；恢复包、数据库 dump、文件目录和 Redis RDB 均在同机 `0700` 临时目录中生成。恢复副本使用独立 Compose 名称/四个临时卷和 `internal=true` 网络，不发布主机端口；五个服务均启动并健康，容器内 API `/health` 与 UI `/` 均返回 200。由于宿主机探测器仍按 localhost 端口轮询，未进入最终的数据库对象/行数和 Redis 键数相等性断言；演练随后中止并显式删除了副本容器、卷、网络及快照目录。源 CNZ UI/API 为 200，五个 `yunan-persist` 服务仍 healthy。该次只证明恢复包可启动成完整服务副本，不算数据冷恢复验收。再次执行整栈副本被自动审批拒绝，原因是重复在共享主机启动恢复栈，且先前中断过临时操作；后续不得绕过审批，需按待批方案在容器网络内探测并确保信号中断也会执行清理。
+2026-11-26 补做整栈冷恢复尝试：安全门回读 CNZ 数据库 `users/tenants/models/knowledge_bases/knowledges/messages` 均为 0，WeKnora 原文目录为空，Redis 有 8 个键；恢复包、数据库 dump、文件目录和 Redis RDB 均在同机 `0700` 临时目录中生成。恢复副本使用独立 Compose 名称/四个临时卷和 `internal=true` 网络，不发布主机端口；五个服务均启动并健康，容器内 API `/health` 与 UI `/` 均返回 200。由于宿主机探测器仍按 localhost 端口轮询，未进入最终的数据库对象/行数和 Redis 键数相等性断言；演练随后中止并显式删除了副本容器、卷、网络及快照目录。源 CNZ UI/API 为 200，五个 `yunan-persist` 服务仍 healthy。该次只证明恢复包可启动成完整服务副本，不算数据冷恢复验收。再次执行整栈副本被自动审批拒绝，原因是重复在共享主机启动恢复栈，且先前中断过临时操作；后续不得绕过审批。
+
+2026-11-26 对探测方式做只读验证：现有 `cnz-weknora-frontend` 容器内同时有 `/usr/bin/wget` 与 `/usr/bin/curl`；从该容器 GET `http://127.0.0.1/` 和 Compose 服务名 `http://app:8080/health` 均返回 200。下一次获批恢复演练应从恢复副本的 `frontend` 容器内探测 `http://127.0.0.1/` 与 `http://app:8080/health`，不可从宿主机轮询未发布的端口；随后在副本内回读相同 schema 范围对象数、选定业务表行数、Redis 键数和文件清单/哈希，全部与快照来源一致并完成清理后才可判定通过。此项只验证了当前 CNZ 服务的容器内网络路径，不代表冷恢复副本已验收。
 
 同日只读核对解释了 91/86 的差异：当前 WeKnora 数据库有 `public` schema 的 86 张基础表和 4 个视图，另有 `paradedb` schema 的 1 张基础表；因此应用范围对象共 91 个，而仅统计 `public` 基础表得到 86。该对象计数解释了历史记录口径，但冷恢复副本仍须完成按同一 schema 范围的对象数、指定业务表行数及 Redis 键数回读，才能通过恢复验收。
 
