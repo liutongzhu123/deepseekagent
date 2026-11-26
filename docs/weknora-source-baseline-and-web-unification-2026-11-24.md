@@ -275,9 +275,9 @@ sequenceDiagram
 
 | 门 | 状态 | 已有证据 | 未通过项 / 下一步 |
 |---|---|---|---|
-| 1. 冻结源码与覆盖物 | CNZ v0.9.1 app 源码补丁已部署；线上历史覆盖归档仍待办 | 官方归档 SHA-256 `183b0538…b3bc5cd`、6,441 文件清单和七个补丁重放通过；commit `d865df7c496a08de97fac2869e599e9dd0099975` 的 app-only 升级已检查源指纹并生效，包含 0006/0007 nonce 修复 | 现网旧 WeKnora v0.9.0 的 214 个前端覆盖文件及配置可复现归档仍需单独完成；不能把历史临时取证目录当发布来源 |
+| 1. 冻结源码与覆盖物 | CNZ v0.9.1 app 源码补丁已部署；线上历史覆盖归档仍待办 | 官方归档 SHA-256 `183b0538…b3bc5cd`、6,441 文件清单和七个补丁重放通过；当前 active app release 为 main commit `d724c8212ab79d9d7efd10df3cc17bc5046d2e74`，通过 app-only 升级器的源码指纹门禁生效，包含 0006/0007 nonce 修复 | 现网旧 WeKnora v0.9.0 的 214 个前端覆盖文件及配置可复现归档仍需单独完成；不能把历史临时取证目录当发布来源 |
 | 2. 项目实例与账号/资料归属 | testkb 独立实例部署健康；资料/账号迁移未验收 | 升级后 app、frontend、docreader、PostgreSQL、Redis 均运行；app/PostgreSQL/Redis 健康，API/UI 均 200，schema `138|f`；四个 CNZ 卷不变；yunan-persist 5/5 健康；有效快照校验通过；只读统计 users/models/knowledge_bases 均为 0，本次未导入客户资料 | OIDC 保持关闭、注册模式 `invite_only`；历史账号、现有知识库/渠道/资料所有权尚未逐项确认；不得因此迁移或重分配账号 |
-| 3. 双端身份与账号投影 | 本地合成流程与 WeKnora 部署补丁已完成；真实身份联调待客户条件 | P0 start/callback 路由经内存 IdP 覆盖 discovery、PKCE/S256、token/JWKS/RS256、nonce 与显式 issuer/sub 映射；25 项 OIDC 测试通过。WeKnora Gin start/callback + `LoginWithOIDC` 合成流程覆盖 nonce、UserInfo、显式绑定和未绑定拒绝；Go 四包 OIDC 测试及 service/handler race detector 通过；0007 已部署到 testkb | 客户 IdP、真实账号与双端 callback 配置未提供，且当前 OIDC 关闭；仍需验证双端登录、未知/停用账号拒绝、IdP 全局退出及 WeKnora 会话退出；reviewer 历史权限逐账号确认；P0 PostgreSQL 集成结果见 Backlog，本地分支尚未触发 CI |
+| 3. 双端身份与账号投影 | 本地合成流程与 WeKnora 部署补丁已完成；真实身份联调待客户条件 | P0 start/callback 路由经内存 IdP 覆盖 discovery、PKCE/S256、token/JWKS/RS256、nonce 与显式 issuer/sub 映射；25 项 OIDC 测试通过。WeKnora Gin start/callback + `LoginWithOIDC` 合成流程覆盖 nonce、UserInfo、显式绑定和未绑定拒绝；Go 四包 OIDC 测试及 service/handler race detector 通过；PR #251 的全量 P0 pytest 和 Go OIDC CI 通过；0007 已部署到 testkb | 客户 IdP、真实账号与双端 callback 配置未提供，且当前 OIDC 关闭；仍需验证双端登录、未知/停用账号拒绝、IdP 全局退出及 WeKnora 会话退出；reviewer 历史权限逐账号确认；P0 PostgreSQL 集成结果见 Backlog |
 | 4. 统一主导航 | P0 工作台至 WeKnora 的管理员入口已本地浏览器验收；testkb 联跳未完成 | 已确认 P0/P1 工作台为业务主入口；临时合成管理员看到 WeKnora OIDC 管理台链接，合成技术账号不显示；链接配置缺失/格式错误时隐藏，目标不传递 P0 会话 | testkb users=0、注册为 invite_only，且未配置外部可访问的 CNZ 管理地址；不能验证真实目标导航、登录后菜单或 SSO 回调，需要受控合成账号和两端测试端点 |
 | 5. 项目功能与角色范围 | P0 服务端边界已本地实现并回归，testkb 未部署验收 | 新业务经理/技术账号空项目范围拒绝访问；检索前按项目过滤 WeKnora 知识；角色/范围/审核授权变更撤销旧会话；授权审计失败拒绝写入；旧账号兼容边界有测试 | WeKnora 实际 KB、CRM/报价/客服等业务路由仍需在 CNZ 测试环境对照角色逐项验收；跨项目拒绝和管理员操作还未在 testkb 登录验证 |
 | 6. 恢复、检索、业务与会话回归 | 未通过 | DB/文件隔离往返方法已用 synthetic sentinel 验证；P0 当前令牌注销/重放拒绝本地回归通过；管理员跳转浏览器核验完成；本地 P0 回归与 WeKnora Go OIDC 定向测试通过；app-only 升级后服务及隔离不变量通过；testkb 快照 SHA-256 与数据库恢复演练通过；现有纯关键词合成基线为库内 9/14、库外拒答 8/8（不是 WeKnora 实际检索） | 整栈冷恢复仍未完成全量数据相等断言；当前 models=0、knowledge_bases=0，合成资料尚未上传，检索/引用无法运行；还需受控合成管理员与可用模型端点，并完成双 RP 登录、账号变更/停用及跨端退出验收 |
@@ -285,6 +285,12 @@ sequenceDiagram
 结论：当前可以确认 CNZ 知识服务栈已隔离部署且健康，P0 项目权限代码已在本地通过全套回归；不能据此宣称双 Web 整合、真实 OIDC、testkb 服务端权限、WeKnora 检索或整栈灾备已验收。恢复副本复测需等获批后在内部网络运行并对齐 92 个关系、关键表行数、Redis 键数及文件清单；当前审批拒绝不允许通过变更探测方式或其他路径绕过。
 
 2026-11-26 部署更新：本地提交 `d865df7c496a08de97fac2869e599e9dd0099975` 经固定 v0.9.1 归档、七补丁重放及 app-only 升级器部署到 testkb；运行 active release 已由旧版本切换到该代码提交，app 镜像已重建。升级前有效快照为 `/var/backups/cnz-weknora/20261126T052341Z-e87a4c85b02c0963c26ec44ea44696ec1fb36977.QWU7vO`。升级成功标记及独立只读回读确认 schema `138|f`、API/UI 200、五个 CNZ 服务运行、四个 CNZ 卷不变、五个 yunan-persist 服务健康，OIDC=false、注册模式 invite_only。后端升级器保留原 app 镜像回滚标签；未运行数据库迁移、未触碰 yunan-persist，也未导入客户资料。此部署使本地 0007 nonce 补丁进入 testkb 源码，但不表示客户 IdP/账号绑定已启用或通过运行态验收。
+
+### 6.3 PR #251 合并后的最新运行态（2026-11-26）
+
+PR [#251](https://github.com/liutongzhu123/deepseekagent/pull/251) 将双端身份绑定、nonce 校验与部署防护更新合并到 `main`，合并提交为 `d724c8212ab79d9d7efd10df3cc17bc5046d2e74`。GitHub `agent-tests`、Python 3.12 pytest 和 WeKnora OIDC Go 1.26 三项 CI 均通过。部署前在 testkb 新建并验证了 CNZ 专属快照 `/var/backups/cnz-weknora/20261126T084519Z-d865df7c496a08de97fac2869e599e9dd0099975.mjykVb`，没有覆盖前述历史快照。
+
+随后仅升级 CNZ WeKnora app；使用固定官方 v0.9.1 归档（SHA-256 `183b0538d895b85906da030b8b62a93bd884cd1967d10bcb38020b549b3bc5cd`）及七个受审补丁。独立只读回读确认 active release 与运行 Compose 源路径均指向 `d724c8212ab79d9d7efd10df3cc17bc5046d2e74`；五个 CNZ 容器均在运行，API/UI 均返回 200，数据库 schema 仍为 `138|f`，注册关闭、`OIDC_AUTH_ENABLE=false`，五个 `yunan-persist` 容器健康。该升级没有运行数据库迁移，没有接入客户 IdP、创建账号或知识库、上传客户资料；WeKnora 实际检索、双端 SSO 和退出仍未验收。
 
 SSO 先做两端互跳可作为入口融合的过渡。只有统一品牌或在两页放导航链接不算统一账户；只有 OIDC 登录成功不算全局退出和权限同步完成。实施工期需在客户 IdP、历史账号数量、字段和资料迁移范围明确后排，不沿用上一份功能精简估算直接相加。
 
