@@ -118,7 +118,7 @@ PR #246（Redis 健康检查与安全重试）和 PR #247（按 WeKnora 源码�
 
 2026-11-26 对探测方式做只读验证：现有 `cnz-weknora-frontend` 容器内同时有 `/usr/bin/wget` 与 `/usr/bin/curl`；从该容器 GET `http://127.0.0.1/` 和 Compose 服务名 `http://app:8080/health` 均返回 200。下一次获批恢复演练应从恢复副本的 `frontend` 容器内探测 `http://127.0.0.1/` 与 `http://app:8080/health`，不可从宿主机轮询未发布的端口；随后在副本内回读相同 schema 范围对象数、选定业务表行数、Redis 键数和文件清单/哈希，全部与快照来源一致并完成清理后才可判定通过。此项只验证了当前 CNZ 服务的容器内网络路径，不代表冷恢复副本已验收。
 
-同日只读核对解释了 91/86 的差异：当前 WeKnora 数据库有 `public` schema 的 86 张基础表和 4 个视图，另有 `paradedb` schema 的 1 张基础表；因此应用范围对象共 91 个，而仅统计 `public` 基础表得到 86。该对象计数解释了历史记录口径，但冷恢复副本仍须完成按同一 schema 范围的对象数、指定业务表行数及 Redis 键数回读，才能通过恢复验收。
+同日只读核对把冷恢复对象数口径统一为关系类型分组：`public` 有 86 张基础表与 4 个视图，`paradedb` 有 1 张基础表 `_typmod_cache` 和 1 个视图 `index_layer_info`，共 **92 个**（relkind `r/p/v/m`）。两项 paradedb 关系都属于 `pg_search` 扩展；此前记录的 91 是漏计 `index_layer_info` 后的部分统计，不能再用作恢复通过标准。恢复时应逐 schema、逐 relkind 对比这 92 个关系，并对关键业务表逐表比较精确行数。2026-11-26 最新只读基线中，`users/tenants/models/knowledge_bases/knowledges/messages` 六表均为 0 行，Redis `DBSIZE=8`，原文目录 0 个文件（目录占用 4096 字节）。
 
 部署配置中 `DISABLE_REGISTRATION=true`、`OIDC_AUTH_ENABLE=false`；管理员开户交付尚未完成，也未从旧库导入用户或资料。未配置可信 IdP，故没有运行真实登录联调。当前没有把 yunan-persist 的真实客户数据用于验证。**待完成验收**：临时合成管理员开户与关闭注册复核、合成知识上传/解析/检索及引用、OIDC 显式绑定/未绑定拒绝联调、整栈副本中断后的数据数量一致性与最终清理验收、业务工作台到 WeKnora 的浏览器单点跳转与退出验证。缺少真实 IdP、正式管理员指定账号及项目工作台部署地址时，只能完成模拟/隔离验证，不能宣称客户级 SSO 或双 Web 生产验收。
 
