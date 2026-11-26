@@ -41,10 +41,19 @@ CRM 价格维护按账号的项目授权执行：新增、修改或删除时必�
 
 1. 从代码枚举所有权限消费者，按默认角色职责建立后端权限矩阵；管理界面仅作为展示，不作授权依据。
 2. 已增加 `PUT /api/v1/auth/users/{username}/review-permissions`：仅有用户管理权限的管理员可逐账号替换 `report:read`、`report:audit`、`standard:review` 授权；每项保存审批人、时间、原因。管理员不能给自己授予审核例外。审计写入失败时 API 返回 503，账号授权不保存。界面要求选择权限并填写原因。
-3. 为历史账号提供只读迁移预览，输出账号标识、旧角色、待确认的新角色/项目范围；确认文件不进入仓库。应用映射前先备份账号库，并提供可逆导出。
+3. 只读迁移预览工具已实现。仍待拿到获准的账号导出后逐人填写确认结果；应用映射前先备份账号库，并提供可逆导出。预览建议不可直接导入。
 4. 新账号只允许四个项目角色；迁移未确认账号拒绝访问。客户小程序身份与员工密码/OIDC 账户分离。
 5. P0 与 WeKnora 分别校验身份和授权。P0 服务账号只能访问项目授权的知识范围；浏览器和小程序不持有管理员 API key。
 
-当前 `p0/scripts/manage_users.py add` 只允许创建 `admin`、`business_manager`、`technical` 员工账号；`customer` 由小程序身份服务管理，旧 `reviewer/sales/viewer` 不能再通过该脚本创建。该命令不执行历史账号迁移，逐人确认清单与只读迁移预览仍待实现。
+当前 `p0/scripts/manage_users.py add` 只允许创建 `admin`、`business_manager`、`technical` 员工账号；`customer` 由小程序身份服务管理，旧 `reviewer/sales/viewer` 不能再通过该脚本创建。
+
+只读迁移预览已实现：从 `username,role` 及可选的 `department,projects,active` CSV 生成 JSON；不读写账号库、不接收 email/password 列，不覆盖已有输出文件；输入必须是权限 `0600` 的普通文件，输出必须位于仓库之外并设为 `0600`。`admin` 与 `sales` 只提供待确认建议；`reviewer`、`viewer` 和未知旧角色不自动映射，reviewer 权限标记为逐账号确认；项目/部门范围始终要求逐账号确认。它不执行迁移，不把预览建议当作授权。
+
+```bash
+cd /opt/cq-ai-p0
+.venv/bin/python scripts/preview_role_migration.py /secure/path/legacy-accounts.csv --output /secure/path/cnz-role-preview.json
+```
+
+CSV 和预览 JSON 应保存在本地受控仓库目录之外；先对输入 CSV 执行 `chmod 600`。命令仅创建新输出文件，输出文件已存在时会拒绝。
 
 报告审核/标准复核的逐账号名单、经理客户归属、技术部门项目范围、客户 IdP 配置均未从 testkb 或其他生产账号库读取。获得对应授权清单前，只能实现并验证迁移工具和模拟账号，不能替客户映射真实账号。
