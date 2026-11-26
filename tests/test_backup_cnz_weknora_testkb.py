@@ -117,4 +117,3 @@ def test_success_requires_completion_marker_and_failure_does_not_leak_output(mon
     with pytest.raises(RuntimeError, match="stopped safely") as error:
         backup.backup("yunan-101")
     assert "secret-value" not in str(error.value)
-
