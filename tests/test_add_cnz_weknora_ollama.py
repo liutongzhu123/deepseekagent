@@ -154,3 +154,13 @@ def test_configure_failure_reports_safe_stage_and_stops_before_service_start(mon
     assert scripts[-1] == add.CONFIGURE
     assert add.INSTALL not in scripts
     assert cleaned == [("yunan-101", sha)]
+
+
+def test_ollama_override_joins_only_the_cnz_weknora_network():
+    override = (ROOT / "weknora/docker-compose.testkb.override.yml").read_text(encoding="utf-8")
+    ollama = override.split("  ollama:\n", 1)[1].split("\nvolumes:\n", 1)[0]
+    assert "    networks:\n      - WeKnora-network\n" in ollama
+    assert 'set(v.get("networks",{}))=={"WeKnora-network"}' in add.INSTALL
+    guide = (ROOT / "docs/cnz-ollama-runtime-addition.md").read_text(encoding="utf-8")
+    assert "uv run --python 3.12 python scripts/add_cnz_weknora_ollama.py" in guide
+    assert "55 项通过" in guide
