@@ -990,6 +990,7 @@ tasks:
 
       2026-11-26 本轮提交 `26127f6` 加固部署隔离：首次部署、前端/后端升级和快照共用 `/opt/cnz-weknora/.deploy.lock`；Compose 卷拒绝 external、非 local driver、`driver_opts` 和跨项目名称映射。相关四套本地断言 44/44、四个远端 shell 脚本 `bash -n` 4/4；独立复核未发现阻断项。pytest 未安装，未执行线上部署；最新 `gh auth status` 仍显示 token invalid，未推送/创建 PR。
       2026-11-26 之后只读复核 testkb：active release 仍为 `d865df7c496a08de97fac2869e599e9dd0099975`；五个 CNZ 容器均只接 `cnz-weknora_WeKnora-network`，app 的三项实际挂载与预期一致；四个 CNZ 卷仍为独立命名卷，yunan-persist 5/5 healthy；API/UI=200、schema=`138|f`、注册关闭、OIDC=false。仅做只读核验，未创建账号、模型或知识库，未上传资料，也未部署尚未合入的锁/卷合同代码。
+      2026-11-26 PR #254 已合并并修复发布标记不一致。首次用系统 python3 执行部署器时进程以 137 退出；改用 uv 管理的 Python 3.12 后，固定官方归档、6,441 个源文件校验及七个补丁应用通过。远端 Compose 预检发现 Ollama 未绑定 WeKnora-network，故在启动服务前拒绝配置。随后只读复核确认活动发布仍为 `d724c8212ab79d9d7efd10df3cc17bc5046d2e74`，CNZ 五容器/四卷、schema `138|f`、API/UI=200、yunan-persist 5/5 healthy；Ollama 容器和模型卷均未创建。PR #255 修复网络绑定并更新部署说明，本地定向测试 55 项通过；该 PR 的授权合并问题仍待用户确认，且文档更新后 GitHub CI 重新运行中。
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）
     status: done
