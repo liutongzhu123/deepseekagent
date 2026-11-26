@@ -45,7 +45,7 @@ new file mode 100644
 index 0000000..cef179a
 --- /dev/null
 +++ b/internal/application/repository/user_oidc_identity_test.go
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,48 @@
 +package repository
 +
 +import (
@@ -63,8 +63,11 @@ index 0000000..cef179a
 +func TestOIDCIdentityRequiresExplicitUniqueBinding(t *testing.T) {
 +	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "users.db")), &gorm.Config{})
 +	require.NoError(t, err)
++	// Simulate the pre-OIDC users table, then apply the versioned migration.
 +	require.NoError(t, db.AutoMigrate(&types.User{}))
 +	require.NoError(t, db.Exec("DROP INDEX IF EXISTS idx_users_oidc_identity").Error)
++	require.NoError(t, db.Migrator().DropColumn(&types.User{}, "OIDCSubject"))
++	require.NoError(t, db.Migrator().DropColumn(&types.User{}, "OIDCIssuer"))
 +	migration, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "sqlite", "000054_users_oidc_identity.up.sql"))
 +	require.NoError(t, err)
 +	require.NoError(t, db.Exec(string(migration)).Error)
@@ -756,12 +759,42 @@ index d189e90..a1d2236 100644
  	Email string `json:"email"      gorm:"type:varchar(255);uniqueIndex;not null"`
 +	// OIDC identity is bound explicitly by a system administrator. Email is
 +	// profile data and must never be used as an authentication key.
-+	OIDCIssuer  *string `json:"-" gorm:"type:varchar(500);uniqueIndex:idx_users_oidc_identity,priority:1"`
-+	OIDCSubject *string `json:"-" gorm:"type:varchar(255);uniqueIndex:idx_users_oidc_identity,priority:2"`
++	OIDCIssuer  *string `json:"-" gorm:"column:oidc_issuer;type:varchar(500);uniqueIndex:idx_users_oidc_identity,priority:1"`
++	OIDCSubject *string `json:"-" gorm:"column:oidc_subject;type:varchar(255);uniqueIndex:idx_users_oidc_identity,priority:2"`
  	// Hashed password of the user
  	PasswordHash string `json:"-"          gorm:"type:varchar(255);not null"`
  	// Avatar URL of the user
-diff --git a/migrations/sqlite/000054_users_oidc_identity.down.sql b/migrations/sqlite/000054_users_oidc_identity.down.sql
+diff --git a/internal/types/user_oidc_schema_test.go b/internal/types/user_oidc_schema_test.go
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/internal/types/user_oidc_schema_test.go
+@@ -0,0 +1,24 @@
++package types
++
++import (
++	"sync"
++	"testing"
++
++	"gorm.io/gorm/schema"
++)
++
++func TestUserOIDCFieldsMatchVersionedMigrationColumns(t *testing.T) {
++	parsed, err := schema.Parse(&User{}, &sync.Map{}, schema.NamingStrategy{})
++	if err != nil {
++		t.Fatalf("parse User schema: %v", err)
++	}
++	for _, field := range []struct{ name, column string }{
++		{name: "OIDCIssuer", column: "oidc_issuer"},
++		{name: "OIDCSubject", column: "oidc_subject"},
++	} {
++		got := parsed.LookUpField(field.name)
++		if got == nil || got.DBName != field.column {
++			t.Errorf("%s DBName = %v, want %s", field.name, got, field.column)
++		}
++	}
++}
++diff --git a/migrations/sqlite/000054_users_oidc_identity.down.sql b/migrations/sqlite/000054_users_oidc_identity.down.sql
 new file mode 100644
 index 0000000..ca137a6
 --- /dev/null

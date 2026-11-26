@@ -286,6 +286,8 @@ sequenceDiagram
 
 2026-11-26 部署更新：本地提交 `d865df7c496a08de97fac2869e599e9dd0099975` 经固定 v0.9.1 归档、七补丁重放及 app-only 升级器部署到 testkb；运行 active release 已由旧版本切换到该代码提交，app 镜像已重建。升级前有效快照为 `/var/backups/cnz-weknora/20261126T052341Z-e87a4c85b02c0963c26ec44ea44696ec1fb36977.QWU7vO`。升级成功标记及独立只读回读确认 schema `138|f`、API/UI 200、五个 CNZ 服务运行、四个 CNZ 卷不变、五个 yunan-persist 服务健康，OIDC=false、注册模式 invite_only。后端升级器保留原 app 镜像回滚标签；未运行数据库迁移、未触碰 yunan-persist，也未导入客户资料。此部署使本地 0007 nonce 补丁进入 testkb 源码，但不表示客户 IdP/账号绑定已启用或通过运行态验收。
 
+2026-11-26 临时本机管理员引导首次注册返回 HTTP 400。日志显示 GORM 将 Go 字段 `OIDCIssuer`/`OIDCSubject` 映射为 `o_id_c_issuer`/`o_id_c_subject`，而已应用的 schema 138 migration 建立的是 `oidc_issuer`/`oidc_subject`。数据库只读核验确认 schema `138|f`、正确列与唯一索引存在、users 仍为 0；失败请求中的密码已由日志脱敏。已在本地 `0001-cnz-explicit-oidc-identity.patch` 增加显式 GORM `column:` 标签和 schema 映射回归测试。测试在独立 Go 容器中通过只读源码 overlay 运行并通过；未修改 active release、数据库或数据卷。修正尚未应用、构建或部署；不得在修正版本部署前重试注册。
+
 SSO 先做两端互跳可作为入口融合的过渡。只有统一品牌或在两页放导航链接不算统一账户；只有 OIDC 登录成功不算全局退出和权限同步完成。实施工期需在客户 IdP、历史账号数量、字段和资料迁移范围明确后排，不沿用上一份功能精简估算直接相加。
 
 ## 7. 本轮证据与剩余限制

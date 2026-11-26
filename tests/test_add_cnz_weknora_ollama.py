@@ -40,6 +40,8 @@ def test_failure_inventory_is_covered_by_preflight_and_rollback_guards():
         "flock -n 9", "up -d --no-deps ollama", "docker rm -f cnz-weknora-ollama",
         "OLLAMA_CONTAINER_REMOVED_VOLUME_PRESERVED", "cnz-weknora_ollama-data",
         "old_ids", "schema_before", "active-release",
+        "compose_new up -d --no-deps app", "PREVIOUS_APP_RUNTIME_RESTORED",
+        "= http://ollama:11434", "OLLAMA_CONTAINER_AND_VOLUME_KEPT_FOR_APP_RECOVERY",
     ):
         assert token in add.INSTALL
     assert "docker compose down" not in add.INSTALL
@@ -158,6 +160,8 @@ def test_configure_failure_reports_safe_stage_and_stops_before_service_start(mon
 
 def test_ollama_override_joins_only_the_cnz_weknora_network():
     override = (ROOT / "weknora/docker-compose.testkb.override.yml").read_text(encoding="utf-8")
+    app = override.split("  app:\n", 1)[1].split("\n  docreader:\n", 1)[0]
+    assert "OLLAMA_BASE_URL: http://ollama:11434" in app
     ollama = override.split("  ollama:\n", 1)[1].split("\nvolumes:\n", 1)[0]
     assert "    networks:\n      - WeKnora-network\n" in ollama
     assert 'set(v.get("networks",{}))=={"WeKnora-network"}' in add.INSTALL
