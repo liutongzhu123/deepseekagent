@@ -24,7 +24,7 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
         "sha256sum -c SHA256SUMS", "active_source_sha=$active_sha",
         "runtime_source_sha=$runtime_sha", "database_schema=138|f",
         "schema\" = 138\\|f", "cnz-weknora-postgres", "yunan-persist",
-        "cnz-weknora_postgres-data", "cnz-weknora_redis-data",
+        "cnz-weknora_postgres-data", "cnz-weknora_redis-data", "cnz-weknora_ollama-data",
         "127.0.0.1:39301/health", "127.0.0.1:18082/", "DEPLOYED_FROM_CODE", "DEPLOYED_FROM_MAIN",
         "realpath -e -- \"$backup\"",
         "cnz-weknora_data-files", "cnz-weknora_WeKnora-network",
@@ -75,8 +75,14 @@ def test_compose_contract_rejects_extra_mounts_and_networks(tmp_path):
     validator = script[start:end]
     config_file = tmp_path / "config.yaml"
     config_file.write_text("synthetic only\n", encoding="utf-8")
-    names = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend", "docreader":"cnz-weknora-docreader", "postgres":"cnz-weknora-postgres", "redis":"cnz-weknora-redis"}
+    names = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend", "docreader":"cnz-weknora-docreader", "postgres":"cnz-weknora-postgres", "redis":"cnz-weknora-redis", "ollama":"cnz-weknora-ollama"}
     services = {name:{"container_name":container,"networks":{"WeKnora-network":{}}} for name,container in names.items()}
+    services["ollama"].update({
+        "image":"ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429",
+        "environment":{"OLLAMA_HOST":"0.0.0.0:11434"},
+        "healthcheck":{"test":["CMD","ollama","list"]},
+        "volumes":[{"type":"volume","source":"ollama-data","target":"/root/.ollama"}],
+    })
     services["app"].update({
         "environment":{"DISABLE_REGISTRATION":"true","OIDC_AUTH_ENABLE":"false"},
         "ports":[{"host_ip":"127.0.0.1","target":8080,"published":"39301"}],
@@ -87,10 +93,16 @@ def test_compose_contract_rejects_extra_mounts_and_networks(tmp_path):
         ],
     })
     services["frontend"]["ports"]=[{"host_ip":"127.0.0.1","target":80,"published":"18082"}]
-    valid={"services":services,"volumes":{"data-files":{"driver":"local"},"docreader-tmp":{"driver":"local"},"postgres-data":{"driver":"local"},"redis-data":{"driver":"local"}},"networks":{"WeKnora-network":{"driver":"bridge"}}}
+    valid={"services":services,"volumes":{"data-files":{"driver":"local"},"docreader-tmp":{"driver":"local"},"postgres-data":{"driver":"local"},"redis-data":{"driver":"local"},"ollama-data":{"driver":"local"}},"networks":{"WeKnora-network":{"driver":"bridge"}}}
     def validate(config):
         return subprocess.run([sys.executable,"-c",validator,str(config_file)],input=json.dumps(config).encode(),capture_output=True)
     assert validate(valid).returncode == 0
+    private_host_port=json.loads(json.dumps(valid))
+    private_host_port["services"]["ollama"]["ports"]=[{"host_ip":"0.0.0.0","target":11434,"published":"11434"}]
+    assert validate(private_host_port).returncode != 0
+    shared_volume=json.loads(json.dumps(valid))
+    shared_volume["services"]["ollama"]["volumes"][0]["source"]="redis-data"
+    assert validate(shared_volume).returncode != 0
     extra_mount=json.loads(json.dumps(valid))
     extra_mount["services"]["app"]["volumes"].append({"type":"bind","source":"/etc","target":"/host"})
     assert validate(extra_mount).returncode != 0

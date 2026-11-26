@@ -20,10 +20,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_URL = "https://github.com/Tencent/WeKnora/archive/refs/tags/v0.9.1.tar.gz"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-SERVICES = {"app", "frontend", "docreader", "postgres", "redis"}
+SERVICES = {"app", "frontend", "docreader", "postgres", "redis", "ollama"}
 CONTAINERS = {"app":"cnz-weknora-app", "frontend":"cnz-weknora-frontend",
               "docreader":"cnz-weknora-docreader", "postgres":"cnz-weknora-postgres",
-              "redis":"cnz-weknora-redis"}
+              "redis":"cnz-weknora-redis", "ollama":"cnz-weknora-ollama"}
 REMOTE_ROOT = "/opt/cnz-weknora"
 
 PREFLIGHT = r'''set -euo pipefail
@@ -64,7 +64,7 @@ if [ -e "$release" ] || [ -L "$release" ]; then
 else
   echo RELEASE_NEW
 fi
-expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data | sort)"
+expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data cnz-weknora_ollama-data | sort)"
 existing_volumes="$(docker volume ls -q --filter name=cnz-weknora | sort)"
 if [ -n "$existing_volumes" ]; then
   test "$existing_volumes" = "$expected_volumes"
@@ -147,7 +147,7 @@ rollback() {
   exit "$code"
 }
 trap rollback EXIT
-compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert s["redis"]["healthcheck"]["test"]==["CMD","redis-cli","ping"]'
+compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis","ollama"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis","ollama":"cnz-weknora-ollama"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert not s["ollama"].get("ports"); assert s["ollama"]["image"]=="ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429"; assert s["ollama"]["environment"]["OLLAMA_HOST"]=="0.0.0.0:11434"; assert s["ollama"]["healthcheck"]["test"]==["CMD","ollama","list"]; assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data","ollama-data"}; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert s["redis"]["healthcheck"]["test"]==["CMD","redis-cli","ping"]'
 echo COMPOSE_CONTRACT_OK
 phase=image_build
 compose build app frontend docreader
@@ -161,9 +161,10 @@ for _ in $(seq 1 90); do
   app="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
   pg="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-postgres 2>/dev/null || true)"
   redis="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-redis 2>/dev/null || true)"
+  ollama="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-ollama 2>/dev/null || true)"
   api="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39301/health 2>/dev/null || true)"
   ui="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18082/ 2>/dev/null || true)"
-  if [ "$app" = healthy ] && [ "$pg" = healthy ] && [ "$redis" = healthy ] && [ "$api" = 200 ] && [ "$ui" = 200 ]; then ready=1; break; fi
+  if [ "$app" = healthy ] && [ "$pg" = healthy ] && [ "$redis" = healthy ] && [ "$ollama" = healthy ] && [ "$api" = 200 ] && [ "$ui" = 200 ]; then ready=1; break; fi
   sleep 2
 done
 test "$ready" -eq 1
@@ -228,7 +229,7 @@ def validate_compose(config: dict) -> None:
     def has_port(service,target,published):
         return any(p.get("host_ip")=="127.0.0.1" and int(p.get("target",0))==target and str(p.get("published"))==published for p in s[service].get("ports",[]))
     if not has_port("frontend",80,"18082") or not has_port("app",8080,"39301"): raise ValueError("F6: port mapping")
-    if set(config.get("volumes",{}))!={"data-files","docreader-tmp","postgres-data","redis-data"}: raise ValueError("F6: volume mapping")
+    if set(config.get("volumes",{}))!={"data-files","docreader-tmp","postgres-data","redis-data","ollama-data"}: raise ValueError("F6: volume mapping")
     for logical, definition in config["volumes"].items():
         if definition.get("external",False) or definition.get("driver","local")!="local" or definition.get("driver_opts") or definition.get("name") not in (None,"cnz-weknora_"+logical):
             raise ValueError("F6: CNZ-only local volume mapping")
@@ -245,6 +246,13 @@ def validate_compose(config: dict) -> None:
         raise ValueError("F6: registration must be disabled and OIDC must stay off")
     if s["redis"].get("healthcheck",{}).get("test") != ["CMD", "redis-cli", "ping"]:
         raise ValueError("F6: Redis healthcheck is required")
+    ollama=s["ollama"]
+    if ollama.get("image") != "ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429": raise ValueError("F6: Ollama image must be pinned")
+    if ollama.get("ports"): raise ValueError("F6: Ollama must not publish a host port")
+    if ollama.get("environment",{}).get("OLLAMA_HOST") != "0.0.0.0:11434": raise ValueError("F6: Ollama must listen only inside the CNZ network")
+    if ollama.get("healthcheck",{}).get("test") != ["CMD", "ollama", "list"]: raise ValueError("F6: Ollama healthcheck is required")
+    ollama_mounts={(m.get("type"),m.get("source"),m.get("target")) for m in ollama.get("volumes",[])}
+    if ollama_mounts!={("volume","ollama-data","/root/.ollama")}: raise ValueError("F6: Ollama must use only its dedicated model volume")
 
 def remote(target,script,sha,timeout=300,source_fingerprint_value=None):
     args=["ssh","-o","BatchMode=yes","-o","ConnectTimeout=10",target,"bash","-s","--",sha]

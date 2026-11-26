@@ -32,7 +32,9 @@ def test_remote_preflight_requires_isolated_healthy_stack_backup_and_clean_schem
     script = backup.REMOTE_BACKUP
     for required in (
         "cnz-weknora-app", "cnz-weknora-postgres", "cnz-weknora-redis",
+        "cnz-weknora-ollama",
         "cnz-weknora_docreader-tmp", "cnz-weknora_postgres-data",
+        "cnz-weknora_ollama-data",
         "com.docker.compose.project", "schema_migrations", "10485760",
         "yunan-persist", "127.0.0.1:39301", "127.0.0.1:18082",
         "DEPLOYED_FROM_MAIN", "DEPLOYED_FROM_CODE", "verify_release_marker", "stat -c %a \"$active/.env\"",
@@ -42,10 +44,21 @@ def test_remote_preflight_requires_isolated_healthy_stack_backup_and_clean_schem
         "docker inspect -f '{{json .Mounts}}'", "assert_mounts cnz-weknora-app",
         "assert_mounts cnz-weknora-docreader", "assert_mounts cnz-weknora-postgres",
         "assert_mounts cnz-weknora-redis",
+        "assert_mounts cnz-weknora-ollama",
         "runtime_source_sha=", "runtime_config_sha256=", "runtime_env_path=",
         "{{ index .Config.Labels \"com.docker.compose.project\" }}",
     ):
         assert expected in script
+
+
+def test_backup_supports_pre_ollama_and_post_ollama_cnz_stacks():
+    script = backup.REMOTE_BACKUP
+    assert 'if docker inspect cnz-weknora-ollama' in script
+    assert 'expected_containers="$(printf' in script
+    assert 'expected_volumes="$(printf' in script
+    assert 'if [ "$ollama_present" -eq 1 ]; then' in script
+    assert 'ollama_image=none' in script
+    assert 'if [ "$ollama_volume_present" -eq 1 ]; then\n  test -s "$backup/ollama-data.tar.gz"' in script
 
 
 def test_remote_script_quiesces_and_restarts_only_cnz_services_in_safe_order():
@@ -53,17 +66,20 @@ def test_remote_script_quiesces_and_restarts_only_cnz_services_in_safe_order():
     stop_app = script.index("docker stop --time 60 cnz-weknora-app")
     stop_docreader = script.index("docker stop --time 60 cnz-weknora-docreader")
     stop_redis = script.index("docker stop --time 60 cnz-weknora-redis")
-    assert stop_app < stop_docreader < stop_redis
+    stop_ollama = script.index("docker stop --time 60 cnz-weknora-ollama")
+    assert stop_app < stop_docreader < stop_redis < stop_ollama
+    start_ollama = script.index("docker start cnz-weknora-ollama")
     start_redis = script.index("docker start cnz-weknora-redis")
     start_docreader = script.index("docker start cnz-weknora-docreader")
     start_app = script.index("docker start cnz-weknora-app")
-    assert start_redis < start_docreader < start_app
+    assert start_ollama < start_redis < start_docreader < start_app
     assert "docker compose down" not in script
     assert "docker volume rm" not in script
     assert "down -v" not in script
     for attempted in (
         "echo CNZ_RESTART_START_FAILED=redis", "echo CNZ_RESTART_START_FAILED=docreader",
         "echo CNZ_RESTART_START_FAILED=app", 'return "$failures"',
+        "echo CNZ_RESTART_START_FAILED=ollama",
     ):
         assert attempted in script
     assert 'mktemp -d "$backup_root/${stamp}-${source_sha}.XXXXXX"' in script
@@ -79,6 +95,7 @@ def test_backup_archives_are_verified_private_and_do_not_copy_credentials():
     assert '"$backup/files.tar.gz"' in script
     assert '"$backup/docreader-tmp.tar.gz"' in script
     assert '"$backup/redis-volume.tar.gz"' in script
+    assert '"$backup/ollama-data.tar.gz"' in script
     assert "sha256sum -c SHA256SUMS" in script
     assert 'stat -c %a "$active/.env"' in script
     assert 'runtime_env_path=%s' in script

@@ -47,12 +47,13 @@ test ! -e "$incoming" && test ! -L "$incoming"
 test "$(docker ps --filter name='^cnz-weknora-app$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
 test "$(docker ps --filter name='^cnz-weknora-postgres$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
 test "$(docker ps --filter name='^cnz-weknora-redis$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
-expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis | sort)"
+test "$(docker ps --filter name='^cnz-weknora-ollama$' --format '{{.Status}}' | grep -c '(healthy)' || true)" -eq 1
+expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama | sort)"
 test "$(docker ps -a --filter name='^cnz-weknora-' --format '{{.Names}}' | sort)" = "$expected_containers"
 for c in cnz-weknora-frontend cnz-weknora-docreader; do test "$(docker inspect -f '{{.State.Status}}' "$c")" = running; done
 test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39301/health)" = 200
 test "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:18082/)" = 200
-expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data | sort)"
+expected_volumes="$(printf '%s\n' cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data cnz-weknora_ollama-data | sort)"
 test "$(docker volume ls -q --filter name=cnz-weknora | sort)" = "$expected_volumes"
 for volume in $expected_volumes; do
   logical="${volume#cnz-weknora_}"
@@ -110,7 +111,7 @@ PY
 compose_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" "$@"; }
 compose_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$old_release/docker-compose.testkb.override.yml" "$@"; }
 assert_compose() {
-  "$@" config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; assert set(s)=={"app","frontend","docreader","postgres","redis"}; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data"}; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"'
+  "$@" config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; assert set(s)=={"app","frontend","docreader","postgres","redis","ollama"}; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis","ollama":"cnz-weknora-ollama"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert not s["ollama"].get("ports"); assert s["ollama"]["image"]=="ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429"; assert s["ollama"]["environment"]["OLLAMA_HOST"]=="0.0.0.0:11434"; assert s["ollama"]["healthcheck"]["test"]==["CMD","ollama","list"]; assert [(v["type"],v["source"],v["target"]) for v in s["ollama"]["volumes"]]==[("volume","ollama-data","/root/.ollama")]; assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data","ollama-data"}; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"'
 }
 wait_frontend() {
   expected_image="$1"; ready=0
@@ -149,7 +150,7 @@ assert_compose compose_new
 assert_compose compose_old
 test "$(docker inspect -f '{{.Image}}' cnz-weknora-frontend)" = "$old_image"
 test "$(fingerprint_source "$new_project")" = "$source_fingerprint"
-other_containers=(cnz-weknora-app cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis)
+other_containers=(cnz-weknora-app cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama)
 other_container_ids=()
 for c in "${other_containers[@]}"; do
   other_container_ids+=("$(docker inspect -f '{{.Id}}' "$c")")
