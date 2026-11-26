@@ -161,3 +161,6 @@ def test_ollama_override_joins_only_the_cnz_weknora_network():
     ollama = override.split("  ollama:\n", 1)[1].split("\nvolumes:\n", 1)[0]
     assert "    networks:\n      - WeKnora-network\n" in ollama
     assert 'set(v.get("networks",{}))=={"WeKnora-network"}' in add.INSTALL
+    guide = (ROOT / "docs/cnz-ollama-runtime-addition.md").read_text(encoding="utf-8")
+    assert "uv run --python 3.12 python scripts/add_cnz_weknora_ollama.py" in guide
+    assert "55 项通过" in guide
