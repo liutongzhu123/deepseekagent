@@ -123,6 +123,7 @@ flock -n 9 || { echo CNZ_DEPLOY_LOCKED; exit 40; }
 new_release="$root/releases/$sha"; project="$new_release/source/WeKnora-0.9.1"
 old_project="$root/releases/$old_sha/source/WeKnora-0.9.1"
 compose_new() { docker compose -p cnz-weknora --project-directory "$project" --env-file "$project/.env" -f "$project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" "$@"; }
+compose_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$root/releases/$old_sha/docker-compose.testkb.override.yml" "$@"; }
 fingerprint_source() {
  python3 - "$1" <<'PY'
 import hashlib,os,stat,sys
@@ -141,21 +142,36 @@ for p in sorted(root.rglob("*"),key=lambda x:x.relative_to(root).as_posix()):
 print(h.hexdigest())
 PY
 }
-compose_new config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; n={"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis","ollama":"cnz-weknora-ollama"}; assert set(s)==set(n) and all(s[k]["container_name"]==v for k,v in n.items()); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data","ollama-data"}; assert set(c["networks"])=={"WeKnora-network"}; assert all(set(v.get("networks",{}))=={"WeKnora-network"} for v in s.values()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert s["ollama"]["image"]=="''' + IMAGE + r'''"; assert not s["ollama"].get("ports"); assert s["ollama"]["environment"]["OLLAMA_HOST"]=="0.0.0.0:11434"; assert s["ollama"]["healthcheck"]["test"]==["CMD","ollama","list"]; assert [(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in s["ollama"]["volumes"]]==[("volume","ollama-data","/root/.ollama",False)]; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items())'
+compose_new config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; n={"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis","ollama":"cnz-weknora-ollama"}; assert set(s)==set(n) and all(s[k]["container_name"]==v for k,v in n.items()); assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data","ollama-data"}; assert set(c["networks"])=={"WeKnora-network"}; assert all(set(v.get("networks",{}))=={"WeKnora-network"} for v in s.values()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert s["app"]["environment"]["OLLAMA_BASE_URL"]=="http://ollama:11434"; assert s["ollama"]["image"]=="''' + IMAGE + r'''"; assert not s["ollama"].get("ports"); assert s["ollama"]["environment"]["OLLAMA_HOST"]=="0.0.0.0:11434"; assert s["ollama"]["healthcheck"]["test"]==["CMD","ollama","list"]; assert [(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in s["ollama"]["volumes"]]==[("volume","ollama-data","/root/.ollama",False)]; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items())'
 test "$(readlink -f "$root/active-release")" = "$old_project"
 test "$(fingerprint_source "$project")" = "$fingerprint"
 old_ids=()
-for c in cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis; do old_ids+=("$(docker inspect -f '{{.Id}}' "$c")"); done
+for c in cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis; do old_ids+=("$(docker inspect -f '{{.Id}}' "$c")"); done
+old_ollama_url="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-app | sed -n 's/^OLLAMA_BASE_URL=//p')"
 volumes_before="$(docker volume ls -q --filter name=cnz-weknora | sort)"
 for v in cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data; do printf '%s\n' "$volumes_before" | grep -Fxq "$v"; done
 schema_before="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select version,dirty from schema_migrations order by version desc limit 1"')"
 test "$schema_before" = 138\|f
-phase=start_ollama; started=0
+phase=start_ollama; started=0; app_restarted=0
 rollback() {
- code=$?; trap - EXIT; set +e
+ code=$?; trap - EXIT; set +e; restored=0
  if [ "$code" -ne 0 ]; then
    echo "OLLAMA_INSTALL_FAILED_PHASE=$phase"
-   if [ "$started" -eq 1 ]; then docker rm -f cnz-weknora-ollama >/dev/null 2>&1; echo OLLAMA_CONTAINER_REMOVED_VOLUME_PRESERVED; fi
+   if [ "$app_restarted" -eq 1 ]; then
+     compose_old up -d --no-deps app >/dev/null 2>&1
+     for _ in $(seq 1 90); do
+       state="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
+       if [ "$state" = healthy ] && [ "$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-app | sed -n 's/^OLLAMA_BASE_URL=//p')" = "$old_ollama_url" ]; then
+         restored=1; echo PREVIOUS_APP_RUNTIME_RESTORED; break
+       fi
+       sleep 2
+     done
+   fi
+   if [ "$started" -eq 1 ] && { [ "$app_restarted" -eq 0 ] || [ "$restored" -eq 1 ]; }; then
+     docker rm -f cnz-weknora-ollama >/dev/null 2>&1; echo OLLAMA_CONTAINER_REMOVED_VOLUME_PRESERVED
+   elif [ "$started" -eq 1 ]; then
+     echo OLLAMA_CONTAINER_AND_VOLUME_KEPT_FOR_APP_RECOVERY
+   fi
  fi
  exit "$code"
 }
@@ -169,6 +185,17 @@ for _ in $(seq 1 90); do
  sleep 2
 done
 test "$ready" -eq 1
+phase=recreate_app_for_ollama
+app_restarted=1
+compose_new up -d --no-deps app
+phase=app_health; ready=0
+for _ in $(seq 1 90); do
+ state="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
+ if [ "$state" = healthy ]; then ready=1; break; fi
+ sleep 2
+done
+test "$ready" -eq 1
+test "$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-app | sed -n 's/^OLLAMA_BASE_URL=//p')" = http://ollama:11434
 phase=post_checks
 test "$(docker inspect -f '{{.Config.Image}}' cnz-weknora-ollama)" = ''' + IMAGE + r'''
 test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' cnz-weknora-ollama)" = cnz-weknora
@@ -179,7 +206,7 @@ test "$(docker volume ls -q --filter name=cnz-weknora | sort)" = "$expected_volu
 test "$(docker volume inspect -f '{{ index .Labels "com.docker.compose.project" }}' cnz-weknora_ollama-data)" = cnz-weknora
 test "$(docker volume inspect -f '{{ index .Labels "com.docker.compose.volume" }}' cnz-weknora_ollama-data)" = ollama-data
 i=0
-for c in cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis; do
+for c in cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis; do
   test "$(docker inspect -f '{{.Id}}' "$c")" = "${old_ids[$i]}"; i=$((i+1))
 done
 for v in cnz-weknora_data-files cnz-weknora_docreader-tmp cnz-weknora_postgres-data cnz-weknora_redis-data; do docker volume inspect "$v" >/dev/null; done
