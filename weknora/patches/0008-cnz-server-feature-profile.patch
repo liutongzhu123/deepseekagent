@@ -127,7 +127,7 @@ new file mode 100644
 index 0000000..b64ce60
 --- /dev/null
 +++ b/internal/router/cnz_feature_profile_test.go
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,208 @@
 +package router
 +
 +import (
@@ -135,6 +135,9 @@ index 0000000..b64ce60
 +	"net/http/httptest"
 +	"testing"
 +
++	"github.com/Tencent/WeKnora/internal/config"
++	"github.com/Tencent/WeKnora/internal/handler"
++	"github.com/Tencent/WeKnora/internal/mcpserver"
 +	"github.com/gin-gonic/gin"
 +	"github.com/stretchr/testify/require"
 +)
@@ -147,7 +150,8 @@ index 0000000..b64ce60
 +// F5 the unset profile must preserve upstream route behavior;
 +// F6 knowledge search, KB operations, files, settings, and identity remain reachable;
 +// F7 CNZ tenant creation/deletion and cross-tenant enumeration remain closed;
-+// F8 WeKnora self-service account registration remains closed.
++// F8 WeKnora self-service account registration remains closed;
++// F9 the guard covers routes registered by the pinned real NewRouter.
 +func TestInstallCNZFeatureProfile(t *testing.T) {
 +	gin.SetMode(gin.TestMode)
 +
@@ -288,6 +292,48 @@ index 0000000..b64ce60
 +			engine.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, nil))
 +			require.Equal(t, tc.want, response.Code, tc.method+" "+tc.path)
 +		}
++	})
++
++	t.Run("guard covers actual routes registered by NewRouter", func(t *testing.T) {
++		t.Setenv(cnzFeatureProfileEnv, cnzKnowledgeAdminMode)
++		engine := NewRouter(RouterParams{
++			Config:             &config.Config{},
++			SystemHandler:      &handler.SystemHandler{},
++			MCPServer:          &mcpserver.Server{},
++			MCPEndpointService: &stubMCPEndpointServiceForRoutes{},
++		})
++		routes := make(map[string]bool)
++		for _, route := range engine.Routes() {
++			routes[route.Method+" "+route.Path] = true
++		}
++		for _, route := range []string{
++			"POST /api/v1/auth/register",
++			"POST /api/v1/auth/register-by-invite",
++			"POST /api/v1/auth/auto-setup",
++			"POST /api/v1/knowledge-chat/:session_id",
++			"POST /api/v1/agent-chat/:session_id",
++			"POST /api/v1/knowledge-search",
++		} {
++			require.True(t, routes[route], route)
++		}
++
++		for _, path := range []string{
++			"/api/v1/auth/register",
++			"/api/v1/auth/register-by-invite",
++			"/api/v1/auth/auto-setup",
++			"/api/v1/knowledge-chat/s1",
++			"/api/v1/agent-chat/s1",
++		} {
++			response := httptest.NewRecorder()
++			engine.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
++			require.Equal(t, http.StatusNotFound, response.Code, path)
++		}
++
++		// Stateless retrieval remains registered and passes the feature guard;
++		// authentication then rejects this anonymous probe with 401, not 404.
++		response := httptest.NewRecorder()
++		engine.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/knowledge-search", nil))
++		require.Equal(t, http.StatusUnauthorized, response.Code)
 +	})
 +}
 diff --git a/internal/router/router.go b/internal/router/router.go
