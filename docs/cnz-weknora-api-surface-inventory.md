@@ -61,6 +61,17 @@
 
 2026-11-27，本地分支增加 `0008-cnz-server-feature-profile.patch`：仅当 `WEKNORA_FEATURE_PROFILE=cnz-knowledge-admin` 时启用服务端路由 allowlist；空值保持上游兼容模式，未知值让服务启动失败。profile 拒绝 WeKnora 自助注册/邀请注册、自动开户、创建/删除租户、跨租户枚举、全租户配额操作及工作站目录/沙箱检测。testkb Compose overlay 已设置该 profile。allowlist 保留登录/OIDC 身份、租户成员、知识库与资料管理、无状态知识检索、模型/初始化/系统管理、文件与知识编辑辅助接口；通用聊天/Agent、自动化、MCP、沙箱、嵌入/IM、网页搜索、云功能等未列入开放集合。此分支尚未合并或部署，当前 testkb 是否仍在旧 release 需以部署前只读探测回读。
 
+## 平台密钥管理与工作区密钥管理（2026-11-27 逐接口跟进）
+
+| 方法与 Gin 路径 | CNZ 决策 | 调用与授权依据 |
+| --- | --- | --- |
+| `GET /api/v1/system/admin/api-keys` | 关闭 | 列出平台级密钥；前端仅 `PlatformAPIKeys.vue` 使用，中汽设置 profile 已隐藏该页面 |
+| `POST /api/v1/system/admin/api-keys` | 关闭 | 创建平台级凭据，超出中汽单工作区的集成需要 |
+| `DELETE /api/v1/system/admin/api-keys/:key_id` | 关闭 | 与隐藏的整个平台密钥管理入口一并关闭 |
+| `GET/POST /api/v1/tenants/:id/api-keys`、`PUT/DELETE /api/v1/tenants/:id/api-keys/:key_id` | 保留现有权限检查 | 工作区知识服务集成使用的密钥管理，仍需 Auth、Owner 与原有 API-key 能力检查 |
+
+服务端 profile 对平台管理路径精确根节点和带斜杠子路径执行拒绝，避免 `/system` 整组放行造成前后端不一致。本变更关闭的是管理入口，不会自动吊销既有密钥；未迁移或导入旧平台密钥。真实 Gin 测试覆盖三条已注册路由与匿名、模拟 Bearer 头、模拟 API-key 头的九个 404 断言，并确认工作区密钥和账号管理匿名请求仍进入 Auth 返回 401。测试中的凭据是无效合成值；这些断言验证 guard 在 Auth 前执行，不代表有效凭据或真实角色的运行态验收。
+
 ## 证据边界
 
 此清单基于固定 v0.9.1 源码的 `internal/router/router.go` 与路由注册函数静态检查，代码图谱检查亦覆盖 52 个 router Go 文件（925 个节点、2,506 条边）。它不是运行态 endpoint 清单，不证明角色权限已符合业务，也没有在 testkb 执行任何请求或修改线上配置。当前活动版本与管理员账号状态另见 `docs/BACKLOG.yaml` 的 `KB_IDENTITY_STACK` 续记。

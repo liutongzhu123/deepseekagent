@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..b341cbe
 --- /dev/null
 +++ b/internal/router/cnz_feature_profile.go
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,124 @@
 +package router
 +
 +import (
@@ -100,6 +100,12 @@ index 0000000..b341cbe
 +
 +func cnzFeatureRouteAllowed(route string) bool {
 +	if strings.HasPrefix(route, "/api/v1/") || route == "/api/v1" {
++		// Platform-scoped credentials are outside the CNZ single-workspace
++		// contract. Tenant-scoped integration keys remain separately guarded.
++		if route == "/api/v1/system/admin/api-keys" ||
++			strings.HasPrefix(route, "/api/v1/system/admin/api-keys/") {
++			return false
++		}
 +		if route == "/api/v1/system/sandbox-check" ||
 +			route == "/api/v1/system/host-project-dir" ||
 +			route == "/api/v1/system/admin/runtime/documents/wiki-start" {
@@ -127,7 +133,7 @@ new file mode 100644
 index 0000000..b64ce60
 --- /dev/null
 +++ b/internal/router/cnz_feature_profile_test.go
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,243 @@
 +package router
 +
 +import (
@@ -151,7 +157,8 @@ index 0000000..b64ce60
 +// F6 knowledge search, KB operations, files, settings, and identity remain reachable;
 +// F7 CNZ tenant creation/deletion and cross-tenant enumeration remain closed;
 +// F8 WeKnora self-service account registration remains closed;
-+// F9 the guard covers routes registered by the pinned real NewRouter.
++// F9 the guard covers routes registered by the pinned real NewRouter;
++// F10 platform API-key management stays closed for every credential type.
 +func TestInstallCNZFeatureProfile(t *testing.T) {
 +	gin.SetMode(gin.TestMode)
 +
@@ -329,6 +336,38 @@ index 0000000..b64ce60
 +			response := httptest.NewRecorder()
 +			engine.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
 +			require.Equal(t, http.StatusNotFound, response.Code, path)
++		}
++
++		// F10: front-end-hidden platform credential management must also be
++		// closed before Auth, for anonymous, bearer, and API-key requests.
++		for _, tc := range []struct{ method, path, template string }{
++			{http.MethodGet, "/api/v1/system/admin/api-keys", "/api/v1/system/admin/api-keys"},
++			{http.MethodPost, "/api/v1/system/admin/api-keys", "/api/v1/system/admin/api-keys"},
++			{http.MethodDelete, "/api/v1/system/admin/api-keys/1", "/api/v1/system/admin/api-keys/:key_id"},
++		} {
++			require.True(t, routes[tc.method+" "+tc.template])
++			for _, credential := range []string{"anonymous", "bearer", "api-key"} {
++				request := httptest.NewRequest(tc.method, tc.path, nil)
++				if credential == "bearer" {
++					request.Header.Set("Authorization", "Bearer synthetic-invalid-token")
++				} else if credential == "api-key" {
++					request.Header.Set("X-API-Key", "synthetic-invalid-key")
++				}
++				response := httptest.NewRecorder()
++				engine.ServeHTTP(response, request)
++				require.Equal(t, http.StatusNotFound, response.Code, tc.method+" "+tc.path+" "+credential)
++			}
++		}
++		// Tenant keys and account management still reach Auth: this feature
++		// restriction must not disable the knowledge integration key path.
++		for _, tc := range []struct{ path, template string }{
++			{"/api/v1/tenants/1/api-keys", "/api/v1/tenants/:id/api-keys"},
++			{"/api/v1/system/admin/users", "/api/v1/system/admin/users"},
++		} {
++			require.True(t, routes[http.MethodGet+" "+tc.template])
++			response := httptest.NewRecorder()
++			engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tc.path, nil))
++			require.Equal(t, http.StatusUnauthorized, response.Code, tc.path)
 +		}
 +
 +		// Stateless retrieval remains registered and passes the feature guard;
