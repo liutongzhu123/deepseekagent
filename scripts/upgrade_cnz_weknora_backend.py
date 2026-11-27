@@ -9,6 +9,9 @@ F4 transfer/staging failure: remove only the unactivated incoming directory.
 F5 app build or health failure: restore the previous app image and runtime Compose project.
 F6 post-start schema, sibling container, volume, API/UI, or isolation mismatch: rollback app.
 F7 missing completion markers: report failure instead of claiming deployment.
+F8 zero/multiple workspaces or no active system-admin owner/admin membership: refuse profile upgrade.
+F9 workspace query errors/malformed output: fail closed; recheck under lock and before app replacement.
+F10 failure before app replacement: restore image tag without recreating the running app.
 """
 from __future__ import annotations
 import argparse, hashlib, importlib.util, json, re, shlex, subprocess, sys, tarfile, tempfile
@@ -22,8 +25,31 @@ SPEC=importlib.util.spec_from_file_location("deploy_cnz",ROOT/"scripts/deploy_cn
 assert SPEC and SPEC.loader
 base=importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(base)
 
+WORKSPACE_QUERY = """SELECT CASE WHEN
+ (SELECT count(*) FROM public.tenants WHERE deleted_at IS NULL) = 1
+ AND EXISTS (
+  SELECT 1 FROM public.tenants t
+  JOIN public.tenant_members m ON m.tenant_id = t.id
+  JOIN public.users u ON u.id = m.user_id
+  WHERE t.deleted_at IS NULL AND t.status = 'active'
+    AND m.deleted_at IS NULL AND m.status = 'active' AND m.role IN ('owner', 'admin')
+    AND u.deleted_at IS NULL AND u.is_active AND u.is_system_admin
+ ) THEN 'ready' ELSE 'not_ready' END"""
+
+# Use a single read-only SQL statement so count and membership share a snapshot.
+# Never emit account identifiers or attempt to initialize/repair memberships here.
+WORKSPACE_GUARD = r'''require_cnz_workspace() {
+ if ! workspace_ready="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=5000" psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atqc "$1"' sh ''' + shlex.quote(WORKSPACE_QUERY) + r''')"; then
+  echo BACKEND_WORKSPACE_CHECK_FAILED; return 35
+ fi
+ if [ "$workspace_ready" != ready ]; then
+  echo BACKEND_WORKSPACE_NOT_READY; return 35
+ fi
+}
+'''
+
 PREFLIGHT=r'''set -Eeuo pipefail
-sha="$1"; fingerprint="$2"; backup="$3"; root=/opt/cnz-weknora
+''' + WORKSPACE_GUARD + r'''sha="$1"; fingerprint="$2"; backup="$3"; root=/opt/cnz-weknora
 [[ "$sha" =~ ^[0-9a-f]{40}$ && "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
 case "$backup" in /var/backups/cnz-weknora/*) ;; *) exit 31 ;; esac
 backup="$(realpath -e -- "$backup")"
@@ -112,6 +138,7 @@ test "$(df -Pk /opt | awk 'NR==2 {print $4}')" -ge 10485760
 schema="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select version,dirty from schema_migrations order by version desc limit 1"')"
 test "$schema" = 138\|f
 grep -Fxq 'database_schema=138|f' "$backup/METADATA.txt"
+require_cnz_workspace
 old_image="$(docker inspect -f '{{.Image}}' cnz-weknora-app)"
 test "$(docker inspect -f '{{.Config.Image}}' cnz-weknora-app)" = cnz-weknora-app:dev
 printf 'BACKEND_PREFLIGHT_OK\nACTIVE_SHA=%s\nRUNTIME_SHA=%s\nOLD_IMAGE=%s\nBOOTSTRAP_PRESENT=%s\n' "$active_sha" "$runtime_sha" "$old_image" "$bootstrap_present"
@@ -130,10 +157,11 @@ echo BACKEND_RELEASE_READY
 '''
 
 UPGRADE=r'''set -Eeuo pipefail
-sha="$1"; runtime_sha="$2"; active_sha="$3"; old_image="$4"; fingerprint="$5"; backup="$6"; bootstrap_present="$7"; root=/opt/cnz-weknora
+''' + WORKSPACE_GUARD + r'''sha="$1"; runtime_sha="$2"; active_sha="$3"; old_image="$4"; fingerprint="$5"; backup="$6"; bootstrap_present="$7"; root=/opt/cnz-weknora
 [[ "$bootstrap_present" =~ ^[01]$ ]]
 exec 9>"$root/.deploy.lock"
 flock -n 9 || { echo BACKEND_DEPLOY_LOCKED; exit 40; }
+require_cnz_workspace
 new_release="$root/releases/$sha"; new_project="$new_release/source/WeKnora-0.9.1"
 old_release="$root/releases/$runtime_sha"; old_project="$old_release/source/WeKnora-0.9.1"
 active_release="$root/releases/$active_sha"; active_project="$active_release/source/WeKnora-0.9.1"
@@ -245,17 +273,19 @@ test "$(docker inspect -f '{{.Image}}' cnz-weknora-app)" = "$old_image"
 if docker image inspect "$rollback_tag" >/dev/null 2>&1; then
  test "$(docker image inspect -f '{{.Id}}' "$rollback_tag")" = "$old_image"
 else docker image tag "$old_image" "$rollback_tag"; fi
-phase=app_build; switch_started=1
+phase=app_build; switch_started=1; app_replace_started=0
 rollback() {
  code=$?; trap - EXIT; set +e
  if [ "$code" -ne 0 ]; then echo "BACKEND_UPGRADE_FAILED_PHASE=$phase"; fi
  if [ "$code" -ne 0 ] && [ "$switch_started" -eq 1 ]; then
   docker image tag "$old_image" cnz-weknora-app:dev || { echo BACKEND_ROLLBACK_IMAGE_TAG_FAILED; exit 90; }
+  if [ "$app_replace_started" -eq 1 ]; then
   compose_old up -d --no-deps app || { echo BACKEND_ROLLBACK_RECREATE_FAILED; exit 90; }
   wait_app "$old_image" "$runtime_profile" || { echo BACKEND_ROLLBACK_HEALTH_FAILED; exit 90; }
   if [ "$bootstrap_present" = 1 ]; then
    compose_bootstrap_old up -d --no-deps --no-build bootstrap-app || { echo BACKEND_ROLLBACK_BOOTSTRAP_RECREATE_FAILED; exit 90; }
    wait_bootstrap "$old_image" || { echo BACKEND_ROLLBACK_BOOTSTRAP_HEALTH_FAILED; exit 90; }
+  fi
   fi
   current_active="$(readlink -f "$root/active-release" 2>/dev/null || true)"
   if [ "$current_active" = "$new_project" ]; then
@@ -276,7 +306,8 @@ fi
 compose_new build app
 new_image="$(docker image inspect -f '{{.Id}}' cnz-weknora-app:dev)"
 test -n "$new_image" && test "$new_image" != "$old_image"
-phase=app_replace
+require_cnz_workspace
+phase=app_replace; app_replace_started=1
 compose_new up -d --no-deps app
 phase=app_health; wait_app "$new_image" cnz-knowledge-admin
 if [ "$bootstrap_present" = 1 ]; then

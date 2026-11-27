@@ -155,7 +155,7 @@ def test_compose_contract_rejects_extra_mounts_and_networks(tmp_path):
         "volumes":[{"type":"volume","source":"ollama-data","target":"/root/.ollama"}],
     })
     services["app"].update({
-        "environment":{"DISABLE_REGISTRATION":"true","OIDC_AUTH_ENABLE":"false"},
+        "environment":{"DISABLE_REGISTRATION":"true","OIDC_AUTH_ENABLE":"false","WEKNORA_FEATURE_PROFILE":"cnz-knowledge-admin"},
         "ports":[{"host_ip":"127.0.0.1","target":8080,"published":"39301"}],
         "volumes":[
             {"type":"volume","source":"data-files","target":"/data/files"},
@@ -166,7 +166,7 @@ def test_compose_contract_rejects_extra_mounts_and_networks(tmp_path):
     services["frontend"]["ports"]=[{"host_ip":"127.0.0.1","target":80,"published":"18082"}]
     valid={"services":services,"volumes":{"data-files":{"driver":"local"},"docreader-tmp":{"driver":"local"},"postgres-data":{"driver":"local"},"redis-data":{"driver":"local"},"ollama-data":{"driver":"local"}},"networks":{"WeKnora-network":{"driver":"bridge"}}}
     def validate(config):
-        return subprocess.run([sys.executable,"-c",validator,str(config_file)],input=json.dumps(config).encode(),capture_output=True)
+        return subprocess.run([sys.executable,"-c",validator,str(config_file),"cnz-knowledge-admin"],input=json.dumps(config).encode(),capture_output=True)
     assert validate(valid).returncode == 0
     private_host_port=json.loads(json.dumps(valid))
     private_host_port["services"]["ollama"]["ports"]=[{"host_ip":"0.0.0.0","target":11434,"published":"11434"}]
@@ -325,3 +325,105 @@ def test_all_remote_deploy_transactions_share_nonblocking_lock():
         assert marker in source
     frontend = (ROOT / "scripts/upgrade_cnz_weknora_frontend.py").read_text(encoding="utf-8")
     assert 'test "$(readlink -f "$root/active-release")" = "$old_project"' in frontend
+
+
+# F8: a profile that disables tenant creation must not strand the administrator.
+# F9: failed/ambiguous reads or a changed workspace must not authorize replacement.
+@pytest.mark.parametrize('change,expected', [
+    ('', 'ready'),
+    ("UPDATE tenant_members SET role='admin'", 'ready'),
+    ('DELETE FROM tenant_members', 'not_ready'),
+    ('DELETE FROM tenants', 'not_ready'),
+    ("INSERT INTO tenants VALUES (2,'active',NULL)", 'not_ready'),
+    ("UPDATE tenants SET status='suspended'", 'not_ready'),
+    ("UPDATE tenants SET deleted_at='deleted'", 'not_ready'),
+    ("UPDATE tenant_members SET status='suspended'", 'not_ready'),
+    ("UPDATE tenant_members SET status='invited'", 'not_ready'),
+    ("UPDATE tenant_members SET role='viewer'", 'not_ready'),
+    ("UPDATE tenant_members SET role='contributor'", 'not_ready'),
+    ("UPDATE tenant_members SET deleted_at='deleted'", 'not_ready'),
+    ('UPDATE tenant_members SET tenant_id=2', 'not_ready'),
+    ("UPDATE tenant_members SET user_id='other'", 'not_ready'),
+    ('UPDATE users SET is_active=0', 'not_ready'),
+    ('UPDATE users SET is_system_admin=0', 'not_ready'),
+    ("UPDATE users SET deleted_at='deleted'", 'not_ready'),
+])
+def test_workspace_query_requires_single_active_workspace_and_admin_membership(change, expected):
+    import sqlite3
+    # Execute the same portable SELECT, including the public schema qualifier.
+    with sqlite3.connect(':memory:') as db:
+        db.execute("ATTACH DATABASE ':memory:' AS public")
+        db.executescript("""
+            CREATE TABLE public.tenants (id INTEGER, status TEXT, deleted_at TEXT);
+            CREATE TABLE public.users (id TEXT, is_active BOOLEAN, is_system_admin BOOLEAN, deleted_at TEXT);
+            CREATE TABLE public.tenant_members (tenant_id INTEGER, user_id TEXT, role TEXT, status TEXT, deleted_at TEXT);
+            INSERT INTO public.tenants VALUES (1,'active',NULL);
+            INSERT INTO public.users VALUES ('synthetic-admin',1,1,NULL);
+            INSERT INTO public.tenant_members VALUES (1,'synthetic-admin','owner','active',NULL);
+        """)
+        if change:
+            db.execute(change)
+        assert db.execute(upgrade.WORKSPACE_QUERY).fetchone() == (expected,)
+
+
+@pytest.mark.parametrize('reply,code,allowed', [
+    ('ready\n', 0, True),
+    ('not_ready\n', 0, False),
+    ('', 0, False),
+    ('ready\nready\n', 0, False),
+    (' ready\n', 0, False),
+    ('ready\n', 1, False),
+    ('', 1, False),
+])
+def test_workspace_guard_fails_closed_without_replacement(reply, code, allowed):
+    # Mock docker; no network, DB, container or live service is touched.
+    script = '''set -eu
+docker() { printf '%s' "$CNZ_TEST_REPLY"; return "$CNZ_TEST_CODE"; }
+''' + upgrade.WORKSPACE_GUARD + '\nrequire_cnz_workspace\necho CAN_REPLACE\n'
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True,
+                            env={**os.environ, 'CNZ_TEST_REPLY': reply, 'CNZ_TEST_CODE': str(code)})
+    assert (result.returncode == 0) == allowed
+    assert ('CAN_REPLACE' in result.stdout) == allowed
+    if not allowed:
+        assert result.returncode == 35
+        assert 'BACKEND_WORKSPACE_' in result.stdout
+
+
+def test_workspace_guard_is_read_only_and_rechecked_before_app_replacement():
+    assert 'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=5000"' in upgrade.WORKSPACE_GUARD
+    assert '-X' in upgrade.WORKSPACE_GUARD and 'ON_ERROR_STOP=1' in upgrade.WORKSPACE_GUARD
+    assert upgrade.WORKSPACE_GUARD in upgrade.PREFLIGHT
+    assert upgrade.PREFLIGHT.count('\nrequire_cnz_workspace\n') == 1
+    script = upgrade.UPGRADE
+    checks = [i for i in range(len(script)) if script.startswith('\nrequire_cnz_workspace\n', i)]
+    assert len(checks) == 2
+    assert script.index('flock -n 9') < checks[0] < script.index('compose_new build app')
+    assert script.index('compose_new build app') < checks[1] < script.index('phase=app_replace')
+
+
+@pytest.mark.parametrize('replacement_started', [0, 1])
+@pytest.mark.parametrize('bootstrap_present', [0, 1])
+def test_rollback_does_not_restart_app_when_workspace_check_fails_before_replacement(replacement_started, bootstrap_present):
+    script = upgrade.UPGRADE
+    rollback = script[script.index('rollback() {'):script.index('\ntrap rollback EXIT')]
+    # Exercise the actual rollback function with every external operation mocked.
+    harness = '''set -eu
+phase=app_build; switch_started=1
+old_image=synthetic; runtime_profile=old; bootstrap_present="$CNZ_TEST_BOOTSTRAP"
+old_active=/synthetic/old; new_project=/synthetic/new; root=/synthetic; sha=synthetic
+app_replace_started="$CNZ_TEST_REPLACED"
+docker() { echo IMAGE_TAG_RESTORED; }
+compose_old() { echo APP_RECREATED; }
+wait_app() { echo APP_WAITED; }
+compose_bootstrap_old() { echo BOOTSTRAP_RECREATED; }
+wait_bootstrap() { echo BOOTSTRAP_WAITED; }
+readlink() { echo /synthetic/old; }
+''' + rollback + '\ntrap rollback EXIT\nexit 35\n'
+    result = subprocess.run(['bash', '-c', harness], capture_output=True, text=True,
+                            env={**os.environ, 'CNZ_TEST_REPLACED': str(replacement_started), 'CNZ_TEST_BOOTSTRAP': str(bootstrap_present)})
+    assert result.returncode == 35
+    assert 'IMAGE_TAG_RESTORED' in result.stdout
+    assert ('APP_RECREATED' in result.stdout) == bool(replacement_started)
+    assert ('APP_WAITED' in result.stdout) == bool(replacement_started)
+    assert ('BOOTSTRAP_RECREATED' in result.stdout) == bool(replacement_started and bootstrap_present)
+    assert ('BOOTSTRAP_WAITED' in result.stdout) == bool(replacement_started and bootstrap_present)
