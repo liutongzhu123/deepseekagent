@@ -9,6 +9,9 @@ F4 transfer/staging failure: remove only the unactivated incoming directory.
 F5 app build or health failure: restore the previous app image and runtime Compose project.
 F6 post-start schema, sibling container, volume, API/UI, or isolation mismatch: rollback app.
 F7 missing completion markers: report failure instead of claiming deployment.
+F8 zero/multiple workspaces or no active system-admin owner/admin membership: refuse profile upgrade.
+F9 workspace query errors/malformed output: fail closed; recheck under lock and before app replacement.
+F10 failure before app replacement: restore image tag without recreating the running app.
 """
 from __future__ import annotations
 import argparse, hashlib, importlib.util, json, re, shlex, subprocess, sys, tarfile, tempfile
@@ -22,8 +25,31 @@ SPEC=importlib.util.spec_from_file_location("deploy_cnz",ROOT/"scripts/deploy_cn
 assert SPEC and SPEC.loader
 base=importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(base)
 
+WORKSPACE_QUERY = """SELECT CASE WHEN
+ (SELECT count(*) FROM public.tenants WHERE deleted_at IS NULL) = 1
+ AND EXISTS (
+  SELECT 1 FROM public.tenants t
+  JOIN public.tenant_members m ON m.tenant_id = t.id
+  JOIN public.users u ON u.id = m.user_id
+  WHERE t.deleted_at IS NULL AND t.status = 'active'
+    AND m.deleted_at IS NULL AND m.status = 'active' AND m.role IN ('owner', 'admin')
+    AND u.deleted_at IS NULL AND u.is_active AND u.is_system_admin
+ ) THEN 'ready' ELSE 'not_ready' END"""
+
+# Use a single read-only SQL statement so count and membership share a snapshot.
+# Never emit account identifiers or attempt to initialize/repair memberships here.
+WORKSPACE_GUARD = r'''require_cnz_workspace() {
+ if ! workspace_ready="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=5000" psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atqc "$1"' sh ''' + shlex.quote(WORKSPACE_QUERY) + r''')"; then
+  echo BACKEND_WORKSPACE_CHECK_FAILED; return 35
+ fi
+ if [ "$workspace_ready" != ready ]; then
+  echo BACKEND_WORKSPACE_NOT_READY; return 35
+ fi
+}
+'''
+
 PREFLIGHT=r'''set -Eeuo pipefail
-sha="$1"; fingerprint="$2"; backup="$3"; root=/opt/cnz-weknora
+''' + WORKSPACE_GUARD + r'''sha="$1"; fingerprint="$2"; backup="$3"; root=/opt/cnz-weknora
 [[ "$sha" =~ ^[0-9a-f]{40}$ && "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
 case "$backup" in /var/backups/cnz-weknora/*) ;; *) exit 31 ;; esac
 backup="$(realpath -e -- "$backup")"
@@ -84,6 +110,7 @@ if docker inspect cnz-weknora-bootstrap >/dev/null 2>&1; then
   for expected in 'DISABLE_REGISTRATION=false' 'OIDC_AUTH_ENABLE=false'; do
     docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-bootstrap | grep -Fxq "$expected"
   done
+  if docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-bootstrap | grep -q '^WEKNORA_FEATURE_PROFILE='; then echo BACKEND_BOOTSTRAP_PROFILE_MUST_BE_ABSENT; exit 34; fi
   curl -fsS --max-time 4 http://127.0.0.1:39302/api/v1/auth/config | python3 -c 'import json,sys; assert json.load(sys.stdin).get("registration_mode")=="self_serve"'
   docker inspect -f '{{json .Mounts}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; got=sorted([[m.get("Type"),m.get("Destination"),m.get("Name") if m.get("Type")=="volume" else m.get("Source"),m.get("RW")] for m in json.load(sys.stdin)]); expected=sorted([["volume","/data/files","cnz-weknora_data-files",True],["volume","/tmp/docreader","cnz-weknora_docreader-tmp",False],["bind","/app/config/config.yaml",sys.argv[1],True]]); assert got==expected,got' "$bootstrap_config"
   expected_containers="$(printf '%s\n' "$expected_containers" cnz-weknora-bootstrap | sort)"
@@ -111,6 +138,7 @@ test "$(df -Pk /opt | awk 'NR==2 {print $4}')" -ge 10485760
 schema="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "select version,dirty from schema_migrations order by version desc limit 1"')"
 test "$schema" = 138\|f
 grep -Fxq 'database_schema=138|f' "$backup/METADATA.txt"
+require_cnz_workspace
 old_image="$(docker inspect -f '{{.Image}}' cnz-weknora-app)"
 test "$(docker inspect -f '{{.Config.Image}}' cnz-weknora-app)" = cnz-weknora-app:dev
 printf 'BACKEND_PREFLIGHT_OK\nACTIVE_SHA=%s\nRUNTIME_SHA=%s\nOLD_IMAGE=%s\nBOOTSTRAP_PRESENT=%s\n' "$active_sha" "$runtime_sha" "$old_image" "$bootstrap_present"
@@ -129,10 +157,11 @@ echo BACKEND_RELEASE_READY
 '''
 
 UPGRADE=r'''set -Eeuo pipefail
-sha="$1"; runtime_sha="$2"; active_sha="$3"; old_image="$4"; fingerprint="$5"; backup="$6"; bootstrap_present="$7"; root=/opt/cnz-weknora
+''' + WORKSPACE_GUARD + r'''sha="$1"; runtime_sha="$2"; active_sha="$3"; old_image="$4"; fingerprint="$5"; backup="$6"; bootstrap_present="$7"; root=/opt/cnz-weknora
 [[ "$bootstrap_present" =~ ^[01]$ ]]
 exec 9>"$root/.deploy.lock"
 flock -n 9 || { echo BACKEND_DEPLOY_LOCKED; exit 40; }
+require_cnz_workspace
 new_release="$root/releases/$sha"; new_project="$new_release/source/WeKnora-0.9.1"
 old_release="$root/releases/$runtime_sha"; old_project="$old_release/source/WeKnora-0.9.1"
 active_release="$root/releases/$active_sha"; active_project="$active_release/source/WeKnora-0.9.1"
@@ -161,7 +190,7 @@ compose_old() { docker compose -p cnz-weknora --project-directory "$old_project"
 compose_bootstrap_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
 compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$active_project" --env-file "$active_project/.env" -f "$active_project/docker-compose.yml" -f "$active_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
 check_compose() {
- project_config="$1"; shift
+ project_config="$1"; expected_profile="$2"; shift 2
  "$@" config --format json | python3 -c '
 import json, os, sys
 c=json.load(sys.stdin); s=c["services"]
@@ -189,17 +218,19 @@ expected={("volume","data-files","/data/files",False),("volume","docreader-tmp",
 assert app_mounts==expected,(app_mounts,expected)
 assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"
 assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"
+assert s["app"]["environment"].get("WEKNORA_FEATURE_PROFILE","")==sys.argv[2]
 assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[]))
 assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[]))
- ' "$project_config"
+ ' "$project_config" "$expected_profile"
 }
 wait_app() {
- expected="$1"; ready=0
+ expected="$1"; expected_profile="$2"; ready=0
  for _ in $(seq 1 60); do
   image="$(docker inspect -f '{{.Image}}' cnz-weknora-app 2>/dev/null || true)"
   health="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-app 2>/dev/null || true)"
   api="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39301/health 2>/dev/null || true)"
-  if [ "$image" = "$expected" ] && [ "$health" = healthy ] && [ "$api" = 200 ]; then ready=1; break; fi
+  profile="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-app 2>/dev/null | sed -n 's/^WEKNORA_FEATURE_PROFILE=//p' || true)"
+  if [ "$image" = "$expected" ] && [ "$health" = healthy ] && [ "$api" = 200 ] && [ "$profile" = "$expected_profile" ]; then ready=1; break; fi
   sleep 2
  done
  test "$ready" -eq 1
@@ -211,7 +242,8 @@ wait_bootstrap() {
   health="$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-bootstrap 2>/dev/null || true)"
   api="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:39302/health 2>/dev/null || true)"
   config="$(curl -fsS --max-time 3 http://127.0.0.1:39302/api/v1/auth/config 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("registration_mode",""))' 2>/dev/null || true)"
-  if [ "$image" = "$expected" ] && [ "$health" = healthy ] && [ "$api" = 200 ] && [ "$config" = self_serve ]; then ready=1; break; fi
+  profile_absent=1; docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-bootstrap 2>/dev/null | grep -q '^WEKNORA_FEATURE_PROFILE=' && profile_absent=0 || true
+  if [ "$image" = "$expected" ] && [ "$health" = healthy ] && [ "$api" = 200 ] && [ "$config" = self_serve ] && [ "$profile_absent" = 1 ]; then ready=1; break; fi
   sleep 2
  done
  test "$ready" -eq 1
@@ -221,6 +253,8 @@ docreader_id="$(docker inspect -f '{{.Id}}' cnz-weknora-docreader)"
 postgres_id="$(docker inspect -f '{{.Id}}' cnz-weknora-postgres)"
 redis_id="$(docker inspect -f '{{.Id}}' cnz-weknora-redis)"
 ollama_id="$(docker inspect -f '{{.Id}}' cnz-weknora-ollama)"
+runtime_profile="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-app | sed -n 's/^WEKNORA_FEATURE_PROFILE=//p')"
+case "$runtime_profile" in ""|cnz-knowledge-admin) ;; *) echo BACKEND_RUNTIME_PROFILE_UNKNOWN; exit 34 ;; esac
 if [ "$bootstrap_present" = 1 ]; then test "$(docker inspect -f '{{.Image}}' cnz-weknora-bootstrap)" = "$old_image"; fi
 volumes_before="$(docker volume ls -q --filter name=cnz-weknora | sort)"
 test "$(readlink -f "$root/active-release")" = "$old_active"
@@ -228,28 +262,30 @@ schema_before="$(docker exec cnz-weknora-postgres sh -c 'PGPASSWORD="$POSTGRES_P
 test "$schema_before" = 138\|f && grep -Fxq "database_schema=$schema_before" "$backup/METADATA.txt"
 test "$(fingerprint_source "$new_project")" = "$fingerprint"
 test "$(sha256sum "$new_release/docker-compose.testkb.bootstrap.override.yml" | cut -d' ' -f1)" = "$(cat "$new_release/BOOTSTRAP_OVERRIDE_SHA256")"
-check_compose "$new_project/config/config.yaml" compose_new
-check_compose "$old_project/config/config.yaml" compose_old
+check_compose "$new_project/config/config.yaml" cnz-knowledge-admin compose_new
+check_compose "$old_project/config/config.yaml" "$runtime_profile" compose_old
 if [ "$bootstrap_present" = 1 ]; then
  test -f "$new_release/docker-compose.testkb.bootstrap.override.yml"
  test "$(sha256sum "$new_release/docker-compose.testkb.bootstrap.override.yml" | cut -d' ' -f1)" = "$(cat "$new_release/BOOTSTRAP_OVERRIDE_SHA256")"
- compose_bootstrap_old config --format json | python3 -c 'import json,os,sys; c=json.load(sys.stdin); s=c["services"]; assert set(s)=={"app","frontend","docreader","postgres","redis","ollama","bootstrap-app"}; b=s["bootstrap-app"]; assert b["container_name"]=="cnz-weknora-bootstrap"; assert b["image"]=="cnz-weknora-app:dev"; assert b["environment"]["DISABLE_REGISTRATION"]=="false"; assert b["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert b["environment"]["OLLAMA_BASE_URL"]=="http://ollama:11434"; assert set(b["networks"])=={"WeKnora-network"}; got={(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in b.get("volumes",[])}; expected={("volume","data-files","/data/files",False),("volume","docreader-tmp","/tmp/docreader",True),("bind",os.path.abspath(sys.argv[1]),"/app/config/config.yaml",False)}; assert got==expected,got; p=b.get("ports",[]); assert len(p)==1 and p[0].get("host_ip")=="127.0.0.1" and p[0].get("published")=="39302" and p[0].get("target")==8080,p' "$active_project/config/config.yaml"
+ compose_bootstrap_old config --format json | python3 -c 'import json,os,sys; c=json.load(sys.stdin); s=c["services"]; assert set(s)=={"app","frontend","docreader","postgres","redis","ollama","bootstrap-app"}; b=s["bootstrap-app"]; assert b["container_name"]=="cnz-weknora-bootstrap"; assert b["image"]=="cnz-weknora-app:dev"; assert b["environment"]["DISABLE_REGISTRATION"]=="false"; assert b["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert b["environment"].get("WEKNORA_FEATURE_PROFILE","")==""; assert b["environment"]["OLLAMA_BASE_URL"]=="http://ollama:11434"; assert set(b["networks"])=={"WeKnora-network"}; got={(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in b.get("volumes",[])}; expected={("volume","data-files","/data/files",False),("volume","docreader-tmp","/tmp/docreader",True),("bind",os.path.abspath(sys.argv[1]),"/app/config/config.yaml",False)}; assert got==expected,got; p=b.get("ports",[]); assert len(p)==1 and p[0].get("host_ip")=="127.0.0.1" and p[0].get("published")=="39302" and p[0].get("target")==8080,p' "$active_project/config/config.yaml"
 fi
 test "$(docker inspect -f '{{.Image}}' cnz-weknora-app)" = "$old_image"
 if docker image inspect "$rollback_tag" >/dev/null 2>&1; then
  test "$(docker image inspect -f '{{.Id}}' "$rollback_tag")" = "$old_image"
 else docker image tag "$old_image" "$rollback_tag"; fi
-phase=app_build; switch_started=1
+phase=app_build; switch_started=1; app_replace_started=0
 rollback() {
  code=$?; trap - EXIT; set +e
  if [ "$code" -ne 0 ]; then echo "BACKEND_UPGRADE_FAILED_PHASE=$phase"; fi
  if [ "$code" -ne 0 ] && [ "$switch_started" -eq 1 ]; then
   docker image tag "$old_image" cnz-weknora-app:dev || { echo BACKEND_ROLLBACK_IMAGE_TAG_FAILED; exit 90; }
+  if [ "$app_replace_started" -eq 1 ]; then
   compose_old up -d --no-deps app || { echo BACKEND_ROLLBACK_RECREATE_FAILED; exit 90; }
-  wait_app "$old_image" || { echo BACKEND_ROLLBACK_HEALTH_FAILED; exit 90; }
+  wait_app "$old_image" "$runtime_profile" || { echo BACKEND_ROLLBACK_HEALTH_FAILED; exit 90; }
   if [ "$bootstrap_present" = 1 ]; then
    compose_bootstrap_old up -d --no-deps --no-build bootstrap-app || { echo BACKEND_ROLLBACK_BOOTSTRAP_RECREATE_FAILED; exit 90; }
    wait_bootstrap "$old_image" || { echo BACKEND_ROLLBACK_BOOTSTRAP_HEALTH_FAILED; exit 90; }
+  fi
   fi
   current_active="$(readlink -f "$root/active-release" 2>/dev/null || true)"
   if [ "$current_active" = "$new_project" ]; then
@@ -262,17 +298,18 @@ rollback() {
  exit "$code"
 }
 trap rollback EXIT
-check_compose "$new_project/config/config.yaml" compose_new
+check_compose "$new_project/config/config.yaml" cnz-knowledge-admin compose_new
 if [ "$bootstrap_present" = 1 ]; then
- compose_bootstrap_new config --format json | python3 -c 'import json,os,sys; c=json.load(sys.stdin); s=c["services"]["bootstrap-app"]; assert s["container_name"]=="cnz-weknora-bootstrap"; assert s["image"]=="cnz-weknora-app:dev"; assert s["environment"]["DISABLE_REGISTRATION"]=="false"; assert s["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39302" for p in s.get("ports",[])); assert set(s.get("networks",{}))=={"WeKnora-network"}; got={(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in s.get("volumes",[])}; expected={("volume","data-files","/data/files",False),("volume","docreader-tmp","/tmp/docreader",True),("bind",os.path.abspath(sys.argv[1]),"/app/config/config.yaml",False)}; assert got==expected,(got,expected); assert all("/var/run/docker.sock" not in str(m) for m in s.get("volumes",[]))' "$new_project/config/config.yaml"
+ compose_bootstrap_new config --format json | python3 -c 'import json,os,sys; c=json.load(sys.stdin); s=c["services"]["bootstrap-app"]; assert s["container_name"]=="cnz-weknora-bootstrap"; assert s["image"]=="cnz-weknora-app:dev"; assert s["environment"]["DISABLE_REGISTRATION"]=="false"; assert s["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert s["environment"].get("WEKNORA_FEATURE_PROFILE","")==""; assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39302" for p in s.get("ports",[])); assert set(s.get("networks",{}))=={"WeKnora-network"}; got={(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in s.get("volumes",[])}; expected={("volume","data-files","/data/files",False),("volume","docreader-tmp","/tmp/docreader",True),("bind",os.path.abspath(sys.argv[1]),"/app/config/config.yaml",False)}; assert got==expected,(got,expected); assert all("/var/run/docker.sock" not in str(m) for m in s.get("volumes",[]))' "$new_project/config/config.yaml"
  compose_bootstrap_new config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]["bootstrap-app"]; assert s["environment"]["OLLAMA_BASE_URL"]=="http://ollama:11434"; p=s.get("ports",[]); assert len(p)==1 and p[0].get("host_ip")=="127.0.0.1" and p[0].get("published")=="39302" and p[0].get("target")==8080,p'
 fi
 compose_new build app
 new_image="$(docker image inspect -f '{{.Id}}' cnz-weknora-app:dev)"
 test -n "$new_image" && test "$new_image" != "$old_image"
-phase=app_replace
+require_cnz_workspace
+phase=app_replace; app_replace_started=1
 compose_new up -d --no-deps app
-phase=app_health; wait_app "$new_image"
+phase=app_health; wait_app "$new_image" cnz-knowledge-admin
 if [ "$bootstrap_present" = 1 ]; then
  phase=bootstrap_replace
  compose_bootstrap_new up -d --no-deps --no-build bootstrap-app

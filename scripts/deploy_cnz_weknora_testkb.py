@@ -148,6 +148,7 @@ rollback() {
 }
 trap rollback EXIT
 compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); s=c["services"]; e={"app","frontend","docreader","postgres","redis","ollama"}; assert set(s)==e; assert all(s[k]["container_name"]==v for k,v in {"app":"cnz-weknora-app","frontend":"cnz-weknora-frontend","docreader":"cnz-weknora-docreader","postgres":"cnz-weknora-postgres","redis":"cnz-weknora-redis","ollama":"cnz-weknora-ollama"}.items()); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==80 and p.get("published")=="18082" for p in s["frontend"].get("ports",[])); assert any(p.get("host_ip")=="127.0.0.1" and p.get("target")==8080 and p.get("published")=="39301" for p in s["app"].get("ports",[])); assert not s["ollama"].get("ports"); assert s["ollama"]["image"]=="ollama/ollama@sha256:b2f0122c476bc9fe7ce679d8bb4bd555351e25e2554eefb156f61cb0a89cf429"; assert s["ollama"]["environment"]["OLLAMA_HOST"]=="0.0.0.0:11434"; assert s["ollama"]["healthcheck"]["test"]==["CMD","ollama","list"]; assert set(c["volumes"])=={"data-files","docreader-tmp","postgres-data","redis-data","ollama-data"}; assert all(not v.get("external",False) and v.get("driver","local")=="local" and not v.get("driver_opts") and v.get("name") in (None,"cnz-weknora_"+k) for k,v in c["volumes"].items()); assert all("/var/run/docker.sock" not in str(m) for x in s.values() for m in x.get("volumes",[])); assert all(s[k]["build"]["args"]["CNZ_DOCKERHUB_MIRROR_ARG"]=="docker.m.daocloud.io" for k in ("app","frontend","docreader")); assert s["app"]["build"]["args"]["GOPROXY_ARG"]=="https://goproxy.cn"; assert s["app"]["environment"]["DISABLE_REGISTRATION"]=="true"; assert s["app"]["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert s["redis"]["healthcheck"]["test"]==["CMD","redis-cli","ping"]'
+compose config --format json | python3 -c 'import json,sys; s=json.load(sys.stdin)["services"]; assert s["app"]["environment"].get("WEKNORA_FEATURE_PROFILE")=="cnz-knowledge-admin"'
 echo COMPOSE_CONTRACT_OK
 phase=image_build
 compose build app frontend docreader
@@ -168,6 +169,7 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 test "$ready" -eq 1
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-app | grep -Fxq 'WEKNORA_FEATURE_PROFILE=cnz-knowledge-admin'
 for c in cnz-weknora-frontend cnz-weknora-docreader; do test "$(docker inspect -f '{{.State.Status}}' "$c")" = running; done
 ln -s "$project" "/opt/cnz-weknora/active-release.new.$sha"
 mv -Tf "/opt/cnz-weknora/active-release.new.$sha" /opt/cnz-weknora/active-release
@@ -244,6 +246,8 @@ def validate_compose(config: dict) -> None:
     app_env=s["app"].get("environment",{})
     if app_env.get("DISABLE_REGISTRATION") != "true" or app_env.get("OIDC_AUTH_ENABLE") != "false":
         raise ValueError("F6: registration must be disabled and OIDC must stay off")
+    if app_env.get("WEKNORA_FEATURE_PROFILE") != "cnz-knowledge-admin":
+        raise ValueError("F6: CNZ server feature profile is required")
     if s["redis"].get("healthcheck",{}).get("test") != ["CMD", "redis-cli", "ping"]:
         raise ValueError("F6: Redis healthcheck is required")
     ollama=s["ollama"]

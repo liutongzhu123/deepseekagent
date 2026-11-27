@@ -276,11 +276,11 @@ sequenceDiagram
 | 门 | 状态 | 已有证据 | 未通过项 / 下一步 |
 |---|---|---|---|
 | 1. 冻结源码与覆盖物 | CNZ v0.9.1 app 源码补丁已部署；线上历史覆盖归档仍待办 | 官方归档 SHA-256 `183b0538…b3bc5cd`、6,441 文件清单和七个补丁重放通过；active release `a763d735c68f9e4224c33ca78ee59dafd2ea4099` 由干净 main 部署并带源指纹校验 | 现网旧 WeKnora v0.9.0 的 214 个前端覆盖文件及配置可复现归档仍需单独完成；不能把历史临时取证目录当发布来源 |
-| 2. 项目实例与账号/资料归属 | testkb CNZ 栈健康；首位系统管理员已建立，知识资料仍未初始化 | 当前 6 个 CNZ 业务容器运行；API/UI 200，schema `138|f`，yunan-persist 5/5 健康；指定管理员账号记录 1 条且系统管理员标志为真；`tenants/organizations/knowledge_bases/knowledges/resources/data_sources/chunks/messages` 均为 0；部署前 CNZ-only 快照通过权限、SHA-256 与 pg_restore 清单校验；未导入客户资料 | OIDC 保持关闭、主服务注册模式 `invite_only`；历史账号、现有知识库/渠道/资料所有权尚未逐项确认；不得因此迁移或重分配账号 |
+| 2. 项目实例与账号/资料归属 | testkb CNZ 栈健康；首位系统管理员已建立，知识资料仍未初始化 | 2026-11-27 只读回读 active release `a763d735c68f9e4224c33ca78ee59dafd2ea4099`、CNZ 六容器健康、yunan-persist 五容器健康、API/UI 200；schema `138|f`；管理员 1 个且为系统管理员；`tenants/organizations/knowledge_bases/knowledges/resources/data_sources/chunks/messages` 均为 0；部署前 CNZ-only 快照通过权限、SHA-256 与 pg_restore 清单校验；未导入客户资料 | OIDC 保持关闭、主服务注册模式 `invite_only`；历史账号、现有知识库/渠道/资料所有权尚未逐项确认；不得因此迁移或重分配账号 |
 | 3. 双端身份与账号投影 | 本地合成流程与 WeKnora 部署补丁已完成；真实身份联调待客户条件 | P0 start/callback 路由经内存 IdP 覆盖 discovery、PKCE/S256、token/JWKS/RS256、nonce 与显式 issuer/sub 映射；25 项 OIDC 测试通过。WeKnora Gin start/callback + `LoginWithOIDC` 合成流程覆盖 nonce、UserInfo、显式绑定和未绑定拒绝；Go 四包 OIDC 测试及 service/handler race detector 通过；0007 已部署到 testkb | 客户 IdP、真实账号与双端 callback 配置未提供，且当前 OIDC 关闭；仍需验证双端登录、未知/停用账号拒绝、IdP 全局退出及 WeKnora 会话退出；reviewer 历史权限逐账号确认；P0 PostgreSQL 集成结果见 Backlog，本地分支尚未触发 CI |
 | 4. 统一主导航 | P0 工作台至 WeKnora 的管理员入口已本地浏览器验收；testkb 联跳未完成 | 已确认 P0/P1 工作台为业务主入口；临时合成管理员看到 WeKnora OIDC 管理台链接，合成技术账号不显示；链接配置缺失/格式错误时隐藏，目标不传递 P0 会话；testkb 已有系统管理员账号，但尚未验证登录后菜单 | 尚无可信 IdP、testkb 未配置外部可访问的 CNZ 管理地址；不能验证真实目标导航或 SSO 回调，需要 IdP 与两个端点配置 |
 | 5. 项目功能与角色范围 | P0 服务端边界已本地实现并回归，testkb 未部署验收 | 新业务经理/技术账号空项目范围拒绝访问；检索前按项目过滤 WeKnora 知识；角色/范围/审核授权变更撤销旧会话；授权审计失败拒绝写入；旧账号兼容边界有测试 | WeKnora 实际 KB、CRM/报价/客服等业务路由仍需在 CNZ 测试环境对照角色逐项验收；跨项目拒绝和管理员操作还未在 testkb 登录验证 |
-| 6. 恢复、检索、业务与会话回归 | 未通过 | DB/文件/Ollama/Redis 归档分别在隔离环境做过恢复；部署前快照的 SHA-256、权限、PostgreSQL dump 可读性验证通过；P0 当前令牌注销/重放拒绝本地回归及 WeKnora Go OIDC 定向测试通过；纯关键词合成基线为库内 9/14、库外拒答 8/8（不是 WeKnora 实际检索）；管理员账号已创建，临时引导端已移除 | 整栈冷恢复及全量数据相等断言未完成；Redis 在线数量未核对，恢复副本 DB0 为 2 keys，与旧记录 8 不一致；知识库、知识、资源、数据源、分块和消息均为 0，WeKnora 实际检索/引用尚未运行；还需管理员登录后上传合成资料、可用模型配置，并完成双 RP 登录、账号变更/停用及跨端退出验收 |
+| 6. 恢复、检索、业务与会话回归 | 未通过 | DB/文件/Ollama/Redis 归档分别在隔离环境做过恢复；部署前快照的 SHA-256、权限、PostgreSQL dump 可读性验证通过；P0 当前令牌注销/重放拒绝本地回归及 WeKnora Go OIDC 定向测试通过；纯关键词合成基线为库内 9/14、库外拒答 8/8（不是 WeKnora 实际检索）；管理员账号已创建，临时引导端已移除；在线 Redis DB0 的 8 keys 已分类为 6 个短 TTL 的 asynq 进程心跳、2 个持久注册表；同一归档在无网络 Redis 恢复副本保留 2 个持久注册表，其他类型为 0 | 整栈冷恢复及全量数据相等断言未完成；在线/副本数量差异已定位为进程心跳到期；仍未比较持久注册表内容或验证任务恢复，不能视为整栈恢复通过；知识库、知识、资源、数据源、分块和消息均为 0，WeKnora 实际检索/引用尚未运行；还需管理员登录后上传合成资料、可用模型配置，并完成双 RP 登录、账号变更/停用及跨端退出验收 |
 
 结论：当前可以确认 CNZ 知识服务栈已隔离部署且健康，P0 项目权限代码已在本地通过全套回归；不能据此宣称双 Web 整合、真实 OIDC、testkb 服务端权限、WeKnora 检索或整栈灾备已验收。恢复副本复测需等获批后在内部网络运行并对齐 92 个关系、关键表行数、Redis 键数及文件清单；当前审批拒绝不允许通过变更探测方式或其他路径绕过。
 
@@ -307,3 +307,19 @@ SSO 先做两端互跳可作为入口融合的过渡。只有统一品牌或在�
 - 知识身份来源：官方匹配源码 `internal/application/service/user.go`、`internal/handler/auth.go`、`internal/router/routes_auth_tenant.go`；公开 OIDC 配置在标准 HTTPS 与实际 :8090 入口均返回 enabled=false。
 - 未重建镜像、未执行真实 IdP 登录或会话停用实验、未修改数据库、未逐行恢复 214 个前端编译资源为源码。本轮结论是已核实范围内的架构决策，不是宣称 SSO 或融合已实现。
 - 旧的企业 V2 / brand 交付材料含其他补丁与候选分支；不得将这些功能未经当前镜像验证就记作本次现网改动。
+
+2026-11-27 服务端路由功能档开发：新增锁定补丁 `0008-cnz-server-feature-profile.patch`，只在 `WEKNORA_FEATURE_PROFILE=cnz-knowledge-admin` 时启用 CNZ 服务端路由 allowlist；未知非空 profile fail closed，且对 WeKnora 自助注册/邀请开户/自动开户及单租户外的租户创建、删除、枚举和全局配额操作执行方法/路径拒绝；主 app 启用 profile，临时 loopback bootstrap-app 必须不含该变量。首次部署与后端升级/回滚脚本均检查最终 Compose 环境及容器实际环境，防止部署中丢失路由限制。安全复核确认部署/回滚/bootstrap 边界无阻断问题。用官方 v0.9.1 归档验证 6,441 个文件并成功重放全部八个项目补丁；本机 Compose 配置回读确认 app profile 为 `cnz-knowledge-admin`、bootstrap profile 缺席；Python 与嵌入 shell 语法检查通过。新增真实 `NewRouter` 集成覆盖并经独立静态复核；该 Go 测试因本机没有 Go 工具链未能执行。工作台/小程序 Node 回归 66/66 通过。最新代码提交 `2e65879` 并推送到 `codex/cnz-weknora-server-feature-profile`；相对 main 为 12 文件、436 additions/19 deletions（455 changed lines），超过 300 行阈值，沿用用户此前对该分支 PR 的明确批准。GitHub CLI 的本地 token 当前无效，PR 比较页仍在等待用户完成 GitHub 网页登录后交还控制；因此 PR/CI 尚未创建/运行。此实现尚未合并或部署，不能作为 testkb 路由收口验收。
+
+2026-11-27 Go 工具链纠正：本机 PATH 无 Go，但发现先前缓存的 `/private/tmp/go-toolchain/go/bin/go`（Go 1.26.11 darwin/arm64）。使用已验证 6,441 文件并应用八补丁的临时源码，补齐 go.mod/go.sum 锁定依赖后，真实 router 包 `TestInstallCNZFeatureProfile` 已实际通过（2.126s）；因此此前“Go 不可用、该测试未执行”的记录已被此结果取代。GitHub PR/CI 和 testkb 部署尚未完成。
+
+2026-11-27 最终测试配置复验：真实路由测试改用 `t.TempDir()` 作为原文根目录并显式设置 `Tenant.EnableRBAC=true`，独立静态复核通过。在重新校验 6,441 文件和重放八补丁的 final6 临时源码中，用 Go 1.26.11 实际执行 CI 同一筛选表达式，repository/service/handler/router/types 五包全部通过；对应耗时 2.059s/6.642s/3.638s/8.475s/9.151s。沙箱内首次 OIDC 复验因 loopback bind 被拒而失败，允许本地端口后全组通过。这是本地定向结果，GitHub CI 尚未触发。部署前必须先由指定管理员初始化中汽工作区（当前 tenants=0），否则 profile 禁止建租户会阻止后续初始化；本轮未部署。
+
+反向验证：仅在 final6 临时源码副本中移除守卫安装后，真实 NewRouter 子测试按预期失败（预期 404、实际 500，测试退出 1）；退出时已自动恢复原文件。恢复守卫后，完整 TestInstallCNZFeatureProfile 再次通过（1.457s）。该验证不触碰仓库补丁或目标环境。
+
+2026-11-27 工作区初始化升级门禁：后端升级器增加只读 PostgreSQL 就绪检查，要求恰好一个未删除且启用的工作区，以及其中存在启用中的系统管理员与有效 Owner/Admin 成员关系；查询错误、空值、异常输出和不满足条件均停止升级。在预检、持部署锁后以及构建结束替换 app 前复查。新增 17 个 SQL 语义场景、7 个 mock shell 返回场景和调用时序检查；修正既有 Compose 测试 fixture 缺 profile 参数的问题。部署/备份/Ollama/后端升级四套定向 pytest 共 83 passed（0.57s），四段嵌入 shell 的 bash -n 通过；真实 testkb 仅执行同一只读 SELECT，返回 not_ready（exit 0），确认当前尚未初始化工作区。未调用部署器、未变更账号或数据库。
+
+配套回滚修正：把“镜像标签可能已被构建改变”与“app 替换已经开始”分开记录。构建/工作区复检失败只恢复镜像标签；实际替换开始后的失败才重建旧 app 和（存在时）bootstrap。四个 mock 回滚用例覆盖替换前/后与 bootstrap 有/无的组合，均通过。独立复核确认工作区 SQL/字段与只读、限时查询设计无阻断问题；部署 flock 只串行部署器，最后 SELECT 与 app up 之间仍存在管理员并发改动的短窗口，不能把即时复检当作应用维护锁。
+
+2026-11-27 平台密钥管理收口：发现前端 CNZ profile 已隐藏 PlatformAPIKeys.vue，但服务端 /system 组仍允许平台密钥管理。0008 补丁新增对 `/api/v1/system/admin/api-keys` 及其子路径的拒绝；保留工作区 `/tenants/:id/api-keys` 和系统账号管理。固定归档重新验证 6,441 文件与八补丁后，真实 Gin 路由检查通过（2.462s）；新断言覆盖 3 个平台路由 × 匿名/模拟 Bearer/模拟 API-key 共 9 个 404，以及工作区密钥和系统用户列表的匿名 401。删除该限制后的反向测试失败（预期 404、实际 401），退出时已恢复源码，恢复后完整 profile 检查再次通过（1.319s）。独立只读复核确认全局 guard 顺序、路径边界及工作台检索密钥路径未受影响。没有使用有效身份凭据，不能据此宣称真实四角色验收。
+
+2026-11-27 GitHub 认证结论纠正：此前沙箱内 `gh auth status` 无法访问网络，却被误判为本地凭据无效；在与成功 git push 相同的网络权限下，只读检查确认 keyring 中现有账号登录有效。没有重新登录或修改凭据。当前分支 PR 查询为空；可继续沿用用户既有批准，创建 base=main 的单个 PR 并等待 CI。此前“必须用户重新登录才能推进”的结论已失效。

@@ -162,6 +162,7 @@ def test_ollama_override_joins_only_the_cnz_weknora_network():
     override = (ROOT / "weknora/docker-compose.testkb.override.yml").read_text(encoding="utf-8")
     app = override.split("  app:\n", 1)[1].split("\n  docreader:\n", 1)[0]
     assert "OLLAMA_BASE_URL: http://ollama:11434" in app
+    assert "WEKNORA_FEATURE_PROFILE: cnz-knowledge-admin" in app
     ollama = override.split("  ollama:\n", 1)[1].split("\nvolumes:\n", 1)[0]
     assert "    networks:\n      - WeKnora-network\n" in ollama
     assert 'set(v.get("networks",{}))=={"WeKnora-network"}' in add.INSTALL
