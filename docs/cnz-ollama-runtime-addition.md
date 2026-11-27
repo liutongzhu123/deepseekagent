@@ -32,6 +32,6 @@
 - 本地定向测试覆盖部署器、备份兼容、前后端升级守卫及 Ollama 增量发布器：55 项通过；PR #255 的 GitHub 三项检查通过。
 - 2026-11-26 首次部署前置验收发现 Ollama 与 WeKnora app 间需要显式的内部服务地址。当前增量配置明确设定 `OLLAMA_BASE_URL=http://ollama:11434`，并由 Compose 契约检查；网络仍只限 CNZ WeKnora 专属网络。
 - 2026-11-26 Ollama `bge-m3:567m` 下载完成；从 WeKnora app 容器请求 `http://ollama:11434/api/embed` 成功，维度为 1024。最新快照校验通过。临时引导容器采用 `self_serve`；主服务公开配置仍为 `invite_only`。注册曾因 ORM 列名错误返回 400，未创建用户；修正并部署代码前不得重试。成功注册后必须立即删除临时容器，并复核主服务配置和 `yunan-persist` 健康状态。
-- PR #257 的 GitHub `pytest`、`agent-tests`、WeKnora Go OIDC 检查全部通过；本地 WeKnora Go 回归也已通过。当前分支 `codex/cnz-bootstrap-aware-backup-upgrade` 新增 bootstrap-aware 备份、应用/临时引导实例同步升级与回滚，以及 loopback Compose 覆盖；本地 backup/backend-upgrade 定向 pytest 23 项通过，Python 语法、Compose 配置检查也通过。PR 全量 CI 尚待推送触发。分支变更小于 300 行，创建/合并该新 PR 需用户批准。部署器仍只接受干净且与远端一致的 `main`。
+- PR #257 的 GitHub `pytest`、`agent-tests`、WeKnora Go OIDC 检查全部通过；本地 WeKnora Go 回归也已通过。当前分支 `codex/cnz-bootstrap-aware-backup-upgrade` 增加 bootstrap-aware 备份、应用/临时引导实例同步升级与回滚，以及 loopback Compose 覆盖。最新定向 pytest 为 26 passed；本机 Docker Compose 合并旧项目目录与暂存 sidecar 覆盖的独立 fixture 通过，合并后 7 个 service，bootstrap 仅发布到 `127.0.0.1:39302`。独立安全复核曾发现回滚依赖旧 release 中不存在的 bootstrap 覆盖文件；已改用暂存覆盖文件，并在替换 app 前校验文件、SHA-256 与合并 Compose 配置，复核通过。分支相对 `origin/main` 为 233 insertions / 30 deletions（263 changed lines）；PR/CI 待触发。按用户确认的规则，小于 300 行自动创建并合并，超过 300 行需用户审批。部署器仍只接受干净且与远端一致的 `main`。
 - 合成模型仍须先核验许可证与算力后才可纳入评测；当前服务器无 GPU，部署 Ollama 不代表已经选定客户生产模型。
 - 客户管理员开户、可信 IdP、OIDC 登录和双 Web 单点流程仍是独立验收门。本次 400 的应用日志已确认密码字段被脱敏为 `***`；脚本不保存密码。
