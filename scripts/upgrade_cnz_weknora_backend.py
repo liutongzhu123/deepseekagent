@@ -62,10 +62,10 @@ bootstrap_source_sha=none
 if docker inspect cnz-weknora-bootstrap >/dev/null 2>&1; then
   bootstrap_present=1
   test "$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-bootstrap)" = healthy
-  test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project\"}}' cnz-weknora-bootstrap)" = cnz-weknora
-  test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.service\"}}' cnz-weknora-bootstrap)" = bootstrap-app
+  test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' cnz-weknora-bootstrap)" = cnz-weknora
+  test "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' cnz-weknora-bootstrap)" = bootstrap-app
   test "$(docker inspect -f '{{.Image}}' cnz-weknora-bootstrap)" = "$(docker inspect -f '{{.Image}}' cnz-weknora-app)"
-  bootstrap_project="$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cnz-weknora-bootstrap)"
+  bootstrap_project="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' cnz-weknora-bootstrap)"
   if [[ "$bootstrap_project" =~ ^$root/releases/([0-9a-f]{40})/source/WeKnora-0\.9\.1$ ]]; then :; else exit 34; fi
   bootstrap_source_sha="${BASH_REMATCH[1]}"
   bootstrap_release="$root/releases/$bootstrap_source_sha"
@@ -76,7 +76,7 @@ if docker inspect cnz-weknora-bootstrap >/dev/null 2>&1; then
   test -f "$bootstrap_project/.env" && test ! -L "$bootstrap_project/.env"
   test "$(stat -c %a "$bootstrap_project/.env")" = 600
   cmp -s "$active/.env" "$bootstrap_project/.env"
-  bootstrap_config="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination \"/app/config/config.yaml\"}}{{.Source}}{{end}}{{end}}' cnz-weknora-bootstrap)"
+  bootstrap_config="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/config/config.yaml"}}{{.Source}}{{end}}{{end}}' cnz-weknora-bootstrap)"
   test "$bootstrap_config" = "$bootstrap_project/config/config.yaml" && test -f "$bootstrap_config" && test ! -L "$bootstrap_config"
   grep -Fxq "bootstrap_config_sha256=$(sha256sum "$bootstrap_config" | cut -d' ' -f1)" "$backup/METADATA.txt"
   docker inspect -f '{{json .NetworkSettings.Ports}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p=={"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"39302"}]},p'
