@@ -35,6 +35,13 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
         assert required in upgrade.PREFLIGHT
 
 
+def test_preflight_docker_go_templates_use_literal_double_quotes():
+    preflight = upgrade.PREFLIGHT
+    assert r'\"' not in preflight
+    assert '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' in preflight
+    assert '{{range .Mounts}}{{if eq .Destination "/app/config/config.yaml"}}{{.Source}}{{end}}{{end}}' in preflight
+
+
 def test_release_build_has_no_sql_migration_after_138():
     assert "max(versions)!=138" in Path(upgrade.__file__).read_text()
     assert "DEPLOYED_FROM_CODE" in upgrade.CONFIGURE
