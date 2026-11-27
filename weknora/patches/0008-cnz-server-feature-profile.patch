@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..b341cbe
 --- /dev/null
 +++ b/internal/router/cnz_feature_profile.go
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,118 @@
 +package router
 +
 +import (
@@ -76,11 +76,15 @@ index 0000000..b341cbe
 +}
 +
 +func cnzFeatureMethodBlocked(method, route string) bool {
-+	// A CNZ workspace is provisioned once; self-service tenant creation,
-+	// cross-tenant enumeration, and deleting that workspace are not product
-+	// functions. Deny these method/path pairs while keeping member and tenant
-+	// settings routes available.
++	// WeKnora account signup and self-service tenant creation are not CNZ
++	// business functions. Deny these exact method/path pairs while keeping
++	// authentication and tenant member/settings routes available.
 +	switch {
++	case method == http.MethodPost && (route == "/api/v1/auth/register" ||
++		route == "/api/v1/auth/register-by-invite" ||
++		route == "/api/v1/auth/invitations/lookup" ||
++		route == "/api/v1/auth/auto-setup"):
++		return true
 +	case method == http.MethodPost && route == "/api/v1/tenants":
 +		return true
 +	case method == http.MethodGet && (route == "/api/v1/tenants/all" || route == "/api/v1/tenants/search"):
@@ -123,7 +127,7 @@ new file mode 100644
 index 0000000..b64ce60
 --- /dev/null
 +++ b/internal/router/cnz_feature_profile_test.go
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,162 @@
 +package router
 +
 +import (
@@ -142,7 +146,8 @@ index 0000000..b64ce60
 +// F4 public pre-auth embed/MCP/Swagger routes must also be rejected;
 +// F5 the unset profile must preserve upstream route behavior;
 +// F6 knowledge search, KB operations, files, settings, and identity remain reachable;
-+// F7 CNZ tenant creation/deletion and cross-tenant enumeration remain closed.
++// F7 CNZ tenant creation/deletion and cross-tenant enumeration remain closed;
++// F8 WeKnora self-service account registration remains closed.
 +func TestInstallCNZFeatureProfile(t *testing.T) {
 +	gin.SetMode(gin.TestMode)
 +
@@ -247,6 +252,12 @@ index 0000000..b64ce60
 +	t.Run("single-workspace lifecycle routes are method-blocked", func(t *testing.T) {
 +		engine := gin.New()
 +		require.NoError(t, installCNZFeatureProfile(engine, cnzKnowledgeAdminMode))
++		engine.POST("/api/v1/auth/register", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.POST("/api/v1/auth/register-by-invite", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.POST("/api/v1/auth/invitations/lookup", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.POST("/api/v1/auth/auto-setup", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.GET("/api/v1/auth/config", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.POST("/api/v1/auth/login", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 +		engine.GET("/api/v1/tenants", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 +		engine.POST("/api/v1/tenants", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 +		engine.GET("/api/v1/tenants/all", func(c *gin.Context) { c.Status(http.StatusNoContent) })
@@ -259,6 +270,12 @@ index 0000000..b64ce60
 +			path   string
 +			want   int
 +		}{
++			{http.MethodPost, "/api/v1/auth/register", http.StatusNotFound},
++			{http.MethodPost, "/api/v1/auth/register-by-invite", http.StatusNotFound},
++			{http.MethodPost, "/api/v1/auth/invitations/lookup", http.StatusNotFound},
++			{http.MethodPost, "/api/v1/auth/auto-setup", http.StatusNotFound},
++			{http.MethodGet, "/api/v1/auth/config", http.StatusNoContent},
++			{http.MethodPost, "/api/v1/auth/login", http.StatusNoContent},
 +			{http.MethodGet, "/api/v1/tenants", http.StatusNoContent},
 +			{http.MethodPost, "/api/v1/tenants", http.StatusNotFound},
 +			{http.MethodGet, "/api/v1/tenants/all", http.StatusNotFound},

@@ -207,6 +207,10 @@ def test_f6_compose_rejects_docker_socket_registration_or_oidc():
     config["services"]["app"]["environment"].pop("WEKNORA_FEATURE_PROFILE")
     with pytest.raises(ValueError, match="CNZ server feature profile"):
         deploy.validate_compose(config)
+    config = valid_config()
+    config["services"]["app"]["environment"]["WEKNORA_FEATURE_PROFILE"] = "upstream"
+    with pytest.raises(ValueError, match="CNZ server feature profile"):
+        deploy.validate_compose(config)
 
 
 def test_f6_compose_requires_private_pinned_ollama_and_dedicated_volume():
