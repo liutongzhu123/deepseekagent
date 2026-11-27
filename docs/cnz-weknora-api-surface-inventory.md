@@ -59,7 +59,7 @@
 
 ## 当前实现状态
 
-2026-11-27，本地分支增加 `0008-cnz-server-feature-profile.patch`：仅当 `WEKNORA_FEATURE_PROFILE=cnz-knowledge-admin` 时启用服务端路由 allowlist；空值保持上游兼容模式，未知值让服务启动失败。profile 拒绝 WeKnora 自助注册/邀请注册、自动开户、创建/删除租户、跨租户枚举、全租户配额操作及工作站目录/沙箱检测。testkb Compose overlay 已设置该 profile。allowlist 保留登录/OIDC 身份、租户成员、知识库与资料管理、无状态知识检索、模型/初始化/系统管理、文件与知识编辑辅助接口；通用聊天/Agent、自动化、MCP、沙箱、嵌入/IM、网页搜索、云功能等未列入开放集合。此分支尚未合并或部署，当前 testkb 是否仍在旧 release 需以部署前只读探测回读。
+2026-11-27，已合并的 PR #263 增加 `0008-cnz-server-feature-profile.patch`：仅当 `WEKNORA_FEATURE_PROFILE=cnz-knowledge-admin` 时启用服务端路由 allowlist；空值保持上游兼容模式，未知值让服务启动失败。profile 拒绝 WeKnora 自助注册/邀请注册、自动开户、创建/删除租户、跨租户枚举、全租户配额操作及工作站目录/沙箱检测。testkb Compose overlay 已设置该 profile。allowlist 保留登录/OIDC 身份、租户成员、知识库与资料管理、无状态知识检索、模型/初始化/系统管理、文件与知识编辑辅助接口；通用聊天/Agent、自动化、MCP、沙箱、嵌入/IM、网页搜索、云功能等未列入开放集合。PR #263 已通过三项 CI 并合并至 main `1b0b2d4`；合并后只读回读 testkb 仍为旧 release `a763d735`，工作区就绪检查为 `not_ready`，所以该 profile 尚未部署。
 
 ## 平台密钥管理与工作区密钥管理（2026-11-27 逐接口跟进）
 
