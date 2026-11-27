@@ -159,7 +159,7 @@ PY
 compose_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" "$@"; }
 compose_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$old_release/docker-compose.testkb.override.yml" "$@"; }
 compose_bootstrap_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
-compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$active_project" --env-file "$active_project/.env" -f "$active_project/docker-compose.yml" -f "$active_release/docker-compose.testkb.override.yml" -f "$active_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
+compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$active_project" --env-file "$active_project/.env" -f "$active_project/docker-compose.yml" -f "$active_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
 check_compose() {
  project_config="$1"; shift
  "$@" config --format json | python3 -c '
@@ -230,6 +230,11 @@ test "$(fingerprint_source "$new_project")" = "$fingerprint"
 test "$(sha256sum "$new_release/docker-compose.testkb.bootstrap.override.yml" | cut -d' ' -f1)" = "$(cat "$new_release/BOOTSTRAP_OVERRIDE_SHA256")"
 check_compose "$new_project/config/config.yaml" compose_new
 check_compose "$old_project/config/config.yaml" compose_old
+if [ "$bootstrap_present" = 1 ]; then
+ test -f "$new_release/docker-compose.testkb.bootstrap.override.yml"
+ test "$(sha256sum "$new_release/docker-compose.testkb.bootstrap.override.yml" | cut -d' ' -f1)" = "$(cat "$new_release/BOOTSTRAP_OVERRIDE_SHA256")"
+ compose_bootstrap_old config --format json | python3 -c 'import json,os,sys; c=json.load(sys.stdin); s=c["services"]; assert set(s)=={"app","frontend","docreader","postgres","redis","ollama","bootstrap-app"}; b=s["bootstrap-app"]; assert b["container_name"]=="cnz-weknora-bootstrap"; assert b["image"]=="cnz-weknora-app:dev"; assert b["environment"]["DISABLE_REGISTRATION"]=="false"; assert b["environment"]["OIDC_AUTH_ENABLE"]=="false"; assert b["environment"]["OLLAMA_BASE_URL"]=="http://ollama:11434"; assert set(b["networks"])=={"WeKnora-network"}; got={(v["type"],v["source"],v["target"],bool(v.get("read_only",False))) for v in b.get("volumes",[])}; expected={("volume","data-files","/data/files",False),("volume","docreader-tmp","/tmp/docreader",True),("bind",os.path.abspath(sys.argv[1]),"/app/config/config.yaml",False)}; assert got==expected,got; p=b.get("ports",[]); assert len(p)==1 and p[0].get("host_ip")=="127.0.0.1" and p[0].get("published")=="39302" and p[0].get("target")==8080,p' "$active_project/config/config.yaml"
+fi
 test "$(docker inspect -f '{{.Image}}' cnz-weknora-app)" = "$old_image"
 if docker image inspect "$rollback_tag" >/dev/null 2>&1; then
  test "$(docker image inspect -f '{{.Id}}' "$rollback_tag")" = "$old_image"

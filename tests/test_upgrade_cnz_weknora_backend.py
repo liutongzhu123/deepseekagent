@@ -76,6 +76,17 @@ def test_bootstrap_from_active_release_is_upgraded_and_rollback_restores_that_re
     assert 'compose_bootstrap_old up -d --no-deps --no-build bootstrap-app' in script
 
 
+def test_bootstrap_rollback_uses_staged_override_and_preflights_before_app_replacement():
+    script = upgrade.UPGRADE
+    rollback_compose = next(line for line in script.splitlines() if line.startswith("compose_bootstrap_old()"))
+    assert '"$new_release/docker-compose.testkb.bootstrap.override.yml"' in rollback_compose
+    assert '"$active_release/docker-compose.testkb.bootstrap.override.yml"' not in rollback_compose
+    assert 'test -f "$new_release/docker-compose.testkb.bootstrap.override.yml"' in script
+    assert '"$new_release/BOOTSTRAP_OVERRIDE_SHA256"' in script
+    assert 'compose_bootstrap_old config --format json' in script
+    assert script.index('compose_bootstrap_old config --format json') < script.index('phase=app_build; switch_started=1')
+
+
 def test_bootstrap_override_is_loopback_only_and_keeps_registration_separate():
     override = (ROOT / "weknora/docker-compose.testkb.bootstrap.override.yml").read_text()
     assert "ports: !override" in override
