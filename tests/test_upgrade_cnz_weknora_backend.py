@@ -28,6 +28,9 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
         "127.0.0.1:39301/health", "127.0.0.1:18082/", "DEPLOYED_FROM_CODE", "DEPLOYED_FROM_MAIN",
         "realpath -e -- \"$backup\"",
         "cnz-weknora_data-files", "cnz-weknora_WeKnora-network",
+        "BOOTSTRAP_PRESENT=%s", "cnz-weknora-bootstrap", "127.0.0.1:39302",
+        "bootstrap_source_sha=$bootstrap_source_sha", "bootstrap_config_sha256=",
+        "registration_mode\")==\"self_serve\"",
     ):
         assert required in upgrade.PREFLIGHT
 
@@ -35,6 +38,7 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
 def test_release_build_has_no_sql_migration_after_138():
     assert "max(versions)!=138" in Path(upgrade.__file__).read_text()
     assert "DEPLOYED_FROM_CODE" in upgrade.CONFIGURE
+    assert "docker-compose.testkb.bootstrap.override.yml" in Path(upgrade.__file__).read_text()
 
 
 def test_upgrade_builds_and_replaces_only_app_with_rollback():
@@ -42,6 +46,10 @@ def test_upgrade_builds_and_replaces_only_app_with_rollback():
     assert "compose_new build app" in script
     assert "compose_new up -d --no-deps app" in script
     assert "compose_old up -d --no-deps app" in script
+    assert "compose_bootstrap_new up -d --no-deps --no-build bootstrap-app" in script
+    assert "compose_bootstrap_old up -d --no-deps --no-build bootstrap-app" in script
+    assert "wait_bootstrap \"$new_image\"" in script
+    assert "len(p)==1" in script
     assert script.index("compose_new build app") < script.index("phase=app_replace") < script.index("compose_new up -d --no-deps app")
     assert "BACKEND_ROLLBACK_OK_NON_APP_CONTAINERS_UNTOUCHED" in script
     assert "BACKEND_ROLLBACK_POINTER_VERIFY_FAILED" in script
@@ -55,6 +63,37 @@ def test_upgrade_builds_and_replaces_only_app_with_rollback():
     assert "compose_new up -d --no-deps frontend" not in script
     assert script.index('app_mounts=') < script.index("compose_new up -d --no-deps app")
     assert 'set(c["networks"])=={"WeKnora-network"}' in script
+
+
+def test_bootstrap_from_active_release_is_upgraded_and_rollback_restores_that_release():
+    preflight = upgrade.PREFLIGHT
+    assert 'test "$bootstrap_source_sha" = "$active_sha"' in preflight
+    assert 'test "$bootstrap_project" = "$active"' in preflight
+    assert 'test "$(docker inspect -f \'{{index .Config.Labels "com.docker.compose.project.working_dir"}}\' cnz-weknora-bootstrap)" = "$runtime_project"' not in preflight
+    script = upgrade.UPGRADE
+    assert 'active_release="$root/releases/$active_sha"; active_project="$active_release/source/WeKnora-0.9.1"' in script
+    assert 'compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$active_project"' in script
+    assert 'compose_bootstrap_old up -d --no-deps --no-build bootstrap-app' in script
+
+
+def test_bootstrap_rollback_uses_staged_override_and_preflights_before_app_replacement():
+    script = upgrade.UPGRADE
+    rollback_compose = next(line for line in script.splitlines() if line.startswith("compose_bootstrap_old()"))
+    assert '"$new_release/docker-compose.testkb.bootstrap.override.yml"' in rollback_compose
+    assert '"$active_release/docker-compose.testkb.bootstrap.override.yml"' not in rollback_compose
+    assert 'test -f "$new_release/docker-compose.testkb.bootstrap.override.yml"' in script
+    assert '"$new_release/BOOTSTRAP_OVERRIDE_SHA256"' in script
+    assert 'compose_bootstrap_old config --format json' in script
+    assert script.index('compose_bootstrap_old config --format json') < script.index('phase=app_build; switch_started=1')
+
+
+def test_bootstrap_override_is_loopback_only_and_keeps_registration_separate():
+    override = (ROOT / "weknora/docker-compose.testkb.bootstrap.override.yml").read_text()
+    assert "ports: !override" in override
+    assert '"127.0.0.1:39302:8080"' in override
+    assert 'DISABLE_REGISTRATION: "false"' in override
+    assert 'OIDC_AUTH_ENABLE: "false"' in override
+    assert "OLLAMA_BASE_URL: http://ollama:11434" in override
 
 
 def test_post_upgrade_checks_database_siblings_volumes_and_oidc_off():
@@ -197,7 +236,8 @@ def test_unmerged_branch_is_rejected_before_fetch_or_remote_call(tmp_path, monke
     assert remote_calls == []
 
 
-def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_path):
+@pytest.mark.parametrize("bootstrap_present", ["0", "1"])
+def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_path, bootstrap_present):
     sha = "a" * 40
     archive = tmp_path / "upstream.tar.gz"
     archive.write_bytes(b"fixture")
@@ -214,9 +254,9 @@ def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_pat
     monkeypatch.setattr(upgrade.base, "run", fake_git)
     monkeypatch.setattr(upgrade, "make_bundle", lambda *_: (bundle, "d" * 64))
     responses = [
-        Result(b"BACKEND_PREFLIGHT_OK\nACTIVE_SHA=" + b"e" * 40 + b"\nRUNTIME_SHA=" + b"b" * 40 + b"\nOLD_IMAGE=sha256:" + b"c" * 64 + b"\n"),
+        Result(b"BACKEND_PREFLIGHT_OK\nACTIVE_SHA=" + b"e" * 40 + b"\nRUNTIME_SHA=" + b"b" * 40 + b"\nOLD_IMAGE=sha256:" + b"c" * 64 + b"\nBOOTSTRAP_PRESENT=" + bootstrap_present.encode() + b"\n"),
         Result(b""), Result(b"BACKEND_RELEASE_READY\n"),
-        Result(b"BACKEND_UPGRADE_OK_APP_ONLY\nACTIVE_RELEASE=" + sha.encode() + b"\nDATABASE_SCHEMA=138|f\nOIDC_AUTH_ENABLE=false\n"),
+        Result(b"BACKEND_UPGRADE_OK_APP_ONLY\nACTIVE_RELEASE=" + sha.encode() + b"\nDATABASE_SCHEMA=138|f\nOIDC_AUTH_ENABLE=false\n" + (b"BOOTSTRAP_AUTH_CONFIG=self_serve\n" if bootstrap_present == "1" else b"")),
     ]
     remote_calls = []
     def fake_remote(target, script, *args, **kwargs):
@@ -229,6 +269,7 @@ def test_success_path_uses_clean_commit_and_verified_backup(monkeypatch, tmp_pat
     assert len(remote_calls) == 4
     assert remote_calls[0][0] == upgrade.PREFLIGHT
     assert remote_calls[-1][0] == upgrade.UPGRADE
+    assert remote_calls[-1][1][-1] == bootstrap_present
 
 
 def test_remote_shell_scripts_pass_bash_parser(tmp_path):

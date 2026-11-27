@@ -1,8 +1,12 @@
 # 中汽 WeKnora 本地模型运行时增量部署
 
-状态（2026-11-26）：PR #254（发布标记修复）与 PR #255（Ollama 网络隔离）已合并；独立 Ollama 容器和 `bge-m3:567m` 已部署，app 容器内部 embedding 调用实测返回 1024 维。后续本地分支 `codex/cnz-ollama-app-connectivity` 增加了 app 内部服务地址 `http://ollama:11434`、部署回滚检查，以及 OIDC 字段 ORM 列名修正和回归测试；推送曾因 GitHub 443 超时失败，尚未创建 PR，未部署到 active release。按项目既定流程，小于 300 行的分支需先经用户批准合并。
+状态更新（2026-11-27）：PR #254（发布标记修复）、#255（Ollama 网络隔离）和 #257（app Ollama 地址、OIDC ORM 列名修正）已合并；#257 合并提交为 `b03dfab`。独立 Ollama 容器和 `bge-m3:567m` 已部署，app 容器内部 embedding 调用实测返回 1024 维。#257 尚未部署到 testkb active release。
 
-管理员引导的临时本机方式已获用户明确批准：临时服务仅绑定服务器 `127.0.0.1`，通过 SSH 转发连接，注册完成后立即删除；主服务继续保持 `invite_only`。首次注册返回 HTTP 400。容器日志确认失败于 ORM 插入列 `o_id_c_issuer` 不存在；PostgreSQL 实际已有 `oidc_issuer`、`oidc_subject` 与唯一索引，schema `138|f`，users 仍为 0。根因是 Go 字段 `OIDCIssuer`/`OIDCSubject` 未显式指定 GORM 列名。当前分支已增加 `column:oidc_issuer`、`column:oidc_subject` 标签及映射回归测试；代码尚未合并或部署，不能重试注册。创建管理员前已完成并验证快照：`/var/backups/cnz-weknora/20261126T132615Z-b89348a321188a13d5acee6bf99ee856c2c8350f.2oX0KT`。
+管理员引导的临时本机方式已获用户明确批准：临时服务仅绑定服务器 `127.0.0.1:39302`，通过 SSH 转发连接，注册成功后删除；主服务继续保持 `invite_only`。首次注册返回 HTTP 400。容器日志确认失败于 ORM 插入列 `o_id_c_issuer` 不存在；PostgreSQL 实际已有 `oidc_issuer`、`oidc_subject` 与唯一索引，schema `138|f`，users 仍为 0。PR #257 已将 `OIDCIssuer`/`OIDCSubject` 显式映射到 `oidc_issuer`/`oidc_subject`，CI 全部通过；在部署修正版本前不重试注册。2026-11-27 新快照为 `/var/backups/cnz-weknora/20261127T004916Z-b89348a321188a13d5acee6bf99ee856c2c8350f.ntP5wu`，独立 SHA-256、权限和 dump 目录校验通过；部署前如环境状态有变化仍需重新备份。当前代码分支补齐了备份、应用升级与临时引导实例的严格校验/同步升级/回滚支持，尚未合并或部署。
+
+2026-11-27 只读运行态复核：active release/bootstrap 源为 `b89348a321188a13d5acee6bf99ee856c2c8350f`，app 当前运行源码仍为 `d724c8212ab79d9d7efd10df3cc17bc5046d2e74`，远端 `main` 为 `b03dfab`。7 个 CNZ 容器在备份前后均恢复运行，带健康检查的服务健康；5 个 `yunan-persist` 服务健康。主入口 `39301/health`、UI `18082/`、临时引导 `39302/health` 均返回 200；主入口注册模式为 `invite_only`，引导入口为 `self_serve`、仅绑定 `127.0.0.1:39302`，两端 OIDC 均关闭。schema `138|f`；users、tenants、organizations、knowledge_bases、knowledges、resources、data_sources、chunks、messages 均为 0 行，没有客户知识资料。初版备份预检因 bootstrap 与 app 属于不同但各自有发布标记的源码路径而安全拒绝；分支现在分别记录 runtime/bootstrap 源并只接受 bootstrap 指向 active release、三份受限 `.env` 完全一致。此次完整备份及独立校验通过，升级前仍须检查期间环境未变化。
+
+2026-11-27 隔离恢复演练：数据库 dump 实际恢复到无网络、同版 ParadeDB 临时实例，schema 为 `138|f`，users/knowledge_bases/knowledges/resources/chunks/messages 均为 0；原文与 docreader 归档解压后均为 0 文件；Ollama 归档恢复后可列出 `bge-m3:567m`。新旧 Redis 归档按 AOF 配置恢复后 DB0 均为 2 个 key，而既有记录记载 8 个；未读取 key 内容，在线 Redis 计数尚未核对，因此 Redis 一致性及整栈冷恢复仍未验收。所有临时容器与卷已清理，`yunan-persist` 为 5/5 healthy。
 
 ## 目标拓扑
 
@@ -15,7 +19,7 @@
 
 ## 受控部署流程
 
-1. 用 Python 3.12 执行 `uv run --python 3.12 python scripts/backup_cnz_weknora_testkb.py --target yunan-101` 生成 CNZ-only 快照。显式指定版本，避免系统 `python3` 解析到旧版解释器。脚本支持添加服务前的五容器/四卷状态、添加后的六容器/五卷状态；如此前失败尝试留下专属 Ollama 空卷，也会把它纳入快照。
+1. 用 Python 3.12 执行 `uv run --python 3.12 python scripts/backup_cnz_weknora_testkb.py --target yunan-101` 生成 CNZ-only 快照。显式指定版本，避免系统 `python3` 解析到旧版解释器。备份流程在数据库 dump 前暂停并静默主 app 与 loopback-only bootstrap，完成后按序恢复并验证两个认证入口。
 2. 检查备份目录的 SHA-256 清单、文件权限、数据库 dump 列表和运行版本元数据。
 3. 用 `uv run --python 3.12 python scripts/add_cnz_weknora_ollama.py --target yunan-101 --backup <快照路径>` 执行部署。它只允许从干净且与远端一致的 main 发布。
 4. 预检只接受当前五个 CNZ 容器、四个原有数据卷、schema 138|f、HTTP API/UI 健康及 yunan-persist 五项健康；备份必须指向当前活动/运行源码。
@@ -28,6 +32,6 @@
 - 本地定向测试覆盖部署器、备份兼容、前后端升级守卫及 Ollama 增量发布器：55 项通过；PR #255 的 GitHub 三项检查通过。
 - 2026-11-26 首次部署前置验收发现 Ollama 与 WeKnora app 间需要显式的内部服务地址。当前增量配置明确设定 `OLLAMA_BASE_URL=http://ollama:11434`，并由 Compose 契约检查；网络仍只限 CNZ WeKnora 专属网络。
 - 2026-11-26 Ollama `bge-m3:567m` 下载完成；从 WeKnora app 容器请求 `http://ollama:11434/api/embed` 成功，维度为 1024。最新快照校验通过。临时引导容器采用 `self_serve`；主服务公开配置仍为 `invite_only`。注册曾因 ORM 列名错误返回 400，未创建用户；修正并部署代码前不得重试。成功注册后必须立即删除临时容器，并复核主服务配置和 `yunan-persist` 健康状态。
-- 分支 `codex/cnz-ollama-app-connectivity` 的应用连接修正已通过 Python 语法、shell 语法、`git diff --check` 和 Compose 配置检查；WeKnora OIDC 列名回归在独立 Go 容器的只读源码 overlay 上通过，活动源码未修改。部署脚本只接受干净且已验证的 `main`。GitHub 推送遇 443 连接超时；未创建 PR、未合并、未部署该分支。恢复 GitHub 可达后仍需推送，并在取得小于 300 行变更的合并批准后再部署。
+- PR #257 的 GitHub `pytest`、`agent-tests`、WeKnora Go OIDC 检查全部通过；本地 WeKnora Go 回归也已通过。当前分支 `codex/cnz-bootstrap-aware-backup-upgrade` 增加 bootstrap-aware 备份、应用/临时引导实例同步升级与回滚，以及 loopback Compose 覆盖。最新定向 pytest 为 26 passed；本机 Docker Compose 合并旧项目目录与暂存 sidecar 覆盖的独立 fixture 通过，合并后 7 个 service，bootstrap 仅发布到 `127.0.0.1:39302`。独立安全复核曾发现回滚依赖旧 release 中不存在的 bootstrap 覆盖文件；已改用暂存覆盖文件，并在替换 app 前校验文件、SHA-256 与合并 Compose 配置，复核通过。分支相对 `origin/main` 为 231 insertions / 28 deletions（259 changed lines）；PR/CI 待触发。按用户确认的规则，小于 300 行自动创建并合并，超过 300 行需用户审批。部署器仍只接受干净且与远端一致的 `main`。
 - 合成模型仍须先核验许可证与算力后才可纳入评测；当前服务器无 GPU，部署 Ollama 不代表已经选定客户生产模型。
 - 客户管理员开户、可信 IdP、OIDC 登录和双 Web 单点流程仍是独立验收门。本次 400 的应用日志已确认密码字段被脱敏为 `***`；脚本不保存密码。
