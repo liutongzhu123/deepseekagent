@@ -29,6 +29,7 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
         "realpath -e -- \"$backup\"",
         "cnz-weknora_data-files", "cnz-weknora_WeKnora-network",
         "BOOTSTRAP_PRESENT=%s", "cnz-weknora-bootstrap", "127.0.0.1:39302",
+        "bootstrap_source_sha=$bootstrap_source_sha", "bootstrap_config_sha256=",
         "registration_mode\")==\"self_serve\"",
     ):
         assert required in upgrade.PREFLIGHT
@@ -62,6 +63,17 @@ def test_upgrade_builds_and_replaces_only_app_with_rollback():
     assert "compose_new up -d --no-deps frontend" not in script
     assert script.index('app_mounts=') < script.index("compose_new up -d --no-deps app")
     assert 'set(c["networks"])=={"WeKnora-network"}' in script
+
+
+def test_bootstrap_from_active_release_is_upgraded_and_rollback_restores_that_release():
+    preflight = upgrade.PREFLIGHT
+    assert 'test "$bootstrap_source_sha" = "$active_sha"' in preflight
+    assert 'test "$bootstrap_project" = "$active"' in preflight
+    assert 'test "$(docker inspect -f \'{{index .Config.Labels "com.docker.compose.project.working_dir"}}\' cnz-weknora-bootstrap)" = "$runtime_project"' not in preflight
+    script = upgrade.UPGRADE
+    assert 'active_release="$root/releases/$active_sha"; active_project="$active_release/source/WeKnora-0.9.1"' in script
+    assert 'compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$active_project"' in script
+    assert 'compose_bootstrap_old up -d --no-deps --no-build bootstrap-app' in script
 
 
 def test_bootstrap_override_is_loopback_only_and_keeps_registration_separate():

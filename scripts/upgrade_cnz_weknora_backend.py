@@ -58,20 +58,34 @@ runtime_config="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app
 test "$runtime_config" = "$runtime_project/config/config.yaml" && test -f "$runtime_config" && test ! -L "$runtime_config"
 expected_containers="$(printf '%s\n' cnz-weknora-app cnz-weknora-frontend cnz-weknora-docreader cnz-weknora-postgres cnz-weknora-redis cnz-weknora-ollama | sort)"
 bootstrap_present=0
+bootstrap_source_sha=none
 if docker inspect cnz-weknora-bootstrap >/dev/null 2>&1; then
   bootstrap_present=1
   test "$(docker inspect -f '{{.State.Health.Status}}' cnz-weknora-bootstrap)" = healthy
   test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project\"}}' cnz-weknora-bootstrap)" = cnz-weknora
   test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.service\"}}' cnz-weknora-bootstrap)" = bootstrap-app
   test "$(docker inspect -f '{{.Image}}' cnz-weknora-bootstrap)" = "$(docker inspect -f '{{.Image}}' cnz-weknora-app)"
-  test "$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cnz-weknora-bootstrap)" = "$runtime_project"
+  bootstrap_project="$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}' cnz-weknora-bootstrap)"
+  if [[ "$bootstrap_project" =~ ^$root/releases/([0-9a-f]{40})/source/WeKnora-0\.9\.1$ ]]; then :; else exit 34; fi
+  bootstrap_source_sha="${BASH_REMATCH[1]}"
+  bootstrap_release="$root/releases/$bootstrap_source_sha"
+  test "$bootstrap_source_sha" = "$active_sha"
+  test "$bootstrap_project" = "$active"
+  marker_ok "$bootstrap_source_sha" "$bootstrap_release"
+  grep -Fxq "bootstrap_source_sha=$bootstrap_source_sha" "$backup/METADATA.txt"
+  test -f "$bootstrap_project/.env" && test ! -L "$bootstrap_project/.env"
+  test "$(stat -c %a "$bootstrap_project/.env")" = 600
+  cmp -s "$active/.env" "$bootstrap_project/.env"
+  bootstrap_config="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination \"/app/config/config.yaml\"}}{{.Source}}{{end}}{{end}}' cnz-weknora-bootstrap)"
+  test "$bootstrap_config" = "$bootstrap_project/config/config.yaml" && test -f "$bootstrap_config" && test ! -L "$bootstrap_config"
+  grep -Fxq "bootstrap_config_sha256=$(sha256sum "$bootstrap_config" | cut -d' ' -f1)" "$backup/METADATA.txt"
   docker inspect -f '{{json .NetworkSettings.Ports}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p=={"8080/tcp":[{"HostIp":"127.0.0.1","HostPort":"39302"}]},p'
   docker inspect -f '{{json .NetworkSettings.Networks}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; assert set(json.load(sys.stdin))=={"cnz-weknora_WeKnora-network"}'
   for expected in 'DISABLE_REGISTRATION=false' 'OIDC_AUTH_ENABLE=false'; do
     docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' cnz-weknora-bootstrap | grep -Fxq "$expected"
   done
   curl -fsS --max-time 4 http://127.0.0.1:39302/api/v1/auth/config | python3 -c 'import json,sys; assert json.load(sys.stdin).get("registration_mode")=="self_serve"'
-  docker inspect -f '{{json .Mounts}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; got=sorted([[m.get("Type"),m.get("Destination"),m.get("Name") if m.get("Type")=="volume" else m.get("Source"),m.get("RW")] for m in json.load(sys.stdin)]); expected=sorted([["volume","/data/files","cnz-weknora_data-files",True],["volume","/tmp/docreader","cnz-weknora_docreader-tmp",False],["bind","/app/config/config.yaml",sys.argv[1],True]]); assert got==expected,got' "$runtime_config"
+  docker inspect -f '{{json .Mounts}}' cnz-weknora-bootstrap | python3 -c 'import json,sys; got=sorted([[m.get("Type"),m.get("Destination"),m.get("Name") if m.get("Type")=="volume" else m.get("Source"),m.get("RW")] for m in json.load(sys.stdin)]); expected=sorted([["volume","/data/files","cnz-weknora_data-files",True],["volume","/tmp/docreader","cnz-weknora_docreader-tmp",False],["bind","/app/config/config.yaml",sys.argv[1],True]]); assert got==expected,got' "$bootstrap_config"
   expected_containers="$(printf '%s\n' "$expected_containers" cnz-weknora-bootstrap | sort)"
 fi
 test "$(docker ps -a --filter name='^cnz-weknora-' --format '{{.Names}}' | sort)" = "$expected_containers"
@@ -121,7 +135,8 @@ exec 9>"$root/.deploy.lock"
 flock -n 9 || { echo BACKEND_DEPLOY_LOCKED; exit 40; }
 new_release="$root/releases/$sha"; new_project="$new_release/source/WeKnora-0.9.1"
 old_release="$root/releases/$runtime_sha"; old_project="$old_release/source/WeKnora-0.9.1"
-old_active="$root/releases/$active_sha/source/WeKnora-0.9.1"
+active_release="$root/releases/$active_sha"; active_project="$active_release/source/WeKnora-0.9.1"
+old_active="$active_project"
 rollback_tag="cnz-weknora-app:rollback-$sha"
 fingerprint_source() {
  python3 - "$1" <<'PY'
@@ -144,7 +159,7 @@ PY
 compose_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" "$@"; }
 compose_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$old_release/docker-compose.testkb.override.yml" "$@"; }
 compose_bootstrap_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
-compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$old_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
+compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$active_project" --env-file "$active_project/.env" -f "$active_project/docker-compose.yml" -f "$active_release/docker-compose.testkb.override.yml" -f "$active_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
 check_compose() {
  project_config="$1"; shift
  "$@" config --format json | python3 -c '

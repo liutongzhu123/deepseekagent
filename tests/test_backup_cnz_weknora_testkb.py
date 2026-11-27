@@ -46,9 +46,19 @@ def test_remote_preflight_requires_isolated_healthy_stack_backup_and_clean_schem
         "assert_mounts cnz-weknora-redis",
         "assert_mounts cnz-weknora-ollama",
         "runtime_source_sha=", "runtime_config_sha256=", "runtime_env_path=",
+        "bootstrap_source_sha=", "bootstrap_config_path=", "bootstrap_config_sha256=",
         "{{ index .Config.Labels \"com.docker.compose.project\" }}",
     ):
         assert expected in script
+
+
+def test_backup_accepts_bootstrap_from_active_release_with_older_app_runtime():
+    script = backup.REMOTE_BACKUP
+    assert 'test "$bootstrap_source_sha" = "$source_sha"' in script
+    assert 'test "$(docker inspect -f \'{{index .Config.Labels "com.docker.compose.project.working_dir"}}\' cnz-weknora-bootstrap)" = "$runtime_source"' not in script
+    assert 'cmp -s "$active/.env" "$runtime_source/.env"' in script
+    assert 'bootstrap_config="$(' in script
+    assert 'bootstrap_config_path=%s\\nbootstrap_config_sha256=%s' in script
 
 
 def test_backup_supports_pre_ollama_and_post_ollama_cnz_stacks():
@@ -112,6 +122,9 @@ def test_backup_archives_are_verified_private_and_do_not_copy_credentials():
     assert "cat \"$backup/.env\"" not in script
     assert 'find "$backup" -type f ! -perm 0600' in script
     assert "CNZ_BACKUP_OK=$backup" in script
+    assert 'backup_complete=0' in script and 'backup_complete=1' in script
+    assert 'if [ "$code" -eq 0 ] && [ "$backup_complete" -ne 1 ]; then' in script
+    assert "CNZ_BACKUP_NOT_COMPLETE" in script
 
 
 def test_remote_shell_script_parses(tmp_path):
