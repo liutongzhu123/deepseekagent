@@ -83,6 +83,15 @@ def test_bootstrap_from_active_release_is_upgraded_and_rollback_restores_that_re
     assert 'compose_bootstrap_old up -d --no-deps --no-build bootstrap-app' in script
 
 
+def test_old_app_compose_uses_active_overlay_for_current_ollama_service():
+    script = upgrade.UPGRADE
+    compose_old = next(line for line in script.splitlines() if line.startswith("compose_old()"))
+    assert '"$old_project/docker-compose.yml"' in compose_old
+    assert '"$active_release/docker-compose.testkb.override.yml"' in compose_old
+    assert '"$old_release/docker-compose.testkb.override.yml"' not in compose_old
+    assert 'check_compose "$old_project/config/config.yaml" compose_old' in script
+
+
 def test_bootstrap_rollback_uses_staged_override_and_preflights_before_app_replacement():
     script = upgrade.UPGRADE
     rollback_compose = next(line for line in script.splitlines() if line.startswith("compose_bootstrap_old()"))
