@@ -157,7 +157,7 @@ print(h.hexdigest())
 PY
 }
 compose_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" "$@"; }
-compose_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$old_release/docker-compose.testkb.override.yml" "$@"; }
+compose_old() { docker compose -p cnz-weknora --project-directory "$old_project" --env-file "$old_project/.env" -f "$old_project/docker-compose.yml" -f "$active_release/docker-compose.testkb.override.yml" "$@"; }
 compose_bootstrap_new() { docker compose -p cnz-weknora --project-directory "$new_project" --env-file "$new_project/.env" -f "$new_project/docker-compose.yml" -f "$new_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
 compose_bootstrap_old() { docker compose -p cnz-weknora --project-directory "$active_project" --env-file "$active_project/.env" -f "$active_project/docker-compose.yml" -f "$active_release/docker-compose.testkb.override.yml" -f "$new_release/docker-compose.testkb.bootstrap.override.yml" "$@"; }
 check_compose() {
