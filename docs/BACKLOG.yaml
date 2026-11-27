@@ -966,6 +966,7 @@ tasks:
   - id: KB_IDENTITY_STACK
     title: 中汽专属 WeKnora v0.9.1 身份适配与 testkb 隔离部署
     status: doing
+    pr: 263
     size: L
     covers: []
     acceptance:
@@ -993,6 +994,7 @@ tasks:
       2026-11-26 PR #254 已合并并修复发布标记不一致。首次用系统 python3 执行部署器时进程以 137 退出；改用 uv 管理的 Python 3.12 后，固定官方归档、6,441 个源文件校验及七个补丁应用通过。远端 Compose 预检发现 Ollama 未绑定 WeKnora-network，故在启动服务前拒绝配置。随后只读复核确认活动发布仍为 `d724c8212ab79d9d7efd10df3cc17bc5046d2e74`，CNZ 五容器/四卷、schema `138|f`、API/UI=200、yunan-persist 5/5 healthy；Ollama 容器和模型卷均未创建。PR #255 修复网络绑定并更新部署说明，本地定向测试 55 项通过；该 PR 的授权合并问题仍待用户确认，且文档更新后 GitHub CI 重新运行中。
       2026-11-27 状态续记：PR #258/#259/#260 已合并，active release 为 `a763d735c68f9e4224c33ca78ee59dafd2ea4099`；部署前 CNZ-only 快照已校验。首位系统管理员账号已创建并回读确认 `is_system_admin=true`；loopback bootstrap 和临时管理员邮箱配置已删除，主服务保持 `invite_only`、OIDC=false，schema=`138|f`，yunan-persist 5/5 healthy。精确计数为 users=1、system_admins=1、tenants=0、organizations=0、knowledge_bases=0、knowledges=0、resources=0、data_sources=0、chunks=0、messages=0。未导入客户资料；WeKnora 合成资料上传/检索、OIDC 联调和整栈冷恢复一致性门仍未完成。
       2026-11-27 后续只读复核：CNZ 六个容器健康、yunan-persist 五个容器健康，testkb API/UI=200；users=1、system_admins=1，其余已检查业务表为 0。Redis 有界 SCAN/PTTL 聚合确认在线 8 keys=6 个短 TTL asynq 进程心跳+2 个持久注册表；同一快照在无网络临时 Redis 按 AOF manifest 恢复为 2 个持久注册表，其他类型均为 0，AOF 状态正常。asynq v0.26.0 心跳与注册表实现支持该差异解释；未输出具体 key/值或认证信息，未比较持久值/验证任务恢复，故整栈恢复门仍未通过。临时容器和目录自动清理；未部署或写入在线数据库。发现 PATH 外已有 Go 1.26.11，真实 router 包的 TestInstallCNZFeatureProfile 实际执行通过。随后将测试原文目录改为临时目录并显式启用 RBAC，独立复核通过；重新校验 6441 文件/八补丁后，CI 同一筛选的 repository/service/handler/router/types 五包在允许 loopback 的本地环境全部通过，取代此前 Go 未运行状态。当前 tenants=0，部署 profile 前需先由指定管理员初始化中汽工作区；本轮未部署。
+      2026-11-27 PR #263 三项CI全部成功并已合并，main=1b0b2d4ca7a7157e27ddc872bfb2ef51df0ab500；服务端功能profile、平台密钥管理收口、工作区升级门禁与替换前回滚修正已进入主分支。本地部署相关定向83 passed；最终路由检查1.319s通过，去除新增限制时404断言失败。干净main发布包重新复现6441文件/八补丁，并记录源码指纹与包SHA-256。合并后testkb仍运行a763d735，工作区检查not_ready，yunan-persist五项健康；尚未部署本次代码。等待指定管理员初始化中汽工作区后生成新快照，随后进行app升级及合成资料/权限/SSO/恢复验收，任务保持doing。GitHub登录已核实有效，曾被网络限制误判，不再作为当前阻塞。
   - id: INFRA_BACKLOG
     title: 需求清单 + 任务台账（机器可读）
     status: done
