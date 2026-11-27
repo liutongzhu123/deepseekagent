@@ -8,7 +8,7 @@ F3 backup paths are atomically allocated; symlinked roots are refused.
 F4 dump/archive/checksum error: mark snapshot incomplete and restart stopped CNZ services.
 F5 service restart or health error: report separately; never touch yunan-persist.
 F6 a temporary bootstrap app is accepted only when it is the known loopback-only sidecar; it is quiesced with the main app.
-F6 the active .env is not copied; database and volume archives may contain persisted secrets.
+F7 the active .env is not copied; database and volume archives may contain persisted secrets.
 Snapshot directory is mode 0700 and every snapshot artifact is mode 0600.
 
 The brief outage is limited to the isolated CNZ app, docreader, and Redis containers.
