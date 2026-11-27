@@ -6,6 +6,8 @@
 
 2026-11-27 只读运行态复核：testkb 活动发布仍是 `b89348a321188a13d5acee6bf99ee856c2c8350f`，落后于已合并的 `main`（`b03dfab`）；7 个 CNZ 容器和 5 个 `yunan-persist` 容器均健康。主入口 `39301/health`、UI `18082/`、临时引导 `39302/health` 均返回 200；主入口注册模式为 `invite_only`，引导入口为 `self_serve`、仅绑定 `127.0.0.1:39302`，两端 OIDC 均关闭。schema `138|f`；users、tenants、organizations、knowledge_bases、knowledges、resources、data_sources、chunks、messages 均为 0 行，没有客户知识资料。现存快照仍为 `20261126T132615Z-b89348a321188a13d5acee6bf99ee856c2c8350f.2oX0KT`；本次复核其 SHA-256 清单全部通过，dump 可由同版本 PostgreSQL 镜像读取目录。任何升级前必须重新生成并校验快照。当前 bootstrap-aware 升级分支尚未部署。
 
+2026-11-27 隔离恢复演练：数据库 dump 实际恢复到无网络、同版 ParadeDB 临时实例，schema 为 `138|f`，users/knowledge_bases/knowledges/resources/chunks/messages 均为 0；原文与 docreader 归档解压后均为 0 文件；Ollama 归档恢复后可列出 `bge-m3:567m`。Redis 归档按 AOF 配置恢复后 DB0 为 2 个 key，而既有记录记载 8 个；未读取 key 内容，当前 Redis 在线计数尚无法核对，因此 Redis 一致性及整栈冷恢复仍未验收。演练创建的临时容器与卷已清理，`yunan-persist` 仍为 5/5 healthy。
+
 ## 目标拓扑
 
 - 在 /opt/cnz-weknora 项目下新增 cnz-weknora-ollama。
