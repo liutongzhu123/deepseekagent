@@ -11,6 +11,7 @@ services:
     container_name: cnz-weknora-app
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
+      WEKNORA_FEATURE_PROFILE: cnz-knowledge-admin
     build:
       args:
         - APK_MIRROR_ARG=${APK_MIRROR_ARG:-mirrors.tuna.tsinghua.edu.cn}

@@ -31,6 +31,7 @@ def test_preflight_requires_valid_snapshot_and_pinned_runtime_state():
         "BOOTSTRAP_PRESENT=%s", "cnz-weknora-bootstrap", "127.0.0.1:39302",
         "bootstrap_source_sha=$bootstrap_source_sha", "bootstrap_config_sha256=",
         "registration_mode\")==\"self_serve\"",
+        "BACKEND_BOOTSTRAP_PROFILE_MUST_BE_ABSENT",
     ):
         assert required in upgrade.PREFLIGHT
 
@@ -89,7 +90,11 @@ def test_old_app_compose_uses_active_overlay_for_current_ollama_service():
     assert '"$old_project/docker-compose.yml"' in compose_old
     assert '"$active_release/docker-compose.testkb.override.yml"' in compose_old
     assert '"$old_release/docker-compose.testkb.override.yml"' not in compose_old
-    assert 'check_compose "$old_project/config/config.yaml" compose_old' in script
+    assert 'check_compose "$old_project/config/config.yaml" "$runtime_profile" compose_old' in script
+    assert 'check_compose "$new_project/config/config.yaml" cnz-knowledge-admin compose_new' in script
+    assert 'assert s["app"]["environment"].get("WEKNORA_FEATURE_PROFILE","")==sys.argv[2]' in script
+    assert 'BACKEND_RUNTIME_PROFILE_UNKNOWN' in script
+    assert 'profile_absent' in script
 
 
 def test_bootstrap_rollback_uses_staged_override_and_preflights_before_app_replacement():
@@ -100,6 +105,8 @@ def test_bootstrap_rollback_uses_staged_override_and_preflights_before_app_repla
     assert 'test -f "$new_release/docker-compose.testkb.bootstrap.override.yml"' in script
     assert '"$new_release/BOOTSTRAP_OVERRIDE_SHA256"' in script
     assert 'compose_bootstrap_old config --format json' in script
+    assert 'b["environment"].get("WEKNORA_FEATURE_PROFILE","")==""' in script
+    assert 's["environment"].get("WEKNORA_FEATURE_PROFILE","")==""' in script
     assert script.index('compose_bootstrap_old config --format json') < script.index('phase=app_build; switch_started=1')
 
 
@@ -110,6 +117,15 @@ def test_bootstrap_override_is_loopback_only_and_keeps_registration_separate():
     assert 'DISABLE_REGISTRATION: "false"' in override
     assert 'OIDC_AUTH_ENABLE: "false"' in override
     assert "OLLAMA_BASE_URL: http://ollama:11434" in override
+    assert "WEKNORA_FEATURE_PROFILE" not in override
+
+
+def test_bootstrap_runtime_is_profile_free_while_main_app_requires_profile():
+    script = upgrade.UPGRADE
+    assert 'docker inspect -f \'{{range .Config.Env}}{{println .}}{{end}}\' cnz-weknora-bootstrap' in script
+    assert 'profile_absent=1' in script
+    assert 'wait_app "$new_image" cnz-knowledge-admin' in script
+    assert 'wait_app "$old_image" "$runtime_profile"' in script
 
 
 def test_post_upgrade_checks_database_siblings_volumes_and_oidc_off():

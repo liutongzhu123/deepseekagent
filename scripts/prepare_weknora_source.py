@@ -28,6 +28,7 @@ PATCHES = (
     ROOT / "weknora/patches/0005-cnz-login-scope-copy.patch",
     ROOT / "weknora/patches/0006-cnz-oidc-synthetic-flow-tests.patch",
     ROOT / "weknora/patches/0007-cnz-oidc-nonce-binding.patch",
+    ROOT / "weknora/patches/0008-cnz-server-feature-profile.patch",
 )
 
 

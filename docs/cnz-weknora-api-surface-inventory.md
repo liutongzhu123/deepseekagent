@@ -57,6 +57,10 @@
 4. 在 testkb 以管理员登录后完成合成资料上传、检索和引用；再用四角色账号验证知识库管理、检索和配置权限边界。
 5. 部署前完成 CNZ-only 备份；部署后回读活动 release、路由拒绝结果、服务健康及 `yunan-persist` 未变更，并保留回滚入口。
 
+## 当前实现状态
+
+2026-11-27，本地分支增加 `0008-cnz-server-feature-profile.patch`：仅当 `WEKNORA_FEATURE_PROFILE=cnz-knowledge-admin` 时启用服务端路由 allowlist；空值保持上游兼容模式，未知值让服务启动失败。profile 拒绝 WeKnora 自助注册/邀请注册、自动开户、创建/删除租户、跨租户枚举、全租户配额操作及工作站目录/沙箱检测。testkb Compose overlay 已设置该 profile。allowlist 保留登录/OIDC 身份、租户成员、知识库与资料管理、无状态知识检索、模型/初始化/系统管理、文件与知识编辑辅助接口；通用聊天/Agent、自动化、MCP、沙箱、嵌入/IM、网页搜索、云功能等未列入开放集合。此分支尚未合并或部署，当前 testkb 是否仍在旧 release 需以部署前只读探测回读。
+
 ## 证据边界
 
 此清单基于固定 v0.9.1 源码的 `internal/router/router.go` 与路由注册函数静态检查，代码图谱检查亦覆盖 52 个 router Go 文件（925 个节点、2,506 条边）。它不是运行态 endpoint 清单，不证明角色权限已符合业务，也没有在 testkb 执行任何请求或修改线上配置。当前活动版本与管理员账号状态另见 `docs/BACKLOG.yaml` 的 `KB_IDENTITY_STACK` 续记。

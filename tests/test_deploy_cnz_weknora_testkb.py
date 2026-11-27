@@ -26,7 +26,8 @@ def valid_config():
             "app": {"container_name": "cnz-weknora-app", "ports": [
                 {"host_ip": "127.0.0.1", "target": 8080, "published": "39301"}],
                 "build": {"args": {"CNZ_DOCKERHUB_MIRROR_ARG": "docker.m.daocloud.io", "GOPROXY_ARG": "https://goproxy.cn"}},
-                "environment": {"DISABLE_REGISTRATION": "true", "OIDC_AUTH_ENABLE": "false"}},
+                "environment": {"DISABLE_REGISTRATION": "true", "OIDC_AUTH_ENABLE": "false",
+                    "WEKNORA_FEATURE_PROFILE": "cnz-knowledge-admin"}},
             "frontend": {"container_name": "cnz-weknora-frontend", "ports": [
                 {"host_ip": "127.0.0.1", "target": 80, "published": "18082"}],
                 "build": {"args": {"CNZ_DOCKERHUB_MIRROR_ARG": "docker.m.daocloud.io"}}},
@@ -202,6 +203,10 @@ def test_f6_compose_rejects_docker_socket_registration_or_oidc():
     config["services"]["app"]["environment"]["DISABLE_REGISTRATION"] = "false"
     with pytest.raises(ValueError, match="F6"):
         deploy.validate_compose(config)
+    config = valid_config()
+    config["services"]["app"]["environment"].pop("WEKNORA_FEATURE_PROFILE")
+    with pytest.raises(ValueError, match="CNZ server feature profile"):
+        deploy.validate_compose(config)
 
 
 def test_f6_compose_requires_private_pinned_ollama_and_dedicated_volume():
@@ -241,7 +246,8 @@ def test_f7_build_precedes_startup_and_failed_start_preserves_volumes():
 
 
 def test_f8_f9_health_precedes_active_pointer():
-    assert deploy.DEPLOY.index('test "$ready" -eq 1') < deploy.DEPLOY.index('mv -Tf')
+    assert deploy.DEPLOY.index('test "$ready" -eq 1') < deploy.DEPLOY.rindex('mv -Tf')
     assert "http://127.0.0.1:39301/health" in deploy.DEPLOY
+    assert deploy.DEPLOY.index("WEKNORA_FEATURE_PROFILE=cnz-knowledge-admin") < deploy.DEPLOY.rindex('mv -Tf')
     assert "http://127.0.0.1:18082/" in deploy.DEPLOY
     assert "ACTIVE_RELEASE=$sha" in deploy.DEPLOY

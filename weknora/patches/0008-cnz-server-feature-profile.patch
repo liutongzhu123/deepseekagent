@@ -1,0 +1,309 @@
+diff --git a/internal/router/cnz_feature_profile.go b/internal/router/cnz_feature_profile.go
+new file mode 100644
+index 0000000..b341cbe
+--- /dev/null
++++ b/internal/router/cnz_feature_profile.go
+@@ -0,0 +1,114 @@
++package router
++
++import (
++	"fmt"
++	"net/http"
++	"strings"
++
++	"github.com/gin-gonic/gin"
++)
++
++const (
++	cnzFeatureProfileEnv  = "WEKNORA_FEATURE_PROFILE"
++	cnzKnowledgeAdminMode = "cnz-knowledge-admin"
++)
++
++// cnzKnowledgeRoutePrefixes is the server-side allowlist for the dedicated
++// CNZ knowledge-administration deployment. Authentication and the existing
++// tenant RBAC/API-key guards still authorize every route admitted here.
++var cnzKnowledgeRoutePrefixes = []string{
++	"/api/v1/auth",
++	"/api/v1/tenants",
++	"/api/v1/me/invitations",
++	"/api/v1/knowledge-bases",
++	"/api/v1/knowledge-search",
++	"/api/v1/knowledge",
++	"/api/v1/chunks",
++	"/api/v1/models",
++	"/api/v1/initialization",
++	"/api/v1/system",
++	"/api/v1/files",
++	"/api/v1/image-attrs",
++	"/api/v1/image-pipelines",
++	"/api/v1/chunker/preview",
++}
++
++// installCNZFeatureProfile is intentionally opt-in so upstream-compatible
++// deployments keep their current route surface. An unknown non-empty mode is
++// a startup error (F1) instead of silently widening the CNZ API surface.
++func installCNZFeatureProfile(engine *gin.Engine, mode string) error {
++	mode = strings.TrimSpace(mode)
++	switch mode {
++	case "":
++		return nil
++	case cnzKnowledgeAdminMode:
++		engine.Use(cnzKnowledgeAdminGuard())
++		return nil
++	default:
++		return fmt.Errorf("unsupported %s %q", cnzFeatureProfileEnv, mode)
++	}
++}
++
++// cnzKnowledgeAdminGuard enforces the profile after Gin resolves a concrete
++// route. It is global so it also covers routes registered before Auth,
++// including embed, MCP, and signed-token surfaces. Static UI and health routes
++// remain available; only the explicitly listed public feature surfaces are
++// rejected outside /api/v1.
++func cnzKnowledgeAdminGuard() gin.HandlerFunc {
++	return func(c *gin.Context) {
++		route := c.FullPath()
++		if route == "" {
++			route = c.Request.URL.Path
++		}
++		if cnzFeatureRouteAllowed(route) && !cnzFeatureMethodBlocked(c.Request.Method, route) {
++			c.Next()
++			return
++		}
++		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
++		c.Abort()
++	}
++}
++
++func cnzFeatureMethodBlocked(method, route string) bool {
++	// A CNZ workspace is provisioned once; self-service tenant creation,
++	// cross-tenant enumeration, and deleting that workspace are not product
++	// functions. Deny these method/path pairs while keeping member and tenant
++	// settings routes available.
++	switch {
++	case method == http.MethodPost && route == "/api/v1/tenants":
++		return true
++	case method == http.MethodGet && (route == "/api/v1/tenants/all" || route == "/api/v1/tenants/search"):
++		return true
++	case method == http.MethodDelete && route == "/api/v1/tenants/:id":
++		return true
++	case method == http.MethodPost && route == "/api/v1/system/admin/tenants/apply-default-storage-quota":
++		return true
++	default:
++		return false
++	}
++}
++
++func cnzFeatureRouteAllowed(route string) bool {
++	if strings.HasPrefix(route, "/api/v1/") || route == "/api/v1" {
++		if route == "/api/v1/system/sandbox-check" ||
++			route == "/api/v1/system/host-project-dir" ||
++			route == "/api/v1/system/admin/runtime/documents/wiki-start" {
++			return false
++		}
++		for _, prefix := range cnzKnowledgeRoutePrefixes {
++			if route == prefix || strings.HasPrefix(route, prefix+"/") {
++				return true
++			}
++		}
++		return false
++	}
++	// These are separate pre-auth surfaces and are not covered by /api/v1
++	// guards. Keep them closed in the CNZ profile even if their handlers are
++	// accidentally registered in a future upstream release.
++	for _, prefix := range []string{"/embed", "/mcp", "/swagger", "/r"} {
++		if route == prefix || strings.HasPrefix(route, prefix+"/") {
++			return false
++		}
++	}
++	return true
++}
+diff --git a/internal/router/cnz_feature_profile_test.go b/internal/router/cnz_feature_profile_test.go
+new file mode 100644
+index 0000000..b64ce60
+--- /dev/null
++++ b/internal/router/cnz_feature_profile_test.go
+@@ -0,0 +1,149 @@
++package router
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/gin-gonic/gin"
++	"github.com/stretchr/testify/require"
++)
++
++// Failure cases covered:
++// F1 unknown profile values must fail startup rather than disable the guard;
++// F2 unmatched and non-allowlisted API routes must fail closed;
++// F3 similar path prefixes must not inherit an allowed route's permission;
++// F4 public pre-auth embed/MCP/Swagger routes must also be rejected;
++// F5 the unset profile must preserve upstream route behavior;
++// F6 knowledge search, KB operations, files, settings, and identity remain reachable;
++// F7 CNZ tenant creation/deletion and cross-tenant enumeration remain closed.
++func TestInstallCNZFeatureProfile(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++
++	t.Run("unset preserves upstream surface", func(t *testing.T) {
++		engine := gin.New()
++		require.NoError(t, installCNZFeatureProfile(engine, ""))
++		engine.GET("/api/v1/agents", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		response := httptest.NewRecorder()
++		engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil))
++		require.Equal(t, http.StatusNoContent, response.Code)
++	})
++
++	t.Run("unknown mode fails closed at startup", func(t *testing.T) {
++		require.Error(t, installCNZFeatureProfile(gin.New(), "cnz-knowledge-admin-extra"))
++	})
++
++	t.Run("knowledge APIs remain reachable and unrelated routes return 404", func(t *testing.T) {
++		engine := gin.New()
++		require.NoError(t, installCNZFeatureProfile(engine, cnzKnowledgeAdminMode))
++		for _, route := range []string{
++			"/api/v1/auth/oidc/start",
++			"/api/v1/tenants/:id/members",
++			"/api/v1/knowledge-bases/:id/knowledge/manual",
++			"/api/v1/knowledge/:id/regenerate-summary",
++			"/api/v1/knowledge-search",
++			"/api/v1/models",
++			"/api/v1/initialization/config/:kbId",
++			"/api/v1/system/admin/settings",
++			"/api/v1/files/:path",
++			"/api/v1/image-attrs/schema",
++			"/api/v1/chunker/preview",
++		} {
++			engine.Any(route, func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		}
++		for _, route := range []string{
++			"/api/v1/knowledge-chat/:session_id",
++			"/api/v1/agent-chat/:session_id",
++			"/api/v1/sessions/:id",
++			"/api/v1/automations",
++			"/api/v1/sandbox-configs",
++			"/api/v1/mcp-endpoints",
++			"/api/v1/local-browser/extension",
++			"/api/v1/system/sandbox-check",
++			"/api/v1/system/host-project-dir",
++			"/api/v1/system/admin/runtime/documents/wiki-start",
++			"/embed/:channelId",
++			"/mcp/:endpoint_id",
++			"/r/:token",
++			"/swagger/*any",
++		} {
++			engine.Any(route, func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		}
++
++		for _, path := range []string{
++			"/api/v1/auth/oidc/start",
++			"/api/v1/tenants/t1/members",
++			"/api/v1/knowledge-bases/k1/knowledge/manual",
++			"/api/v1/knowledge/k1/regenerate-summary",
++			"/api/v1/knowledge-search",
++			"/api/v1/models",
++			"/api/v1/initialization/config/k1",
++			"/api/v1/system/admin/settings",
++			"/api/v1/files/file-1",
++			"/api/v1/image-attrs/schema",
++			"/api/v1/chunker/preview",
++		} {
++			response := httptest.NewRecorder()
++			engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
++			require.Equal(t, http.StatusNoContent, response.Code, path)
++		}
++		for _, path := range []string{
++			"/api/v1/knowledge-chat/s1",
++			"/api/v1/agent-chat/s1",
++			"/api/v1/sessions/s1",
++			"/api/v1/automations",
++			"/api/v1/sandbox-configs",
++			"/api/v1/mcp-endpoints",
++			"/api/v1/local-browser/extension",
++			"/api/v1/system/sandbox-check",
++			"/api/v1/system/host-project-dir",
++			"/api/v1/system/admin/runtime/documents/wiki-start",
++			"/embed/channel-1",
++			"/mcp/endpoint-1",
++			"/r/token-1",
++			"/swagger/index.html",
++		} {
++			response := httptest.NewRecorder()
++			engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
++			require.Equal(t, http.StatusNotFound, response.Code, path)
++		}
++	})
++
++	t.Run("prefix collision does not grant access", func(t *testing.T) {
++		engine := gin.New()
++		require.NoError(t, installCNZFeatureProfile(engine, cnzKnowledgeAdminMode))
++		engine.Any("/api/v1/knowledge-bases-extra", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		response := httptest.NewRecorder()
++		engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/knowledge-bases-extra", nil))
++		require.Equal(t, http.StatusNotFound, response.Code)
++	})
++
++	t.Run("single-workspace lifecycle routes are method-blocked", func(t *testing.T) {
++		engine := gin.New()
++		require.NoError(t, installCNZFeatureProfile(engine, cnzKnowledgeAdminMode))
++		engine.GET("/api/v1/tenants", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.POST("/api/v1/tenants", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.GET("/api/v1/tenants/all", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.GET("/api/v1/tenants/search", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.DELETE("/api/v1/tenants/:id", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++		engine.POST("/api/v1/system/admin/tenants/apply-default-storage-quota", func(c *gin.Context) { c.Status(http.StatusNoContent) })
++
++		cases := []struct {
++			method string
++			path   string
++			want   int
++		}{
++			{http.MethodGet, "/api/v1/tenants", http.StatusNoContent},
++			{http.MethodPost, "/api/v1/tenants", http.StatusNotFound},
++			{http.MethodGet, "/api/v1/tenants/all", http.StatusNotFound},
++			{http.MethodGet, "/api/v1/tenants/search", http.StatusNotFound},
++			{http.MethodDelete, "/api/v1/tenants/t1", http.StatusNotFound},
++			{http.MethodPost, "/api/v1/system/admin/tenants/apply-default-storage-quota", http.StatusNotFound},
++		}
++		for _, tc := range cases {
++			response := httptest.NewRecorder()
++			engine.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, nil))
++			require.Equal(t, tc.want, response.Code, tc.method+" "+tc.path)
++		}
++	})
++}
+diff --git a/internal/router/router.go b/internal/router/router.go
+index 0f3b39b..5188a18 100644
+--- a/internal/router/router.go
++++ b/internal/router/router.go
+@@ -105,6 +105,9 @@ type RouterParams struct {
+ func NewRouter(params RouterParams) *gin.Engine {
+ 	r := gin.New()
+ 	r.ContextWithFallback = true
++	if err := installCNZFeatureProfile(r, os.Getenv(cnzFeatureProfileEnv)); err != nil {
++		panic(err)
++	}
+ 	// 清理 FormFile/MultipartForm 解析产生的 multipart 临时文件，避免容器 /tmp 持续增长。
+ 	r.Use(middleware.MultipartFormCleanup())
+ 
+diff --git a/internal/router/routes_chat.go b/internal/router/routes_chat.go
+index d73dfd6..91a3de4 100644
+--- a/internal/router/routes_chat.go
++++ b/internal/router/routes_chat.go
+@@ -158,7 +158,14 @@ func RegisterChatRoutes(r *gin.RouterGroup, handler *session.Handler, g *rbacGua
+ 		agentChat.POST("/:session_id", handler.AgentQA)
+ 	}
+ 
+-	// 新增知识检索接口，不需要session_id
++	RegisterKnowledgeSearchRoutes(r, handler, g)
++}
++
++// RegisterKnowledgeSearchRoutes registers the stateless retrieval API used by
++// the CNZ business workbench. It is intentionally separate from interactive
++// chat and agent routes so a knowledge-only deployment can keep retrieval
++// without exposing session-based generation surfaces.
++func RegisterKnowledgeSearchRoutes(r *gin.RouterGroup, handler *session.Handler, g *rbacGuards) {
+ 	knowledgeSearch := g.apiKeyGroup(r.Group("/knowledge-search", g.Viewer()), apiKeyRetrieve(apiKeyFullAccess()))
+ 	{
+ 		knowledgeSearch.POST("", handler.SearchKnowledge)
