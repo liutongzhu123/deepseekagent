@@ -6,7 +6,7 @@
 
 2026-11-27 当前运行态回读：active release 为 `a763d735c68f9e4224c33ca78ee59dafd2ea4099`；API/UI=200，schema `138|f`，主服务注册模式 `invite_only`，OIDC=false；首位系统管理员账号 1 条且系统管理员标记为真。`tenants/organizations/knowledge_bases/knowledges/resources/data_sources/chunks/messages` 均为 0 行，没有客户知识资料。临时引导容器已删除；6 个 CNZ 业务容器运行，yunan-persist 5/5 healthy。此前完整 CNZ-only 快照和权限、SHA-256、pg_restore 清单校验已通过。
 
-2026-11-27 隔离恢复演练：数据库 dump 实际恢复到无网络、同版 ParadeDB 临时实例，schema 为 `138|f`，users/knowledge_bases/knowledges/resources/chunks/messages 均为 0；原文与 docreader 归档解压后均为 0 文件；Ollama 归档恢复后可列出 `bge-m3:567m`。后续在线 Redis DB0 只读统计为 `keys=8, expires=6, avg_ttl≈6.3s`，AOF 写入状态正常；同一备份在 `--network none` 一次性 Redis 容器中按 AOF manifest 恢复为 `keys=2, expires=0`，AOF 加载状态正常。期间未读取 key 名称或内容，也未输出认证值。差异与短 TTL 条目自然过期一致，但尚未分类这 6 个条目的业务语义，故不能据此宣称 Redis 数据完整性已验收；应按持久条目/预期过期条目分别比较。所有临时容器与卷已清理，`yunan-persist` 为 5/5 healthy。
+2026-11-27 隔离恢复演练：数据库 dump 实际恢复到无网络、同版 ParadeDB 临时实例，schema 为 `138|f`，users/knowledge_bases/knowledges/resources/chunks/messages 均为 0；原文与 docreader 归档解压后均为 0 文件；Ollama 归档恢复后可列出 `bge-m3:567m`。Redis 专项复核确认在线 DB0 为 8 keys，其中 6 个为带短 TTL 的 asynq server heartbeat、2 个为持久 asynq 注册表，其他类型为 0；同一快照在 `--network none` 的同版 Redis 中按 AOF manifest 恢复后为 2 个持久 asynq 注册表、0 个过期项、0 个其他项，AOF 状态正常。asynq v0.26.0 的 `heartbeat.go` 定期写进程状态，`internal/rdb/rdb.go` 为单进程状态执行 SETEX、为聚合注册表执行 ZADD，解释了运行态 6 个心跳在停机后不再续期的差异。查询仅输出前缀分类与 TTL 聚合数，没有输出具体 key、值或认证信息。此次证据闭合了计数差异的类型解释；未比较注册表内容，也未验证任务恢复，整栈恢复仍未验收。临时容器和目录已自动清理。
 
 2026-11-27 后续运行态复核：testkb active release 仍为 `a763d735c68f9e4224c33ca78ee59dafd2ea4099`；CNZ 六个容器健康、`yunan-persist` 五个容器健康，API/UI=200。只读数据库计数为 users=1、system_admins=1，tenants/knowledge_bases/knowledges/resources/data_sources/chunks/messages 均为 0；未导入客户资料。没有任何部署或数据库变更。
 

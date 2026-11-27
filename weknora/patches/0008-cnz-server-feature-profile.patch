@@ -127,7 +127,7 @@ new file mode 100644
 index 0000000..b64ce60
 --- /dev/null
 +++ b/internal/router/cnz_feature_profile_test.go
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,210 @@
 +package router
 +
 +import (
@@ -296,8 +296,10 @@ index 0000000..b64ce60
 +
 +	t.Run("guard covers actual routes registered by NewRouter", func(t *testing.T) {
 +		t.Setenv(cnzFeatureProfileEnv, cnzKnowledgeAdminMode)
++		t.Setenv("LOCAL_STORAGE_BASE_DIR", t.TempDir())
++		enforceRBAC := true
 +		engine := NewRouter(RouterParams{
-+			Config:             &config.Config{},
++			Config:             &config.Config{Tenant: &config.TenantConfig{EnableRBAC: &enforceRBAC}},
 +			SystemHandler:      &handler.SystemHandler{},
 +			MCPServer:          &mcpserver.Server{},
 +			MCPEndpointService: &stubMCPEndpointServiceForRoutes{},
