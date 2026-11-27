@@ -4,6 +4,8 @@
 
 管理员引导的临时本机方式已获用户明确批准：临时服务仅绑定服务器 `127.0.0.1:39302`，通过 SSH 转发连接，注册成功后删除；主服务继续保持 `invite_only`。首次注册返回 HTTP 400。容器日志确认失败于 ORM 插入列 `o_id_c_issuer` 不存在；PostgreSQL 实际已有 `oidc_issuer`、`oidc_subject` 与唯一索引，schema `138|f`，users 仍为 0。PR #257 已将 `OIDCIssuer`/`OIDCSubject` 显式映射到 `oidc_issuer`/`oidc_subject`，CI 全部通过；在部署修正版本前不重试注册。已有快照为 `/var/backups/cnz-weknora/20261126T132615Z-b89348a321188a13d5acee6bf99ee856c2c8350f.2oX0KT`，部署前仍需新建快照。现有安全部署脚本不接受额外的 `cnz-weknora-bootstrap` 容器；当前分支正补齐备份、应用升级与临时引导实例的校验/重建/回滚支持。
 
+2026-11-27 只读运行态复核：testkb 活动发布仍是 `b89348a321188a13d5acee6bf99ee856c2c8350f`，落后于已合并的 `main`（`b03dfab`）；7 个 CNZ 容器和 5 个 `yunan-persist` 容器均健康。主入口 `39301/health`、UI `18082/`、临时引导 `39302/health` 均返回 200；主入口注册模式为 `invite_only`，引导入口为 `self_serve`、仅绑定 `127.0.0.1:39302`，两端 OIDC 均关闭。schema `138|f`；users、tenants、organizations、knowledge_bases、knowledges、resources、data_sources、chunks、messages 均为 0 行，没有客户知识资料。现存快照仍为 `20261126T132615Z-b89348a321188a13d5acee6bf99ee856c2c8350f.2oX0KT`；任何升级前必须重新生成并校验快照。当前 bootstrap-aware 升级分支尚未部署。
+
 ## 目标拓扑
 
 - 在 /opt/cnz-weknora 项目下新增 cnz-weknora-ollama。
